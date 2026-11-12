@@ -36,6 +36,25 @@ class VerifyApkTests(unittest.TestCase):
         self.assertIn('verify', run.call_args_list[0].args[0])
         self.assertIn('badging', run.call_args_list[1].args[0])
 
+    def test_accepts_sdk37_scheme_prefixed_certificate_labels(self):
+        # SDK37 actual output is "V2 Signer: certificate SHA-256 digest: ...".
+        for label in ('V1 Signer:', 'V2 Signer:', 'V3.0 Signer:', 'V3.1 Signer:', 'V3.2 Signer:', 'V4 Signer:'):
+            outputs = self.outputs()
+            outputs[0].stdout = (
+                f"Verifies\n{label} certificate SHA-256 digest: {'a' * 64}\n"
+                f"Source Stamp Signer: certificate SHA-256 digest: {'b' * 64}\n"
+            )
+            with self.subTest(label=label), patch.object(verifier.subprocess, 'run', side_effect=outputs):
+                verifier.verify(*self.arguments)
+
+    def test_does_not_ignore_mismatched_or_unknown_scheme_signers(self):
+        for label in ('V2 Signer:', 'V3.0 Signer:', 'V9 Signer:'):
+            outputs = self.outputs()
+            outputs[0].stdout += f"{label} certificate SHA-256 digest: {'b' * 64}\n"
+            with self.subTest(label=label), redirect_stderr(StringIO()), patch.object(verifier.subprocess, 'run', side_effect=outputs):
+                with self.assertRaisesRegex(ValueError, 'certificate'):
+                    verifier.verify(*self.arguments)
+
     def test_failed_identity_check_reports_actual_public_signer_output(self):
         report = StringIO()
         with redirect_stderr(report), patch.object(verifier.subprocess, 'run', side_effect=self.outputs(digest='b' * 64)):

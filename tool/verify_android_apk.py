@@ -23,13 +23,18 @@ def verify(apk, sdk, package, version, build, certificate_sha256):
     signer = max(candidates, key=lambda tool: tuple(int(part) for part in re.findall(r'\d+', tool.parent.name)))
     verification = subprocess.run([str(signer), 'verify', '--verbose', '--print-certs', str(apk)],
                                   capture_output=True, text=True, check=True)
-    # AOSP prints SDK-range labels instead of numbered signers for v3.1 APKs.
-    # Parse every signer digest, not Source Stamp certificates or just one range.
-    signer_line = re.compile(r'Signer (?:#\d+|\(minSdkVersion=\d+(?: \(dev release=true\))?, maxSdkVersion=\d+\)) certificate SHA-256 digest: ([0-9a-fA-F]{64})')
+    # SDK37 prints "V2 Signer:"; older tools use numbered or SDK-range labels.
+    # Parse every certificate digest, not Source Stamp certificates or one scheme.
+    legacy_label = r'Signer (?:#\d+|\(minSdkVersion=\d+(?: \(dev release=true\))?, maxSdkVersion=\d+\))'
+    scheme_label = r'V(?:[124]|3(?:\.[012])?) Signer:'
+    signer_line = re.compile(rf'(?:{legacy_label}|{scheme_label}) certificate SHA-256 digest: ([0-9a-fA-F]{{64}})')
     signers = set()
     for line in verification.stdout.splitlines():
         line = line.strip()
-        if line.startswith('Signer ') and ' certificate SHA-256 digest:' in line:
+        if ' certificate SHA-256 digest:' in line:
+            label = line.partition(' certificate SHA-256 digest:')[0]
+            if label.removesuffix(':') == 'Source Stamp Signer':
+                continue
             match = signer_line.fullmatch(line)
             if match is None:
                 raise ValueError('Unrecognized APK signing certificate output; refusing partial signer verification')
