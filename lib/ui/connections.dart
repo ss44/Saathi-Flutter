@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../update_host.dart';
+import '../notifications/settings.dart';
 import '../core/saathi_core.dart';
 import 'chat_controller.dart';
 import 'remote_sessions.dart';
@@ -17,9 +18,11 @@ class ConnectionsPage extends StatelessWidget {
   final ChatController controller;
   @override
   Widget build(BuildContext context) => Scaffold(
-      appBar: AppBar(
-          title: const Text('Connections'),
-          actions: const [UpdateSettingsButton()]),
+      appBar: AppBar(title: const Text('Connections'), actions: [
+        if (controller.notifications != null)
+          NotificationSettingsButton(notifications: controller.notifications!),
+        const UpdateSettingsButton()
+      ]),
       body: ListenableBuilder(
           listenable: controller,
           builder: (context, _) =>

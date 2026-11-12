@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'storage/saathi_store.dart';
+import 'notifications/reply_notifications.dart';
 import 'ui/chat_controller.dart';
 import 'ui/chat_home.dart';
 import 'update_host.dart';
@@ -21,6 +22,19 @@ class SaathiApp extends StatefulWidget {
 class _SaathiAppState extends State<SaathiApp> {
   ChatController? controller;
   String? error;
+  ReplyNotifications? notifications;
+  final navigator = GlobalKey<NavigatorState>();
+
+  void consumeTap() {
+    final c = controller;
+    if (!mounted || c == null || c.loading) return;
+    notifications?.consumeTap((id) {
+      if (!c.openNotificationConversation(id)) return false;
+      navigator.currentState?.popUntil((route) => route.isFirst);
+      return true;
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -32,8 +46,16 @@ class _SaathiAppState extends State<SaathiApp> {
       final store = widget.store ?? await SaathiStore.open();
       if (!mounted) return;
       final c = ChatController(store, coreFactory: widget.coreFactory);
+      final n = ReplyNotifications(store.preferences);
+      notifications = n;
+      c.notifications = n;
+      c.onReplyReceived = (id) {
+        n.replyReceived(id);
+      };
+      n.onResume = consumeTap;
       setState(() => controller = c);
       await c.load();
+      if (mounted) consumeTap();
     } catch (_) {
       if (mounted) {
         setState(() => error =
@@ -44,6 +66,7 @@ class _SaathiAppState extends State<SaathiApp> {
 
   @override
   void dispose() {
+    notifications?.dispose();
     controller?.dispose();
     super.dispose();
   }
@@ -51,6 +74,7 @@ class _SaathiAppState extends State<SaathiApp> {
   @override
   Widget build(BuildContext context) => SaathiUpdateHost(
           child: MaterialApp(
+        navigatorKey: navigator,
         title: 'Saathi',
         builder: widget.builder,
         debugShowCheckedModeBanner: false,
