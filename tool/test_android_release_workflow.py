@@ -4,6 +4,12 @@ import unittest
 
 
 class AndroidReleaseWorkflowTests(unittest.TestCase):
+    def test_lipo_input_precedes_variadic_architecture_arguments(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/release-desktop.yml').read_text()
+        for binary in ('Contents/MacOS/Saathi', 'Contents/Frameworks/App.framework/App', 'Contents/Frameworks/FlutterMacOS.framework/FlutterMacOS'):
+            expected = f'lipo "$APP/{binary}" -verify_arch x86_64 arm64'
+            self.assertTrue(expected in workflow, f'Invalid lipo argument order for {binary}')
+
     def test_android_is_signed_configured_verified_and_published(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/release-desktop.yml').read_text()
         for required in (

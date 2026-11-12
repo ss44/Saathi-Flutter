@@ -22,7 +22,17 @@ def verify(apk, sdk, package, version, build, certificate_sha256):
     signer = max(candidates, key=lambda tool: tuple(int(part) for part in re.findall(r'\d+', tool.parent.name)))
     verification = subprocess.run([str(signer), 'verify', '--verbose', '--print-certs', str(apk)],
                                   capture_output=True, text=True, check=True)
-    signers = {value.lower() for value in re.findall(r'^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]{64})\s*$', verification.stdout, re.MULTILINE)}
+    # AOSP prints SDK-range labels instead of numbered signers for v3.1 APKs.
+    # Parse every signer digest, not Source Stamp certificates or just one range.
+    signer_line = re.compile(r'Signer (?:#\d+|\(minSdkVersion=\d+(?: \(dev release=true\))?, maxSdkVersion=\d+\)) certificate SHA-256 digest: ([0-9a-fA-F]{64})')
+    signers = set()
+    for line in verification.stdout.splitlines():
+        line = line.strip()
+        if line.startswith('Signer ') and ' certificate SHA-256 digest:' in line:
+            match = signer_line.fullmatch(line)
+            if match is None:
+                raise ValueError('Unrecognized APK signing certificate output; refusing partial signer verification')
+            signers.add(match.group(1).lower())
     if signers != {expected}:
         raise ValueError('APK signing certificate does not match the configured release identity')
     aapt = next((signer.parent / name for name in ('aapt2', 'aapt') if (signer.parent / name).is_file()), None)

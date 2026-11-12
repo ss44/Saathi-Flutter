@@ -39,6 +39,26 @@ class VerifyApkTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'certificate'):
                 verifier.verify(*self.arguments)
 
+    def test_accepts_v31_sdk_range_labels_without_confusing_source_stamp(self):
+        # Labels come from AOSP ApkSignerTool's V3/V3.1 printCertificate paths.
+        for dev_release in ('', ' (dev release=true)'):
+            outputs = self.outputs()
+            outputs[0].stdout = (
+                f"Signer (minSdkVersion=24, maxSdkVersion=32) certificate SHA-256 digest: {'a' * 64}\n"
+                f"Signer (minSdkVersion=33{dev_release}, maxSdkVersion=2147483647) certificate SHA-256 digest: {'a' * 64}\n"
+                f"Source Stamp Signer certificate SHA-256 digest: {'b' * 64}\n"
+            )
+            with self.subTest(dev_release=dev_release), patch.object(verifier.subprocess, 'run', side_effect=outputs):
+                verifier.verify(*self.arguments)
+
+    def test_rejects_unexpected_ranged_or_unrecognized_signer_even_with_expected_numbered_signer(self):
+        for label in ('Signer (minSdkVersion=33, maxSdkVersion=2147483647)', 'Signer unknown-format'):
+            outputs = self.outputs()
+            outputs[0].stdout += f"{label} certificate SHA-256 digest: {'b' * 64}\n"
+            with self.subTest(label=label), patch.object(verifier.subprocess, 'run', side_effect=outputs):
+                with self.assertRaisesRegex(ValueError, 'certificate'):
+                    verifier.verify(*self.arguments)
+
     def test_rejects_wrong_package_version_or_build(self):
         for index, outputs in enumerate((self.outputs(package='other.app'), self.outputs(version='2026.46.2'), self.outputs(build=1))):
             with self.subTest(mismatch=index), patch.object(verifier.subprocess, 'run', side_effect=outputs):
