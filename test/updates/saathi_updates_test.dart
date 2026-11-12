@@ -108,6 +108,33 @@ void main() {
     expect(verified.bytes, fixture.apk);
     expect(verified.offer, same(offer));
   });
+  test('weekly beta release discovers and verifies a final version prerelease',
+      () async {
+    final fixture = ReleaseFixture(
+        version: '2026.46.1',
+        build: 2026460001,
+        channel: 'beta',
+        prerelease: true,
+        assetName: 'Saathi-2026.46.1-android.apk');
+    final service = fixture.service(
+        config: const UpdateConfig(
+            owner: 'example', repo: 'saathi', channel: 'beta'),
+        installed: UpdateVersion.parse('2026.45.9', 2026450009));
+    final offer = await service.check();
+    expect(offer?.version.name, '2026.46.1');
+    expect(offer?.version.build, 2026460001);
+    expect(offer?.releaseUrl.toString(),
+        'https://github.com/example/saathi/releases/tag/v2026.46.1');
+    expect(offer?.assetName, 'Saathi-2026.46.1-android.apk');
+    expect((await service.download(offer!)).bytes, fixture.apk);
+  });
+  test('stable rejects GitHub prerelease even with final weekly semver',
+      () async {
+    final fixture = ReleaseFixture(
+        version: '2026.46.1', build: 2026460001, prerelease: true);
+    expect(await fixture.service().check(), isNull);
+    expect(fixture.requests, 1);
+  });
   test('rejects checksum mismatches before installer invocation', () async {
     final fixture = ReleaseFixture();
     fixture.downloadBytes = List.filled(fixture.apk.length, 0);
@@ -136,10 +163,10 @@ void main() {
   });
   test('rejects unsafe and cross-repository artifact URLs', () async {
     for (final url in [
-      'http://github.com/example/saathi/releases/download/v1.1.0+2/saathi.apk',
-      'https://github.com/attacker/saathi/releases/download/v1.1.0+2/saathi.apk',
-      'https://github.com.evil.test/example/saathi/releases/download/v1.1.0+2/saathi.apk',
-      'https://user@github.com/example/saathi/releases/download/v1.1.0+2/saathi.apk',
+      'http://github.com/example/saathi/releases/download/v1.1.0/saathi.apk',
+      'https://github.com/attacker/saathi/releases/download/v1.1.0/saathi.apk',
+      'https://github.com.evil.test/example/saathi/releases/download/v1.1.0/saathi.apk',
+      'https://user@github.com/example/saathi/releases/download/v1.1.0/saathi.apk',
     ]) {
       final fixture = ReleaseFixture();
       fixture.manifest['asset']['url'] = url;
@@ -257,14 +284,14 @@ void main() {
     fixture.manifest['version'] = '1.1.0-beta.1';
     fixture.manifest['channel'] = 'beta';
     fixture.manifest['asset']['url'] =
-        'https://github.com/example/saathi/releases/download/v1.1.0-beta.1+2/saathi.apk';
-    fixture.release['tag_name'] = 'v1.1.0-beta.1+2';
+        'https://github.com/example/saathi/releases/download/v1.1.0-beta.1/saathi.apk';
+    fixture.release['tag_name'] = 'v1.1.0-beta.1';
     fixture.release['prerelease'] = true;
     fixture.release['html_url'] =
-        'https://github.com/example/saathi/releases/tag/v1.1.0-beta.1+2';
+        'https://github.com/example/saathi/releases/tag/v1.1.0-beta.1';
     fixture.release['assets'][0]['name'] = 'saathi-update-beta.json';
     fixture.release['assets'][0]['browser_download_url'] =
-        'https://github.com/example/saathi/releases/download/v1.1.0-beta.1+2/saathi-update-beta.json';
+        'https://github.com/example/saathi/releases/download/v1.1.0-beta.1/saathi-update-beta.json';
     final offer = await fixture
         .service(
             config: const UpdateConfig(
@@ -307,36 +334,47 @@ void main() {
 }
 
 class ReleaseFixture {
+  ReleaseFixture(
+      {this.version = '1.1.0',
+      this.build = 2,
+      this.channel = 'stable',
+      this.prerelease = false,
+      this.assetName = 'saathi.apk'});
+  final String version;
+  final int build;
+  final String channel;
+  final bool prerelease;
+  final String assetName;
   final apk = utf8.encode('test APK bytes, never a production APK');
   late final manifest = <String, dynamic>{
     'schema': 1,
-    'version': '1.1.0',
-    'build': 2,
-    'channel': 'stable',
+    'version': version,
+    'build': build,
+    'channel': channel,
     'platform': 'android',
     'asset': {
-      'name': 'saathi.apk',
+      'name': assetName,
       'size': apk.length,
       'sha256': sha256.convert(apk).toString(),
       'url':
-          'https://github.com/example/saathi/releases/download/v1.1.0+2/saathi.apk'
+          'https://github.com/example/saathi/releases/download/v$version/$assetName'
     },
   };
   late final release = <String, dynamic>{
-    'tag_name': 'v1.1.0+2',
+    'tag_name': 'v$version',
     'draft': false,
-    'prerelease': false,
-    'html_url': 'https://github.com/example/saathi/releases/tag/v1.1.0+2',
+    'prerelease': prerelease,
+    'html_url': 'https://github.com/example/saathi/releases/tag/v$version',
     'assets': [
       {
-        'name': 'saathi-update-stable.json',
+        'name': 'saathi-update-$channel.json',
         'state': 'uploaded',
         'size': utf8.encode(jsonEncode(manifest)).length,
         'browser_download_url':
-            'https://github.com/example/saathi/releases/download/v1.1.0+2/saathi-update-stable.json'
+            'https://github.com/example/saathi/releases/download/v$version/saathi-update-$channel.json'
       },
       {
-        'name': 'saathi.apk',
+        'name': assetName,
         'state': 'uploaded',
         'size': apk.length,
         'browser_download_url': manifest['asset']['url']

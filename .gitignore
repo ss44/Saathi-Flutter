@@ -59,4 +59,10 @@ app.*.map.json
 android/key.properties
 *.jks
 *.keystore
+*.p12
+*.pfx
+github-secrets.json
+signing-credentials.txt
+keystore-password.txt
+Saathi-Android-signing-backup.zip
 release-secrets/

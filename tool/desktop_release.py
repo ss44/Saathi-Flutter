@@ -16,8 +16,8 @@ def tag_parts(tag):
         raise ValueError('Tag must be vYEAR.WEEK.INCREMENT, without leading zeroes')
     year, week, increment = map(int, match.groups())
     dt.date.fromisocalendar(year, week, 1)  # Reject nonexistent ISO week 53/54.
-    if not 1 <= increment <= 65535:
-        raise ValueError('Weekly increment must be between 1 and 65535')
+    if not 1 <= increment <= 9999:
+        raise ValueError('Weekly increment must be between 1 and 9999')
     return year, week, increment
 
 
@@ -39,10 +39,13 @@ def version_info(tag, run_number, today=None, existing_tags=()):
             if (tag_year, tag_week) == (year, week):
                 increments.append(value)
         increment = max(increments, default=0) + 1
-        if increment > 65535:
+        if increment > 9999:
             raise ValueError('Weekly increment exhausted')
     version = f'{year}.{week}.{increment}'
-    return {'version': version, 'build': build, 'tag': f'v{version}'}
+    android_build = int(f'{year:04d}{week:02d}{increment:04d}')
+    if not 1 <= android_build <= 2100000000:
+        raise ValueError('Android build number must be between 1 and 2100000000')
+    return {'version': version, 'build': build, 'android_build': android_build, 'tag': f'v{version}'}
 
 
 def validated_tag(tag):
@@ -55,7 +58,8 @@ def expected_assets(tag):
     validated_tag(tag)
     return [f'Saathi-{tag[1:]}-linux-x64.tar.gz',
             f'Saathi-{tag[1:]}-macos-universal.zip',
-            f'Saathi-{tag[1:]}-windows-x64.zip']
+            f'Saathi-{tag[1:]}-windows-x64.zip',
+            f'Saathi-{tag[1:]}-android.apk', 'saathi-update-beta.json']
 
 
 def package_bundle(platform, bundle, output, tag):
@@ -115,9 +119,9 @@ def write_checksums(directory, tag):
     for name in names:
         if not (directory / name).is_file() or (directory / name).stat().st_size == 0:
             raise ValueError(f'Missing release artifact: {name}')
-    actual = sorted(p.name for p in directory.iterdir() if p.suffix == '.zip' or p.name.endswith('.tar.gz'))
+    actual = sorted(p.name for p in directory.iterdir() if p.name != 'SHA256SUMS')
     if actual != sorted(names):
-        raise ValueError('Unexpected release archive set')
+        raise ValueError('Unexpected release asset set')
     result = directory / 'SHA256SUMS'
     result.write_text(''.join(f'{file_digest(directory / name)}  {name}\n' for name in sorted(names)), encoding='utf-8')
     return result

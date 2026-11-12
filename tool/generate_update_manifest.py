@@ -35,7 +35,7 @@ def generate(owner, repo, version, build, channel, apk):
     with apk.open('rb') as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b''):
             digest.update(chunk)
-    tag = f'v{version}+{build}'
+    tag = f'v{version}'
     return {
         'schema': 1, 'version': version, 'build': build, 'channel': channel,
         'platform': 'android',

@@ -1,12 +1,12 @@
-# Desktop binary releases
+# Desktop and Android binary releases
 
-Workflow: `.github/workflows/release-desktop.yml` → **Desktop binary releases** in GitHub Actions.
+Workflow: `.github/workflows/release-desktop.yml` → **Desktop and Android binary releases** in GitHub Actions. For Android signing setup and private backups, see `ANDROID_SIGNING.md`.
 
 ## Trigger
 
 - Use **Run workflow** on the intended source branch. UTC time selects the ISO week-year/week; the highest existing increment for that week is increased by one (starting at 1). All tags are fetched before allocation.
 - Or push an exact tag such as `v2026.46.1` (`vYEAR.WEEK.INCREMENT`). Valid explicit values are preserved.
-- Ordinary branch pushes do not publish releases. Invalid ISO weeks, leading-zero week/increment values, shell-like tags and increments/internal builds outside 1–65535 fail before compilation. These bounds keep Windows VERSIONINFO components valid.
+- Ordinary branch pushes do not publish releases. Invalid ISO weeks, leading-zero values and shell-like tags fail before compilation. Combined release increments are 1–9999, desktop internal builds are 1–65535, and Android versionCode must be at most 2100000000.
 
 Version example: **`2026.46.1`** → `2026.46.2` → next week `2026.47.1`. The release tag is `v2026.46.1`; there is no `+BUILD` in release names or archive filenames. Flutter receives that three-part version plus a separate internal `github.run_number` build identifier. ISO week-year handles New Year correctly (January 1 can belong to the previous ISO year).
 
@@ -20,20 +20,21 @@ All desktop release runs share one concurrency group so two manual runs cannot a
    - Ubuntu 22.04 → Linux x86-64 complete bundle (`.tar.gz`), preserving executable modes and symlinks.
    - Windows Server 2022 → Windows x64 complete bundle (`.zip`), including all runtime DLLs/assets.
    - macOS 15 Intel → universal `.app` (`.zip` via `ditto`, preserving framework links). `lipo` asserts both Intel and Apple Silicon slices in the app, Dart AOT framework and Flutter engine.
-4. Only after all builds pass, collect exactly three archives and create `SHA256SUMS` from the real files.
-5. Create an **unsigned prerelease draft**, upload all artifacts, confirm four assets exist, then publish. A failure before publishing leaves a draft for inspection, not a misleading partial public release. Existing releases—including incomplete drafts—are not overwritten automatically.
+   - Ubuntu 22.04 + Java 17 → universal release-signed Android APK with beta updates enabled. Android SDK tools verify its signature, configured signer, application ID, versionName, and versionCode before upload. Missing credentials fail the job; there is no unsigned/debug fallback. Temporary signing files are removed even after failures.
+4. Only after all four native builds pass, collect the three desktop archives, APK and beta manifest; create `SHA256SUMS` from the real files.
+5. Create a **prerelease draft**, upload all six assets including checksums, read back exact names/sizes and available digests, then publish. A failure before publishing leaves a draft for inspection, not a misleading partial public release. Existing releases—including incomplete drafts—are not overwritten automatically. The APK/manifest Actions artifact `binary-android` is available as soon as its own build finishes, even if another platform later fails.
 
-Artifact names: `Saathi-VERSION-linux-x64.tar.gz`, `Saathi-VERSION-windows-x64.zip`, `Saathi-VERSION-macos-universal.zip`, plus `SHA256SUMS`.
+Artifact names: `Saathi-VERSION-linux-x64.tar.gz`, `Saathi-VERSION-windows-x64.zip`, `Saathi-VERSION-macos-universal.zip`, `Saathi-VERSION-android.apk`, `saathi-update-beta.json`, and `SHA256SUMS`.
 
 ## Signing and runtime caveats
 
-No code-signing identities are available. These are explicitly unsigned previews, not production-certified installers. The workflow does not claim Apple notarization, Windows Authenticode, package-manager integration or automatic desktop replacement. Add platform signing/notarization as a separate protected release stage before promoting builds to stable.
+Desktop code-signing identities are not configured. Desktop artifacts remain unsigned previews; Android uses the persistent standalone PKCS12 signing identity stored in Actions secrets. The workflow does not claim Apple notarization, Windows Authenticode, Google Play enrollment, package-manager integration or automatic desktop replacement.
 
 The standalone macOS client uses the plugin's documented legacy Keychain option (`MacOsOptions(usesDataProtectionKeychain: false)`) and does not request Keychain Sharing. Saathi does not share keys with another application; this avoids an unnecessary machine-specific provisioning profile. Credentials still live in the macOS Keychain, not plaintext preferences. The source/option regression is tested; actual OS behavior still needs a Mac.
 
 Linux secure storage requires libsecret and a running Secret Service. Windows may need the VC++ x64 runtime. Builds are portable directories, not single executables. See the release notes for end-user requirements. Flutter does not provide a supported 32-bit Linux x86 target; this workflow explicitly builds `linux-x64`.
 
-The desktop builds use `SAATHI_DISTRIBUTION=disabled`; they do not consume Android update manifests or promise an unsupported desktop self-installer. The Android release/update pipeline remains separate.
+The desktop builds use `SAATHI_DISTRIBUTION=disabled`; they do not consume Android update manifests or promise an unsupported desktop self-installer. Android embeds the repository owner/name and beta update channel. Its internal code is deterministic `YYYYWWIIII` (e.g. `2026460001` for `2026.46.1`), not the desktop run number. The GitHub prerelease flag may be true for a final weekly SemVer on the beta channel; stable still rejects prereleases. Publishing does not prove a real device accepted an upgrade.
 
 ## Repository permissions
 

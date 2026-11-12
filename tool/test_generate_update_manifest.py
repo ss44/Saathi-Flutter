@@ -15,11 +15,11 @@ class ManifestTests(unittest.TestCase):
     def run_tool(self, *extra):
         # Runtime TMPDIR is the project's scratch area, not /tmp.
         with tempfile.TemporaryDirectory(prefix='saathi-release-') as work:
-            apk = Path(work) / 'saathi.apk'
+            apk = Path(work) / 'Saathi-2026.46.1-android.apk'
             apk.write_bytes(b'manifest fixture only, not installable')
             output = Path(work) / 'saathi-update-stable.json'
             result = subprocess.run([sys.executable, str(TOOL), '--owner', 'example',
-                '--repo', 'saathi', '--version', '1.1.0', '--build', '2',
+                '--repo', 'saathi', '--version', '2026.46.1', '--build', '2026460001',
                 '--channel', 'stable', '--apk', str(apk), '--output', str(output),
                 *extra], text=True, capture_output=True)
             return result, json.loads(output.read_text()) if output.exists() else None
@@ -30,8 +30,17 @@ class ManifestTests(unittest.TestCase):
         assert manifest is not None
         self.assertEqual(manifest['schema'], 1)
         self.assertEqual(manifest['asset']['sha256'], hashlib.sha256(b'manifest fixture only, not installable').hexdigest())
-        self.assertEqual(manifest['asset']['url'], 'https://github.com/example/saathi/releases/download/v1.1.0%2B2/saathi.apk')
+        self.assertEqual(manifest['version'], '2026.46.1')
+        self.assertEqual(manifest['build'], 2026460001)
+        self.assertEqual(manifest['asset']['url'], 'https://github.com/example/saathi/releases/download/v2026.46.1/Saathi-2026.46.1-android.apk')
         self.assertIn('does not verify APK signing', result.stderr)
+
+    def test_beta_manifest_accepts_final_weekly_version(self):
+        result, manifest = self.run_tool('--channel', 'beta')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        assert manifest is not None
+        self.assertEqual(manifest['channel'], 'beta')
+        self.assertEqual(manifest['asset']['url'], 'https://github.com/example/saathi/releases/download/v2026.46.1/Saathi-2026.46.1-android.apk')
 
     def test_rejects_invalid_repository(self):
         result, manifest = self.run_tool('--repo', '../evil')

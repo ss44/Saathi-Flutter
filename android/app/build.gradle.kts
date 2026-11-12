@@ -44,6 +44,7 @@ android {
                 keyPassword = releaseKeys.getProperty("keyPassword")
                 storeFile = file(releaseKeys.getProperty("storeFile"))
                 storePassword = releaseKeys.getProperty("storePassword")
+                storeType = releaseKeys.getProperty("storeType", "PKCS12")
             }
         }
     }

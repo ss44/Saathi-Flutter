@@ -16,7 +16,26 @@ import desktop_release as release
 class DesktopReleaseTests(unittest.TestCase):
     def test_manual_calver_uses_iso_year_week_and_first_increment(self):
         result = release.version_info(None, 42, dt.date(2026, 11, 12))
-        self.assertEqual(result, {'version': '2026.46.1', 'build': 42, 'tag': 'v2026.46.1'})
+        self.assertEqual(result, {'version': '2026.46.1', 'build': 42, 'android_build': 2026460001, 'tag': 'v2026.46.1'})
+
+    def test_android_build_is_deterministic_and_monotonic_across_weeks_and_iso_years(self):
+        first = release.version_info('v2026.46.9999', 42)
+        rerun = release.version_info('v2026.46.9999', 43)
+        following = release.version_info('v2026.47.1', 44)
+        new_year = release.version_info(None, 45, dt.date(2027, 1, 1))
+        next_year = release.version_info(None, 46, dt.date(2027, 1, 4))
+        self.assertEqual(first['android_build'], 2026469999)
+        self.assertEqual(first['android_build'], rerun['android_build'])
+        self.assertGreater(following['android_build'], first['android_build'])
+        self.assertEqual(new_year['android_build'], 2026530001)
+        self.assertEqual(next_year['android_build'], 2027010001)
+        self.assertGreater(next_year['android_build'], new_year['android_build'])
+
+    def test_combined_release_increment_and_android_max_are_bounded(self):
+        for tag in ['v2026.46.10000', 'v2100.1.1', 'v9999.1.1']:
+            with self.subTest(tag=tag), self.assertRaises(ValueError):
+                release.version_info(tag, 1)
+        self.assertEqual(release.version_info('v2099.53.9999', 65535)['android_build'], 2099539999)
 
     def test_weekly_increment_follows_existing_tags_and_resets_next_week(self):
         tags = ['v2026.46.1', 'v2026.46.2', 'v2026.45.9', 'v2026.11.12+42', 'bad']
@@ -39,7 +58,7 @@ class DesktopReleaseTests(unittest.TestCase):
 
     def test_weekly_increment_exhaustion_is_rejected(self):
         with self.assertRaises(ValueError):
-            release.version_info(None, 50, dt.date(2026, 11, 12), ['v2026.46.65535'])
+            release.version_info(None, 50, dt.date(2026, 11, 12), ['v2026.46.9999'])
 
     def test_cli_consumes_tag_inventory_and_writes_github_outputs(self):
         year, week, _ = dt.datetime.now(dt.timezone.utc).date().isocalendar()
@@ -105,18 +124,25 @@ class DesktopReleaseTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 release.package_bundle('windows-x64', bundle, root / 'out', 'v2026.1.1')
 
-    def test_checksums_cover_three_expected_artifacts_only(self):
+    def test_checksums_cover_exact_combined_release_assets(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             tag = 'v2026.1.1'
             names = release.expected_assets(tag)
+            self.assertEqual(names, ['Saathi-2026.1.1-linux-x64.tar.gz',
+                'Saathi-2026.1.1-macos-universal.zip', 'Saathi-2026.1.1-windows-x64.zip',
+                'Saathi-2026.1.1-android.apk', 'saathi-update-beta.json'])
             for name in names:
                 (root / name).write_bytes(name.encode())
             checksum = release.write_checksums(root, tag)
             lines = checksum.read_text().splitlines()
-            self.assertEqual(len(lines), 3)
+            self.assertEqual(len(lines), 5)
             for name in names:
                 self.assertIn(f'{hashlib.sha256(name.encode()).hexdigest()}  {name}', lines)
+            (root / 'unexpected.apk').write_bytes(b'not a signed APK')
+            with self.assertRaises(ValueError):
+                release.write_checksums(root, tag)
+            (root / 'unexpected.apk').unlink()
             (root / names[0]).unlink()
             with self.assertRaises(ValueError):
                 release.write_checksums(root, tag)

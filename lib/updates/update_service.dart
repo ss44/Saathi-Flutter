@@ -139,9 +139,8 @@ class SaathiUpdateService {
       final build = manifest['build'];
       if (build is! int) throw const UpdateException('Invalid build number');
       final version = UpdateVersion.parse(_text(manifest, 'version'), build);
-      if (tag != 'v${version.name}+${version.build}' ||
-          (config.channel == 'stable' && version.isPrerelease) ||
-          release['prerelease'] != version.isPrerelease) {
+      if (tag != 'v${version.name}' ||
+          (config.channel == 'stable' && version.isPrerelease)) {
         throw const UpdateException('Release version/channel mismatch');
       }
       final asset = _map(manifest['asset']);

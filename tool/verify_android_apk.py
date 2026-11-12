@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Verify a real APK using Android SDK apksigner and aapt2 before upload."""
+import argparse
+import os
+from pathlib import Path
+import re
+import subprocess
+
+from generate_update_manifest import MAX_APK_BYTES
+
+
+def verify(apk, sdk, package, version, build, certificate_sha256):
+    apk, sdk = Path(apk), Path(sdk)
+    expected = certificate_sha256.strip().replace(':', '').lower()
+    if not re.fullmatch('[0-9a-f]{64}', expected):
+        raise ValueError('A valid expected signing certificate SHA-256 is required')
+    if not apk.is_file() or not 0 < apk.stat().st_size <= MAX_APK_BYTES:
+        raise ValueError('APK missing, empty, or over updater download size limit')
+    candidates = [tool for tool in (sdk / 'build-tools').glob('*/apksigner') if tool.is_file()]
+    if not candidates:
+        raise ValueError('Android SDK apksigner is required; unsigned fallback is forbidden')
+    signer = max(candidates, key=lambda tool: tuple(int(part) for part in re.findall(r'\d+', tool.parent.name)))
+    verification = subprocess.run([str(signer), 'verify', '--verbose', '--print-certs', str(apk)],
+                                  capture_output=True, text=True, check=True)
+    signers = {value.lower() for value in re.findall(r'^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]{64})\s*$', verification.stdout, re.MULTILINE)}
+    if signers != {expected}:
+        raise ValueError('APK signing certificate does not match the configured release identity')
+    aapt = next((signer.parent / name for name in ('aapt2', 'aapt') if (signer.parent / name).is_file()), None)
+    if aapt is None:
+        raise ValueError('Android SDK aapt2/aapt is required to verify APK metadata')
+    badging = subprocess.run([str(aapt), 'dump', 'badging', str(apk)], capture_output=True, text=True, check=True).stdout
+    package_line = next((line for line in badging.splitlines() if line.startswith('package: ')), '')
+    fields = dict(re.findall(r"([A-Za-z]+)='([^']*)'", package_line))
+    if (fields.get('name'), fields.get('versionName'), fields.get('versionCode')) != (package, version, str(build)):
+        raise ValueError('APK package/version/build metadata does not match the intended release')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--apk', type=Path, required=True)
+    parser.add_argument('--sdk', type=Path, required=True)
+    parser.add_argument('--package', default='io.github.ss44.saathi')
+    parser.add_argument('--version', required=True)
+    parser.add_argument('--build', type=int, required=True)
+    arguments = parser.parse_args()
+    try:
+        verify(arguments.apk, arguments.sdk, arguments.package, arguments.version, arguments.build,
+               os.environ.get('ANDROID_SIGNING_CERT_SHA256', ''))
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        parser.error(str(error))
+    print('Verified APK signature, signer identity, package, version, and build using Android SDK tools.')
+
+
+if __name__ == '__main__':
+    main()

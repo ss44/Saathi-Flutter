@@ -69,32 +69,34 @@ not offer a verified-download guarantee for what the browser downloads.
 
 ## Release format and publishing
 
-The release tag is exactly `vSEMVER+BUILD`, e.g. `v1.1.0+2` (illustration, not an
-existing release). Stable tags must use a non-prerelease semver and GitHub
-`prerelease: false`; beta tags may be prereleases with `prerelease: true` or final
-versions marked false. Channels are explicit manifests, not inferred from a tag.
+The release tag is exactly `vVERSION`, e.g. `v2026.46.1` (ISO year.week.increment).
+The separate integer build number is not appended to the tag. Stable tags must use
+a non-prerelease semver and GitHub `prerelease: false`; beta accepts final weekly
+versions marked `prerelease: true`, as well as semver prereleases. Channels are explicit manifests, not inferred from a tag.
 A beta client only reads `saathi-update-beta.json`; promote a release by deliberately
 publishing a stable manifest on a final-version release. Never republish an older
-Android build number. Both semver and versionCode must advance; same semver with a
-higher build is supported. Semver build metadata (`+...`) belongs in the separate
-integer `build` field and is not accepted inside `version`.
+Android build number. Versions must not regress and versionCode must advance. The
+combined release workflow derives `YYYYWWIIII` from the weekly version, e.g.
+`2026460001` for `2026.46.1`, with weekly increments 1–9999. Desktop's separate
+workflow run number is not used as Android versionCode. Semver build metadata
+(`+...`) is not accepted inside `version` or the release tag.
 
-A published GitHub release must contain a universal, **production-signed APK**
+A published GitHub release must contain a universal, **release-signed APK**
 and `saathi-update-stable.json` (or beta). The APK must support the target device;
 split APK sets and AABs are not single-APK installer inputs. Metadata schema:
 
 ```json
 {
   "schema": 1,
-  "version": "1.1.0",
-  "build": 2,
-  "channel": "stable",
+  "version": "2026.46.1",
+  "build": 2026460001,
+  "channel": "beta",
   "platform": "android",
   "asset": {
-    "name": "saathi.apk",
+    "name": "Saathi-2026.46.1-android.apk",
     "size": 12345,
     "sha256": "64 lowercase hexadecimal characters, generated from actual APK",
-    "url": "https://github.com/OWNER/REPO/releases/download/v1.1.0%2B2/saathi.apk"
+    "url": "https://github.com/OWNER/REPO/releases/download/v2026.46.1/Saathi-2026.46.1-android.apk"
   }
 }
 ```
@@ -103,19 +105,20 @@ This example is schematic; its checksum is intentionally not valid. Generate rea
 metadata rather than copying it:
 
 ```sh
-# Configure production signing first. Never use a debug signing identity.
-flutter build apk --release --build-name 1.1.0 --build-number 2 \
+# Restore the existing standalone signing identity first. Never use debug signing.
+flutter build apk --release --build-name 2026.46.1 --build-number 2026460001 \
   --dart-define=SAATHI_UPDATE_OWNER=YOUR_OWNER \
   --dart-define=SAATHI_UPDATE_REPO=YOUR_REPO \
-  --dart-define=SAATHI_DISTRIBUTION=standalone
+  --dart-define=SAATHI_DISTRIBUTION=standalone \
+  --dart-define=SAATHI_UPDATE_CHANNEL=beta
 # Use Android SDK build-tools/apksigner, and compare certificate digest to the
 # established, securely recorded production signer. Unsigned APK MUST fail here.
 apksigner verify --verbose --print-certs build/app/outputs/flutter-apk/app-release.apk
 python3 tool/generate_update_manifest.py \
-  --owner YOUR_OWNER --repo YOUR_REPO --version 1.1.0 --build 2 \
-  --channel stable --apk build/app/outputs/flutter-apk/app-release.apk \
-  --output build/saathi-update-stable.json
-# Create a draft tag v1.1.0+2, upload BOTH assets, verify metadata and APK signing,
+  --owner YOUR_OWNER --repo YOUR_REPO --version 2026.46.1 --build 2026460001 \
+  --channel beta --apk build/app/outputs/flutter-apk/app-release.apk \
+  --output build/saathi-update-beta.json
+# Create a draft tag v2026.46.1, upload BOTH assets, verify metadata and APK signing,
 # then publish the draft atomically. Do not edit published release assets.
 ```
 
@@ -130,10 +133,14 @@ the upload key; don't expect arbitrary sideload APKs to replace Play installatio
 This bridge requires an identical signer set; signing-key rotation needs an explicit
 native signing-lineage design and is not supported by this implementation.
 
-No release workflow uploads unsigned APKs or assumes a repository. The manifest-check workflow runs generator unit tests; `verify.yml` additionally runs Flutter formatting, analysis and tests. Hosted execution is not verified until the user creates/pushes the repository. Real release automation requires an actual repo,
-protected release environment, least-privilege release token, secure signing-key
-provisioning, signer-digest verification and a production signing policy. Do not
-commit keys/passwords or embed GitHub tokens in the application.
+The combined `.github/workflows/release-desktop.yml` builds the signed APK, verifies
+its real signer/package/version/build with Android SDK tools, and publishes its
+beta manifest alongside the desktop artifacts. It embeds the current repository
+owner/name and beta channel. Five protected Actions secrets are required; see
+`ANDROID_SIGNING.md`. Missing secrets fail closed. CI signing files are removed
+even on failure and excluded from artifacts. Publishing is gated on all four native
+builds and tests, then exact draft asset metadata is read back before promotion.
+Do not commit keys/passwords or embed GitHub tokens in the application.
 
 ## Trust boundary and limitations
 
@@ -169,9 +176,10 @@ commit keys/passwords or embed GitHub tokens in the application.
   Hermes-like desktop updater. Default manifest platform is Android; a desktop UI
   should label this action **Open releases**, not **Install desktop update**.
   Per-desktop signed/notarized/package-manager updates are separate future work.
-- No actual repository or signed release has been supplied. Production discovery,
-  OS permission UX, physical-device install and upgrade preservation require those
-  inputs and device testing. Local fixture tests exercise download, corruption
+- Native release results must be checked in the actual workflow run; repository
+  configuration and fixture tests do not prove a signed APK was published. OS
+  permission UX, physical-device install and upgrade preservation still require
+  device testing. Local fixture tests exercise download, corruption
   rejection, private-cache write and native channel handoff, not OS installation.
 
 ## Official references used for the design

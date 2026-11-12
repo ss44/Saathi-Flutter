@@ -1,4 +1,4 @@
-name: Desktop binary releases
+name: Desktop and Android binary releases
 
 on:
   workflow_dispatch:
@@ -28,6 +28,7 @@ jobs:
     outputs:
       version: ${{ steps.calver.outputs.version }}
       build: ${{ steps.calver.outputs.build }}
+      android_build: ${{ steps.calver.outputs.android_build }}
       tag: ${{ steps.calver.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,10 +77,15 @@ jobs:
             runner: windows-2022
           - platform: macos-universal
             runner: macos-15-intel
+          - platform: android
+            runner: ubuntu-22.04
     env:
       APP_VERSION: ${{ needs.version.outputs.version }}
       APP_BUILD: ${{ needs.version.outputs.build }}
+      ANDROID_BUILD: ${{ needs.version.outputs.android_build }}
       RELEASE_TAG: ${{ needs.version.outputs.tag }}
+      UPDATE_OWNER: ${{ github.repository_owner }}
+      UPDATE_REPO: ${{ github.event.repository.name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -94,7 +100,64 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libsecret-1-dev libjsoncpp-dev
+      - name: Set up Android Java toolchain
+        if: matrix.platform == 'android'
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Prepare private Android release signing inputs
+        if: matrix.platform == 'android'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_SIGNING_CERT_SHA256: ${{ secrets.ANDROID_SIGNING_CERT_SHA256 }}
+        run: |
+          python3 - <<'PY'
+          import base64, os, re
+          from pathlib import Path
+          names = ('ANDROID_KEYSTORE_BASE64', 'ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD', 'ANDROID_SIGNING_CERT_SHA256')
+          if any(not os.environ.get(name) for name in names):
+              raise SystemExit('Missing Android release-signing secrets; unsigned/debug fallback is forbidden.')
+          fingerprint = os.environ['ANDROID_SIGNING_CERT_SHA256'].replace(':', '').strip()
+          if not re.fullmatch('[a-fA-F0-9]{64}', fingerprint):
+              raise SystemExit('Invalid Android signing certificate fingerprint.')
+          os.umask(0o077)
+          keystore = Path(os.environ['RUNNER_TEMP']) / 'saathi-release.p12'
+          with keystore.open('xb') as target:
+              target.write(base64.b64decode(''.join(os.environ['ANDROID_KEYSTORE_BASE64'].split()), validate=True))
+          def prop(value):
+              if any(character in value for character in '\r\n\0'):
+                  raise SystemExit('Signing properties must not contain control characters.')
+              return value.replace('\\', '\\\\').replace(' ', '\\ ').replace(':', '\\:').replace('=', '\\=')
+          values = {'storeFile': str(keystore), 'storeType': 'PKCS12', 'storePassword': os.environ['ANDROID_KEYSTORE_PASSWORD'], 'keyAlias': os.environ['ANDROID_KEY_ALIAS'], 'keyPassword': os.environ['ANDROID_KEY_PASSWORD']}
+          with Path('android/key.properties').open('x', encoding='utf-8') as target:
+              target.write(''.join(f'{key}={prop(value)}\n' for key, value in values.items()))
+          print('Private release-signing files prepared; credential values suppressed.')
+          PY
       - run: flutter pub get
+      - name: Build, verify and package signed Android APK with beta updates
+        if: matrix.platform == 'android'
+        env:
+          ANDROID_SIGNING_CERT_SHA256: ${{ secrets.ANDROID_SIGNING_CERT_SHA256 }}
+        run: |
+          flutter build apk --release --build-name "$APP_VERSION" --build-number "$ANDROID_BUILD" \
+            --dart-define=SAATHI_DISTRIBUTION=standalone \
+            --dart-define=SAATHI_UPDATE_OWNER="$UPDATE_OWNER" \
+            --dart-define=SAATHI_UPDATE_REPO="$UPDATE_REPO" \
+            --dart-define=SAATHI_UPDATE_CHANNEL=beta
+          python3 tool/verify_android_apk.py --apk build/app/outputs/flutter-apk/app-release.apk \
+            --sdk "${ANDROID_HOME:-$ANDROID_SDK_ROOT}" --version "$APP_VERSION" --build "$ANDROID_BUILD"
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/Saathi-${APP_VERSION}-android.apk"
+          python3 tool/generate_update_manifest.py --owner "$UPDATE_OWNER" --repo "$UPDATE_REPO" \
+            --version "$APP_VERSION" --build "$ANDROID_BUILD" --channel beta \
+            --apk "dist/Saathi-${APP_VERSION}-android.apk" --output dist/saathi-update-beta.json
+      - name: Remove private Android signing inputs even after failure
+        if: ${{ always() && matrix.platform == 'android' }}
+        run: rm -f android/key.properties "$RUNNER_TEMP/saathi-release.p12"
       - name: Build and package Linux x86-64 bundle
         if: matrix.platform == 'linux-x64'
         run: |
@@ -125,7 +188,7 @@ jobs:
           unzip -t "dist/Saathi-${RELEASE_TAG#v}-macos-universal.zip"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: desktop-${{ matrix.platform }}
+          name: binary-${{ matrix.platform }}
           path: dist/*
           if-no-files-found: error
           retention-days: 7
@@ -145,14 +208,14 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: desktop-*
+          pattern: binary-*
           path: dist
           merge-multiple: true
       - name: Verify complete artifact set and write checksums
         run: |
           python3 tool/desktop_release.py checksums --directory dist --tag "$RELEASE_TAG"
           (cd dist && sha256sum --check SHA256SUMS)
-      - name: Publish all binaries together as an unsigned preview release
+      - name: Publish desktop previews and release-signed standalone Android APK
         env:
           BUILT_COMMIT: ${{ github.sha }}
           REPOSITORY: ${{ github.repository }}
@@ -162,11 +225,27 @@ jobs:
             echo 'Release already exists; refusing to overwrite it.' >&2
             exit 1
           fi
-          gh release create "$RELEASE_TAG" dist/*.zip dist/*.tar.gz dist/SHA256SUMS \
+          gh release create "$RELEASE_TAG" dist/*.zip dist/*.tar.gz dist/*.apk dist/saathi-update-beta.json dist/SHA256SUMS \
             --repo "$REPOSITORY" --target "$BUILT_COMMIT" \
             --title "Saathi ${RELEASE_TAG#v}" --prerelease --draft \
             --notes-file docs/DESKTOP_RELEASE_NOTES.md
           ASSETS=$(gh release view "$RELEASE_TAG" --repo "$REPOSITORY" --json assets --jq '.assets | length')
-          test "$ASSETS" -eq 4
+          test "$ASSETS" -eq 6
+          gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/saathi-draft-release.json"
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          release = json.loads((Path(os.environ['RUNNER_TEMP']) / 'saathi-draft-release.json').read_text())
+          files = {file.name: file for file in Path('dist').iterdir() if file.is_file()}
+          assets = release['assets']
+          assert release['tag_name'] == os.environ['RELEASE_TAG'] and release['draft'] is True
+          assert len(assets) == len(files) == 6 and {asset['name'] for asset in assets} == set(files)
+          for asset in assets:
+              file = files[asset['name']]
+              assert asset['size'] == file.stat().st_size
+              if asset.get('digest'):
+                  assert asset['digest'] == 'sha256:' + hashlib.sha256(file.read_bytes()).hexdigest()
+          print('Draft release read back and all six uploaded assets verified.')
+          PY
           gh release edit "$RELEASE_TAG" --repo "$REPOSITORY" --draft=false
           gh release view "$RELEASE_TAG" --repo "$REPOSITORY" --json tagName,isPrerelease,assets,url
