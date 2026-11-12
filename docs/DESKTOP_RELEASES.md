@@ -4,9 +4,10 @@ Workflow: `.github/workflows/release-desktop.yml` → **Desktop and Android bina
 
 ## Trigger
 
-- Use **Run workflow** on the intended source branch. UTC time selects the ISO week-year/week; the highest existing increment for that week is increased by one (starting at 1). All tags are fetched before allocation.
-- Or push an exact tag such as `v2026.46.1` (`vYEAR.WEEK.INCREMENT`). Valid explicit values are preserved.
-- Ordinary branch pushes do not publish releases. Invalid ISO weeks, leading-zero values and shell-like tags fail before compilation. Combined release increments are 1–9999, desktop internal builds are 1–65535, and Android versionCode must be at most 2100000000.
+- Automatic builds run **weekly on Mondays at 09:00 UTC** from the default branch. GitHub may delay scheduled execution; this is not a guaranteed wall-clock deadline.
+- Use **Run workflow** on the intended source branch for an on-demand testing build. UTC time selects the ISO week-year/week; the highest existing increment for that week is increased by one (starting at 1). All tags are fetched before allocation.
+- Branch pushes (including `main`) and tag pushes do not trigger binary releases. PR/main verification workflows remain separate and do not publish binaries.
+- Invalid ISO weeks, leading-zero values and shell-like tags fail before compilation. Combined release increments are 1–9999, desktop internal builds are 1–65535, and Android versionCode must be at most 2100000000.
 
 Version example: **`2026.46.1`** → `2026.46.2` → next week `2026.47.1`. The release tag is `v2026.46.1`; there is no `+BUILD` in release names or archive filenames. Flutter receives that three-part version plus a separate internal `github.run_number` build identifier. ISO week-year handles New Year correctly (January 1 can belong to the previous ISO year).
 
