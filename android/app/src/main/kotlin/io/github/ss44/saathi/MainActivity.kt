@@ -14,8 +14,24 @@ import java.io.File
 import java.security.MessageDigest
 
 class MainActivity : FlutterActivity() {
+    private var replyNotifications: ReplyNotifications? = null
+    override fun onStart() { super.onStart(); replyNotifications?.background = false }
+    override fun onStop() { replyNotifications?.background = true; super.onStop() }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        replyNotifications?.accept(intent)
+    }
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 731) replyNotifications?.permissionResult()
+    }
+    override fun onDestroy() { replyNotifications?.dispose(); replyNotifications = null; super.onDestroy() }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        replyNotifications = ReplyNotifications(this,
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "saathi/notifications"))
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "saathi/updates")
             .setMethodCallHandler { call, result ->
                 try {

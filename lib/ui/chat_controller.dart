@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import '../core/saathi_core.dart';
+import '../notifications/reply_notifications.dart';
 import '../storage/saathi_store.dart';
 
 class ChatSession {
@@ -36,6 +37,8 @@ typedef CoreFactory = SaathiCore Function();
 class ChatController extends ChangeNotifier {
   final SaathiStore store;
   final CoreFactory coreFactory;
+  void Function(String sessionId)? onReplyReceived;
+  ReplyNotifications? notifications;
   final List<Map<String, dynamic>> connections = [];
   final List<ChatSession> sessions = [];
   ChatSession? current;
@@ -50,6 +53,7 @@ class ChatController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    onReplyReceived = null;
     super.dispose();
   }
 
@@ -117,6 +121,14 @@ class ChatController extends ChangeNotifier {
       rethrow;
     }
     notifyListeners();
+  }
+
+  bool openNotificationConversation(String id) {
+    if (_disposed || loading || !validConversationId(id)) return false;
+    final found = sessions.where((s) => s.id == id);
+    if (found.length != 1) return false;
+    select(found.single);
+    return true;
   }
 
   void select(ChatSession session) {
@@ -188,6 +200,12 @@ class ChatController extends ChangeNotifier {
         ChatMessage(role: 'user', content: text),
         ChatMessage(role: 'model', content: result.text)
       ]);
+      // Completion belongs to the captured session, not the selected tab.
+      try {
+        if (!_disposed) onReplyReceived?.call(session.id);
+      } catch (_) {
+        /* Optional OS notification must never fail a successful chat. */
+      }
       try {
         await persist();
       } catch (_) {
