@@ -11,7 +11,7 @@ permissions:
 
 # A rerun must never race another publisher or overwrite an already published tag.
 concurrency:
-  group: desktop-release-${{ github.ref }}
+  group: desktop-release-${{ github.repository }}
   cancel-in-progress: false
 
 defaults:
@@ -33,12 +33,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Validate tag or generate UTC calendar version
+          fetch-depth: 0
+      - name: Validate tag or generate ISO year.week.increment version
         id: calver
         env:
           REQUESTED_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           RUN_NUMBER: ${{ github.run_number }}
-        run: python3 tool/desktop_release.py metadata --run-number "$RUN_NUMBER" --tag "$REQUESTED_TAG"
+        run: |
+          git tag --list > "$RUNNER_TEMP/saathi-release-tags.txt"
+          python3 tool/desktop_release.py metadata --run-number "$RUN_NUMBER" --tag "$REQUESTED_TAG" --tags-file "$RUNNER_TEMP/saathi-release-tags.txt"
 
   verify:
     runs-on: ubuntu-22.04

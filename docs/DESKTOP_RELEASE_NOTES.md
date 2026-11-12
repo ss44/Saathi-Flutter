@@ -8,6 +8,6 @@ These are **unsigned desktop preview builds** of Saathi.
 `SHA256SUMS` covers the three archives. Checksums detect corruption; they are not a substitute for code signing.
 
 ## Versioning
-UTC CalVer is `YYYY.M.D+BUILD` (for example, `2026.11.12+42`), with tag `vYYYY.M.D+BUILD`. Month/day are not zero-padded so Flutter's semantic-version parser accepts them. BUILD is the release workflow run number, or the explicit number from a validated date tag. The same values are embedded in each platform binary.
+Versions use **ISO year.week.increment**, for example `2026.46.1` and tag `v2026.46.1`. The increment starts at 1 each ISO week and increases for subsequent releases that week. Weeks/increments are not zero-padded; the ISO week-year is used at New Year boundaries. This version is embedded in each binary; the workflow run number remains a separate internal platform build identifier.
 
 Desktop automatic installation/replacement is not implemented; these artifacts have external self-updates disabled. Update by downloading and replacing the complete bundle. Backend compatibility, OS keychain behavior, and installation still require testing on your target machine. Mobile live-session login/bootstrap and native OpenClaw integration remain separate work.

@@ -4,15 +4,17 @@ Workflow: `.github/workflows/release-desktop.yml` → **Desktop binary releases*
 
 ## Trigger
 
-- Use **Run workflow** on the intended source branch. This generates today's UTC date plus `github.run_number`.
-- Or push a tag exactly shaped `vYYYY.M.D+BUILD`, e.g. `v2026.11.12+42`. The tag's date/build are used unchanged after validation.
-- Ordinary branch pushes do not publish releases. Invalid dates, leading-zero month/day/build values, shell-like tag input and builds outside 1–65535 fail before compilation. The build-number ceiling keeps Windows VERSIONINFO components valid.
+- Use **Run workflow** on the intended source branch. UTC time selects the ISO week-year/week; the highest existing increment for that week is increased by one (starting at 1). All tags are fetched before allocation.
+- Or push an exact tag such as `v2026.46.1` (`vYEAR.WEEK.INCREMENT`). Valid explicit values are preserved.
+- Ordinary branch pushes do not publish releases. Invalid ISO weeks, leading-zero week/increment values, shell-like tags and increments/internal builds outside 1–65535 fail before compilation. These bounds keep Windows VERSIONINFO components valid.
 
-Version example: `2026.11.12+42`. Flutter receives build name `2026.11.12` and build number `42`; release tag is `v2026.11.12+42`. Rerunning a successful version deliberately fails instead of replacing published binaries; start a new workflow run for a new version. Explicit tags must use a higher build number than earlier published versions if chronological version ordering matters. Do not mix low manual counters with a higher workflow counter.
+Version example: **`2026.46.1`** → `2026.46.2` → next week `2026.47.1`. The release tag is `v2026.46.1`; there is no `+BUILD` in release names or archive filenames. Flutter receives that three-part version plus a separate internal `github.run_number` build identifier. ISO week-year handles New Year correctly (January 1 can belong to the previous ISO year).
+
+All desktop release runs share one concurrency group so two manual runs cannot allocate the same weekly increment simultaneously. Do not delete version tags: they are the allocation ledger. A fresh manual metadata run chooses the next available increment; rerunning only failed jobs retains prior outputs. Existing releases/drafts are never overwritten; remove an incomplete draft deliberately before retrying its reserved version. Explicit tags should advance the weekly counter, not reuse lower increments.
 
 ## Jobs and output
 
-1. Validate/generate version metadata using `tool/desktop_release.py`.
+1. Validate/generate ISO year.week.increment metadata using `tool/desktop_release.py`.
 2. Run formatting, analysis, Flutter tests and Python tooling tests.
 3. Build in native hosted runners:
    - Ubuntu 22.04 → Linux x86-64 complete bundle (`.tar.gz`), preserving executable modes and symlinks.

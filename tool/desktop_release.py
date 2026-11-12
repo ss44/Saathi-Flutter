@@ -10,21 +10,39 @@ import tarfile
 import zipfile
 
 
-def version_info(tag, run_number, today=None):
+def tag_parts(tag):
+    match = re.fullmatch(r'v([1-9][0-9]{3})\.([1-9][0-9]?)\.([1-9][0-9]*)', tag)
+    if not match:
+        raise ValueError('Tag must be vYEAR.WEEK.INCREMENT, without leading zeroes')
+    year, week, increment = map(int, match.groups())
+    dt.date.fromisocalendar(year, week, 1)  # Reject nonexistent ISO week 53/54.
+    if not 1 <= increment <= 65535:
+        raise ValueError('Weekly increment must be between 1 and 65535')
+    return year, week, increment
+
+
+def version_info(tag, run_number, today=None, existing_tags=()):
     today = today or dt.datetime.now(dt.timezone.utc).date()
-    if tag:
-        match = re.fullmatch(r'v([0-9]{4})\.([1-9][0-9]?)\.([1-9][0-9]?)\+([1-9][0-9]*)', tag)
-        if not match:
-            raise ValueError('Tag must be vYYYY.M.D+BUILD, without leading zeroes')
-        year, month, day, build = map(int, match.groups())
-        date = dt.date(year, month, day)
-    else:
-        date, build = today, int(run_number)
-    # Windows VERSIONINFO has unsigned 16-bit components. Keep all builds portable.
+    build = int(run_number)
     if not 1 <= build <= 65535:
-        raise ValueError('Desktop build number must be between 1 and 65535')
-    version = f'{date.year}.{date.month}.{date.day}'
-    return {'version': version, 'build': build, 'tag': f'v{version}+{build}'}
+        raise ValueError('Internal desktop build number must be between 1 and 65535')
+    if tag:
+        year, week, increment = tag_parts(tag)
+    else:
+        year, week, _ = today.isocalendar()
+        increments = []
+        for existing in existing_tags:
+            try:
+                tag_year, tag_week, value = tag_parts(existing)
+            except ValueError:
+                continue  # Ignore legacy date tags and unrelated project tags.
+            if (tag_year, tag_week) == (year, week):
+                increments.append(value)
+        increment = max(increments, default=0) + 1
+        if increment > 65535:
+            raise ValueError('Weekly increment exhausted')
+    version = f'{year}.{week}.{increment}'
+    return {'version': version, 'build': build, 'tag': f'v{version}'}
 
 
 def validated_tag(tag):
@@ -111,6 +129,7 @@ def main():
     metadata = commands.add_parser('metadata')
     metadata.add_argument('--tag', default='')
     metadata.add_argument('--run-number', type=int, required=True)
+    metadata.add_argument('--tags-file', type=Path)
     package = commands.add_parser('package')
     package.add_argument('--platform', choices=['windows-x64', 'linux-x64'], required=True)
     package.add_argument('--bundle', type=Path, required=True)
@@ -121,7 +140,8 @@ def main():
     checksums.add_argument('--tag', required=True)
     args = parser.parse_args()
     if args.command == 'metadata':
-        values = version_info(args.tag or None, args.run_number)
+        tags = args.tags_file.read_text(encoding='utf-8').splitlines() if args.tags_file else []
+        values = version_info(args.tag or None, args.run_number, existing_tags=tags)
         lines = ''.join(f'{key}={value}\n' for key, value in values.items())
         print(lines, end='')
         if os.environ.get('GITHUB_OUTPUT'):

@@ -36,7 +36,7 @@ Native builds require the platform toolchain. Android SDK/device tests, Linux GT
 
 ## Desktop binary releases
 
-The **Desktop binary releases** Actions workflow builds macOS universal (Intel + Apple Silicon), Windows x64, and Linux x86-64 archives. Run it manually or push a validated date tag such as `v2026.11.12+42`; the UTC calendar date and build number are embedded in every binary. Builds are published together with `SHA256SUMS` as unsigned previews only after tests and all three native builds pass. Desktop self-installation is deliberately disabled in these packages. See [desktop release instructions](docs/DESKTOP_RELEASES.md) for triggers, signing/runtime caveats and verification limits.
+The **Desktop binary releases** Actions workflow builds macOS universal (Intel + Apple Silicon), Windows x64, and Linux x86-64 archives. Run it manually or push a validated weekly tag such as `v2026.46.1`. Versions use ISO year.week.increment; the increment resets each week and the version is embedded in every binary. Builds are published together with `SHA256SUMS` as unsigned previews only after tests and all three native builds pass. Desktop self-installation is deliberately disabled in these packages. See [desktop release instructions](docs/DESKTOP_RELEASES.md) for triggers, signing/runtime caveats and verification limits.
 
 ## Updates and release setup
 
