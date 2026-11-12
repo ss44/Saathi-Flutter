@@ -148,6 +148,8 @@ jobs:
             --dart-define=SAATHI_UPDATE_OWNER="$UPDATE_OWNER" \
             --dart-define=SAATHI_UPDATE_REPO="$UPDATE_REPO" \
             --dart-define=SAATHI_UPDATE_CHANNEL=beta
+          # Public signing metadata only; no passwords or private key material.
+          (cd android && ./gradlew :app:signingReport --console=plain)
           python3 tool/verify_android_apk.py --apk build/app/outputs/flutter-apk/app-release.apk \
             --sdk "${ANDROID_HOME:-$ANDROID_SDK_ROOT}" --version "$APP_VERSION" --build "$ANDROID_BUILD"
           mkdir -p dist
@@ -192,6 +194,15 @@ jobs:
           path: dist/*
           if-no-files-found: error
           retention-days: 7
+
+      - name: Preserve failed Android APK for signer diagnostics only
+        if: ${{ failure() && matrix.platform == 'android' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-signing-diagnostic-unverified
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: ignore
+          retention-days: 1
 
   publish:
     needs: [version, build]

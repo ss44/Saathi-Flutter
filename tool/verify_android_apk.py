@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 from generate_update_manifest import MAX_APK_BYTES
 
@@ -34,6 +35,10 @@ def verify(apk, sdk, package, version, build, certificate_sha256):
                 raise ValueError('Unrecognized APK signing certificate output; refusing partial signer verification')
             signers.add(match.group(1).lower())
     if signers != {expected}:
+        # verify/print-certs only exposes public APK certificate data, never keys.
+        print(f'Parsed APK signer count: {len(signers)}; SDK tool: {signer}', file=sys.stderr)
+        print('Native apksigner stdout:\n' + (verification.stdout or '')[-6000:], file=sys.stderr)
+        print('Native apksigner stderr:\n' + (verification.stderr or '')[-6000:], file=sys.stderr)
         raise ValueError('APK signing certificate does not match the configured release identity')
     aapt = next((signer.parent / name for name in ('aapt2', 'aapt') if (signer.parent / name).is_file()), None)
     if aapt is None:

@@ -3,6 +3,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from unittest.mock import patch
 
 import verify_android_apk as verifier
@@ -33,6 +35,14 @@ class VerifyApkTests(unittest.TestCase):
             self.assertTrue(call.kwargs['check'])
         self.assertIn('verify', run.call_args_list[0].args[0])
         self.assertIn('badging', run.call_args_list[1].args[0])
+
+    def test_failed_identity_check_reports_actual_public_signer_output(self):
+        report = StringIO()
+        with redirect_stderr(report), patch.object(verifier.subprocess, 'run', side_effect=self.outputs(digest='b' * 64)):
+            with self.assertRaisesRegex(ValueError, 'certificate'):
+                verifier.verify(*self.arguments)
+        self.assertIn('Parsed APK signer count: 1', report.getvalue())
+        self.assertIn('Signer #1 certificate SHA-256 digest: ' + 'b' * 64, report.getvalue())
 
     def test_rejects_other_signing_key(self):
         with patch.object(verifier.subprocess, 'run', side_effect=self.outputs(digest='b' * 64)):
