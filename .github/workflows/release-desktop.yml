@@ -2,9 +2,9 @@ name: Desktop and Android binary releases
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v20*'
+  schedule:
+    # Weekly on Monday, 09:00 UTC. Manual builds remain available for testing.
+    - cron: '0 9 * * 1'
 
 permissions:
   contents: read
