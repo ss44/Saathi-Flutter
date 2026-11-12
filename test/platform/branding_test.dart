@@ -20,7 +20,7 @@ void main() {
       final entitlements =
           File('macos/Runner/$name.entitlements').readAsStringSync();
       expect(entitlements, contains('com.apple.security.network.client'));
-      expect(entitlements, contains('keychain-access-groups'));
+      expect(entitlements, isNot(contains('keychain-access-groups')));
     }
     expect(android, contains('android:allowBackup="false"'));
     expect(gradle,

@@ -1,0 +1,169 @@
+name: Desktop binary releases
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v20*'
+
+permissions:
+  contents: read
+
+# A rerun must never race another publisher or overwrite an already published tag.
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  FLUTTER_VERSION: '3.47.9'
+
+jobs:
+  version:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.calver.outputs.version }}
+      build: ${{ steps.calver.outputs.build }}
+      tag: ${{ steps.calver.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate tag or generate UTC calendar version
+        id: calver
+        env:
+          REQUESTED_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: python3 tool/desktop_release.py metadata --run-number "$RUN_NUMBER" --tag "$REQUESTED_TAG"
+
+  verify:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: dart format --output=none --set-exit-if-changed lib test
+      - run: flutter analyze
+      - run: flutter test --timeout 60s
+      - run: python3 -m unittest discover -s tool -p 'test_*.py' -v
+
+  build:
+    needs: [version, verify]
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-22.04
+          - platform: windows-x64
+            runner: windows-2022
+          - platform: macos-universal
+            runner: macos-15-intel
+    env:
+      APP_VERSION: ${{ needs.version.outputs.version }}
+      APP_BUILD: ${{ needs.version.outputs.build }}
+      RELEASE_TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - name: Linux build dependencies
+        if: matrix.platform == 'linux-x64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libsecret-1-dev libjsoncpp-dev
+      - run: flutter pub get
+      - name: Build and package Linux x86-64 bundle
+        if: matrix.platform == 'linux-x64'
+        run: |
+          flutter build linux --release --target-platform linux-x64 --build-name "$APP_VERSION" --build-number "$APP_BUILD" --dart-define=SAATHI_DISTRIBUTION=disabled
+          file build/linux/x64/release/bundle/saathi
+          file build/linux/x64/release/bundle/saathi | grep -q 'x86-64'
+          python3 tool/desktop_release.py package --platform linux-x64 --bundle build/linux/x64/release/bundle --output dist --tag "$RELEASE_TAG"
+      - name: Build and package Windows x64 bundle
+        if: matrix.platform == 'windows-x64'
+        run: |
+          flutter build windows --release --build-name "$APP_VERSION" --build-number "$APP_BUILD" --dart-define=SAATHI_DISTRIBUTION=disabled
+          python tool/desktop_release.py package --platform windows-x64 --bundle build/windows/x64/runner/Release --output dist --tag "$RELEASE_TAG"
+      - name: Build universal macOS app (unsigned preview)
+        if: matrix.platform == 'macos-universal'
+        env:
+          FLUTTER_XCODE_CODE_SIGNING_ALLOWED: 'NO'
+          FLUTTER_XCODE_CODE_SIGNING_REQUIRED: 'NO'
+          FLUTTER_XCODE_ARCHS: 'arm64 x86_64'
+          FLUTTER_XCODE_ONLY_ACTIVE_ARCH: 'NO'
+        run: |
+          flutter build macos --release --build-name "$APP_VERSION" --build-number "$APP_BUILD" --dart-define=SAATHI_DISTRIBUTION=disabled
+          APP=build/macos/Build/Products/Release/Saathi.app
+          lipo -verify_arch x86_64 arm64 "$APP/Contents/MacOS/Saathi"
+          lipo -verify_arch x86_64 arm64 "$APP/Contents/Frameworks/App.framework/App"
+          lipo -verify_arch x86_64 arm64 "$APP/Contents/Frameworks/FlutterMacOS.framework/FlutterMacOS"
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "dist/Saathi-${RELEASE_TAG#v}-macos-universal.zip"
+          unzip -t "dist/Saathi-${RELEASE_TAG#v}-macos-universal.zip"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.version.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: desktop-*
+          path: dist
+          merge-multiple: true
+      - name: Verify complete artifact set and write checksums
+        run: |
+          python3 tool/desktop_release.py checksums --directory dist --tag "$RELEASE_TAG"
+          (cd dist && sha256sum --check SHA256SUMS)
+      - name: Publish all binaries together as an unsigned preview release
+        env:
+          BUILT_COMMIT: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          # Existing releases are immutable here; never clobber published binaries.
+          if gh release view "$RELEASE_TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
+            echo 'Release already exists; refusing to overwrite it.' >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" dist/*.zip dist/*.tar.gz dist/SHA256SUMS \
+            --repo "$REPOSITORY" --target "$BUILT_COMMIT" \
+            --title "Saathi ${RELEASE_TAG#v}" --prerelease --draft \
+            --notes-file docs/DESKTOP_RELEASE_NOTES.md
+          ASSETS=$(gh release view "$RELEASE_TAG" --repo "$REPOSITORY" --json assets --jq '.assets | length')
+          test "$ASSETS" -eq 4
+          gh release edit "$RELEASE_TAG" --repo "$REPOSITORY" --draft=false
+          gh release view "$RELEASE_TAG" --repo "$REPOSITORY" --json tagName,isPrerelease,assets,url

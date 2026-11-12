@@ -24,4 +24,7 @@ for density, size in {'mdpi':48,'hdpi':72,'xhdpi':96,'xxhdpi':144,'xxxhdpi':192}
 for size in (16,32,64,128,256,512,1024):
     image.resize((size,size), Image.Resampling.LANCZOS).save(
         ROOT / f'macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_{size}.png')
-print('Generated Saathi mark and Android/macOS launcher icons.')
+windows_icon = ROOT / 'windows/runner/resources/app_icon.ico'
+if windows_icon.parent.exists():
+    image.save(windows_icon, format='ICO', sizes=[(s, s) for s in (16, 24, 32, 48, 64, 128, 256)])
+print('Generated Saathi mark and Android/macOS/Windows launcher icons.')

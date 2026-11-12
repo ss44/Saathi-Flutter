@@ -10,7 +10,12 @@ abstract interface class SecretStore {
 
 class PlatformSecrets implements SecretStore {
   final FlutterSecureStorage storage;
-  const PlatformSecrets([this.storage = const FlutterSecureStorage()]);
+  // Standalone macOS apps do not share keys with another app and must not need
+  // a machine-specific provisioning profile. The legacy Keychain stays secure;
+  // this macOS-only option has no effect on Android/iOS/Windows/Linux storage.
+  const PlatformSecrets(
+      [this.storage = const FlutterSecureStorage(
+          mOptions: MacOsOptions(usesDataProtectionKeychain: false))]);
   @override
   Future<String?> read(String id) => storage.read(key: 'saathi.connection.$id');
   @override

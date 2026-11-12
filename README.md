@@ -34,9 +34,13 @@ On the original development host Flutter is at `/opt/data/tools/flutter/bin`; ad
 
 Native builds require the platform toolchain. Android SDK/device tests, Linux GTK/clang/ninja/libsecret build dependencies, and macOS/Xcode/signing are not supplied by Flutter unit tests. Credentials fail closed if secure storage is unavailable. Use HTTPS for a phone-accessible server; the phone's localhost is not your computer. Cleartext is allowed only for loopback development.
 
+## Desktop binary releases
+
+The **Desktop binary releases** Actions workflow builds macOS universal (Intel + Apple Silicon), Windows x64, and Linux x86-64 archives. Run it manually or push a validated date tag such as `v2026.11.12+42`; the UTC calendar date and build number are embedded in every binary. Builds are published together with `SHA256SUMS` as unsigned previews only after tests and all three native builds pass. Desktop self-installation is deliberately disabled in these packages. See [desktop release instructions](docs/DESKTOP_RELEASES.md) for triggers, signing/runtime caveats and verification limits.
+
 ## Updates and release setup
 
-Create the remote repository first; no remote/push/release is configured by this implementation. Configure release owner/repo using build-time `SAATHI_UPDATE_OWNER` and `SAATHI_UPDATE_REPO`; choose a stable/beta channel. Without configuration, update checks make no GitHub requests.
+The source repository is `ss44/Saathi-Flutter`. Uploading the included workflows requires token Workflows write permission (or classic `workflow` scope). For the separate Android updater, configure `SAATHI_UPDATE_OWNER=ss44` and `SAATHI_UPDATE_REPO=Saathi-Flutter` at build time and choose a stable/beta channel. Without configuration, update checks make no GitHub requests; configuring the repository alone does not create a signed release.
 
 For standalone Android distribution, provide production signing through ignored `android/key.properties` (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`). No keys are included, and release builds must not silently use debug signing. Keep the signing identity stable across updates. Generate release metadata using `tool/generate_update_manifest.py` only after checking actual APK signing.
 

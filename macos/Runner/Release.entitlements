@@ -4,8 +4,7 @@
 <dict>
 	<key>com.apple.security.network.client</key>
 	<true/>
-	<key>keychain-access-groups</key>
-	<array><string>$(AppIdentifierPrefix)io.github.ss44.saathi</string></array>
+
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
 </dict>
