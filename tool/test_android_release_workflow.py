@@ -10,6 +10,12 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             expected = f'lipo "$APP/{binary}" -verify_arch x86_64 arm64'
             self.assertTrue(expected in workflow, f'Invalid lipo argument order for {binary}')
 
+    def test_unpublished_draft_is_read_by_id_not_a_nonexistent_git_tag(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/release-desktop.yml').read_text()
+        self.assertTrue('--json databaseId --jq' in workflow, 'Resolve the draft release database ID')
+        self.assertTrue('gh api "repos/$REPOSITORY/releases/$RELEASE_ID"' in workflow, 'Read draft by ID before publishing')
+        self.assertFalse('gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG"' in workflow, 'Draft tag may not exist until publication')
+
     def test_android_is_signed_configured_verified_and_published(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/release-desktop.yml').read_text()
         for required in (

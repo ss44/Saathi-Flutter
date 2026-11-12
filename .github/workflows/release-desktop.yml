@@ -242,7 +242,9 @@ jobs:
             --notes-file docs/DESKTOP_RELEASE_NOTES.md
           ASSETS=$(gh release view "$RELEASE_TAG" --repo "$REPOSITORY" --json assets --jq '.assets | length')
           test "$ASSETS" -eq 6
-          gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/saathi-draft-release.json"
+          # An unpublished draft may not have a Git tag yet; read it by release ID.
+          RELEASE_ID=$(gh release view "$RELEASE_TAG" --repo "$REPOSITORY" --json databaseId --jq '.databaseId')
+          gh api "repos/$REPOSITORY/releases/$RELEASE_ID" > "$RUNNER_TEMP/saathi-draft-release.json"
           python3 - <<'PY'
           import hashlib, json, os
           from pathlib import Path
