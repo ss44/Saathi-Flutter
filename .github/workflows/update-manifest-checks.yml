@@ -1,0 +1,26 @@
+name: Update manifest checks
+
+on:
+  push:
+    paths:
+      - 'tool/generate_update_manifest.py'
+      - 'tool/test_generate_update_manifest.py'
+      - '.github/workflows/update-manifest-checks.yml'
+  pull_request:
+    paths:
+      - 'tool/generate_update_manifest.py'
+      - 'tool/test_generate_update_manifest.py'
+      - '.github/workflows/update-manifest-checks.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  manifest-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test metadata generation (does not sign or publish APKs)
+        run: python3 -m unittest discover -s tool -p 'test_*.py' -v

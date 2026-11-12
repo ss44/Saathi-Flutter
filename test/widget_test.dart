@@ -1,14 +1,28 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:iris/main.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:saathi/main.dart';
+import 'package:saathi/storage/saathi_store.dart';
 
 void main() {
-  testWidgets('shows the conversation shell', (tester) async {
-    await tester.pumpWidget(const IrisApp());
-
-    expect(find.text('Iris'), findsOneWidget);
-    expect(find.text('Your conversation starts here'), findsOneWidget);
-    expect(find.byType(TextField), findsOneWidget);
-    expect(find.byTooltip('Connection settings'), findsOneWidget);
+  testWidgets(
+      'empty startup has no fake chat and offers a real connection form',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final store = SaathiStore(
+        preferences: await SharedPreferences.getInstance(),
+        secrets: MemorySecrets());
+    await tester.pumpWidget(SaathiApp(store: store));
+    await tester.pumpAndSettle();
+    expect(find.text('A little space to think.'), findsOneWidget);
+    expect(find.text('Can you help me plan tomorrow?'), findsNothing);
+    await tester.tap(find.byTooltip('Connection settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add connection'));
+    await tester.pumpAndSettle();
+    expect(
+        find.widgetWithText(TextFormField, 'Connection name'), findsOneWidget);
+    expect(
+        find.widgetWithText(TextFormField, 'API key / token'), findsOneWidget);
   });
 }
