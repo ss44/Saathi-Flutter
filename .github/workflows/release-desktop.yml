@@ -25,32 +25,44 @@ jobs:
   version:
     runs-on: ubuntu-22.04
     timeout-minutes: 5
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.calver.outputs.version }}
       build: ${{ steps.calver.outputs.build }}
       android_build: ${{ steps.calver.outputs.android_build }}
       tag: ${{ steps.calver.outputs.tag }}
+      release_required: ${{ steps.calver.outputs.release_required }}
+      release_id: ${{ steps.calver.outputs.release_id }}
+      commit: ${{ steps.calver.outputs.commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Validate tag or generate ISO year.week.increment version
+          ref: ${{ github.sha }}
+      - name: Compare tracked trees and reserve hidden draft before builds
         id: calver
         env:
-          REQUESTED_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          BUILT_COMMIT: ${{ github.sha }}
           RUN_NUMBER: ${{ github.run_number }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          git tag --list > "$RUNNER_TEMP/saathi-release-tags.txt"
-          python3 tool/desktop_release.py metadata --run-number "$RUN_NUMBER" --tag "$REQUESTED_TAG" --tags-file "$RUNNER_TEMP/saathi-release-tags.txt"
+          python3 tool/release_pipeline.py prepare --repository "$REPOSITORY" \
+            --commit "$BUILT_COMMIT" --run-number "$RUN_NUMBER" --run-id "$RUN_ID"
 
   verify:
+    needs: version
+    if: needs.version.outputs.release_required == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ needs.version.outputs.commit }}
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -63,6 +75,7 @@ jobs:
       - run: python3 -m unittest discover -s tool -p 'test_*.py' -v
 
   build:
+    if: needs.version.outputs.release_required == 'true'
     needs: [version, verify]
     name: Build ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
@@ -90,6 +103,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ needs.version.outputs.commit }}
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -205,7 +219,8 @@ jobs:
           retention-days: 1
 
   publish:
-    needs: [version, build]
+    if: needs.version.outputs.release_required == 'true'
+    needs: [version, verify, build]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
@@ -217,6 +232,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ needs.version.outputs.commit }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: binary-*
@@ -226,39 +242,13 @@ jobs:
         run: |
           python3 tool/desktop_release.py checksums --directory dist --tag "$RELEASE_TAG"
           (cd dist && sha256sum --check SHA256SUMS)
-      - name: Publish desktop previews and release-signed standalone Android APK
+      - name: Verify uploaded assets and publish prepared draft only
         env:
-          BUILT_COMMIT: ${{ github.sha }}
+          BUILT_COMMIT: ${{ needs.version.outputs.commit }}
+          RELEASE_ID: ${{ needs.version.outputs.release_id }}
           REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          # Existing releases are immutable here; never clobber published binaries.
-          if gh release view "$RELEASE_TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
-            echo 'Release already exists; refusing to overwrite it.' >&2
-            exit 1
-          fi
-          gh release create "$RELEASE_TAG" dist/*.zip dist/*.tar.gz dist/*.apk dist/saathi-update-beta.json dist/SHA256SUMS \
-            --repo "$REPOSITORY" --target "$BUILT_COMMIT" \
-            --title "Saathi ${RELEASE_TAG#v}" --prerelease --draft \
-            --notes-file docs/DESKTOP_RELEASE_NOTES.md
-          ASSETS=$(gh release view "$RELEASE_TAG" --repo "$REPOSITORY" --json assets --jq '.assets | length')
-          test "$ASSETS" -eq 6
-          # An unpublished draft may not have a Git tag yet; read it by release ID.
-          RELEASE_ID=$(gh release view "$RELEASE_TAG" --repo "$REPOSITORY" --json databaseId --jq '.databaseId')
-          gh api "repos/$REPOSITORY/releases/$RELEASE_ID" > "$RUNNER_TEMP/saathi-draft-release.json"
-          python3 - <<'PY'
-          import hashlib, json, os
-          from pathlib import Path
-          release = json.loads((Path(os.environ['RUNNER_TEMP']) / 'saathi-draft-release.json').read_text())
-          files = {file.name: file for file in Path('dist').iterdir() if file.is_file()}
-          assets = release['assets']
-          assert release['tag_name'] == os.environ['RELEASE_TAG'] and release['draft'] is True
-          assert len(assets) == len(files) == 6 and {asset['name'] for asset in assets} == set(files)
-          for asset in assets:
-              file = files[asset['name']]
-              assert asset['size'] == file.stat().st_size
-              if asset.get('digest'):
-                  assert asset['digest'] == 'sha256:' + hashlib.sha256(file.read_bytes()).hexdigest()
-          print('Draft release read back and all six uploaded assets verified.')
-          PY
-          gh release edit "$RELEASE_TAG" --repo "$REPOSITORY" --draft=false
-          gh release view "$RELEASE_TAG" --repo "$REPOSITORY" --json tagName,isPrerelease,assets,url
+          python3 tool/release_pipeline.py publish --repository "$REPOSITORY" \
+            --commit "$BUILT_COMMIT" --run-id "$RUN_ID" \
+            --release-id "$RELEASE_ID" --tag "$RELEASE_TAG" --directory dist

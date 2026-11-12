@@ -10,11 +10,20 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             expected = f'lipo "$APP/{binary}" -verify_arch x86_64 arm64'
             self.assertTrue(expected in workflow, f'Invalid lipo argument order for {binary}')
 
-    def test_unpublished_draft_is_read_by_id_not_a_nonexistent_git_tag(self):
+    def test_unpublished_draft_is_read_by_numeric_rest_id(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/release-desktop.yml').read_text()
-        self.assertTrue('--json databaseId --jq' in workflow, 'Resolve the draft release database ID')
-        self.assertTrue('gh api "repos/$REPOSITORY/releases/$RELEASE_ID"' in workflow, 'Read draft by ID before publishing')
-        self.assertFalse('gh api "repos/$REPOSITORY/releases/tags/$RELEASE_TAG"' in workflow, 'Draft tag may not exist until publication')
+        self.assertIn('tool/release_pipeline.py publish', workflow)
+        self.assertIn('--release-id "$RELEASE_ID"', workflow)
+        self.assertNotIn('--json databaseId', workflow)
+
+    def test_change_gate_and_exact_source_pin(self):
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/release-desktop.yml').read_text()
+        self.assertIn('tool/release_pipeline.py prepare', workflow)
+        self.assertEqual(workflow.count("if: needs.version.outputs.release_required == 'true'"), 3)
+        self.assertEqual(workflow.count('ref: ${{ needs.version.outputs.commit }}'), 3)
+        self.assertIn('ref: ${{ github.sha }}', workflow)
+        self.assertIn('needs: [version, verify, build]', workflow)
+        self.assertEqual(workflow.count('contents: write'), 2)
 
     def test_android_is_signed_configured_verified_and_published(self):
         workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/release-desktop.yml').read_text()
@@ -24,17 +33,17 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             'ANDROID_KEYSTORE_BASE64', 'ANDROID_KEYSTORE_PASSWORD',
             'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD', 'ANDROID_SIGNING_CERT_SHA256',
             'flutter build apk --release',
-            '--build-number "$ANDROID_BUILD"',
+            '--build-name "$APP_VERSION"', '--build-number "$ANDROID_BUILD"',
             '--dart-define=SAATHI_UPDATE_CHANNEL=beta',
             '--dart-define=SAATHI_UPDATE_OWNER="$UPDATE_OWNER"',
             '--dart-define=SAATHI_UPDATE_REPO="$UPDATE_REPO"',
-            'tool/verify_android_apk.py',
+            'tool/verify_android_apk.py', 'tool/generate_update_manifest.py',
             'saathi-update-beta.json',
             'rm -f android/key.properties "$RUNNER_TEMP/saathi-release.p12"',
-            'dist/*.apk dist/saathi-update-beta.json',
+            'tool/release_pipeline.py publish',
         ):
             with self.subTest(required=required):
-                self.assertTrue(required in workflow, f'Missing release contract: {required}')
+                self.assertIn(required, workflow)
 
 
 if __name__ == '__main__':
