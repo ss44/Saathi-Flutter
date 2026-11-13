@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import '../update_host.dart';
 import '../notifications/settings.dart';
-import '../dashboard/dashboard_store.dart';
-import '../dashboard/dashboard_pages.dart';
 import '../core/saathi_core.dart';
 import 'chat_controller.dart';
 import 'remote_sessions.dart';
@@ -36,16 +34,6 @@ class ConnectionsPage extends StatelessWidget {
                 const Text(
                     'Keys are held in platform secure storage. Chat history is stored on this device. Existing conversations stay bound to their original connection.'),
                 const SizedBox(height: 20),
-                OutlinedButton.icon(
-                    onPressed: () => Navigator.push(
-                        context,
-                        MaterialPageRoute<void>(
-                            builder: (_) => DashboardPage(
-                                store: DashboardStore(controller.store)))),
-                    icon: const Icon(Icons.lock_outline),
-                    label:
-                        const Text('Hermes dashboard — username & password')),
-                const Text('API-server key connections'),
                 for (final c in controller.connections)
                   ListTile(
                       contentPadding: EdgeInsets.zero,
