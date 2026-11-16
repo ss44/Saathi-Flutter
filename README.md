@@ -1,6 +1,6 @@
 # Saathi
 
-A standalone, mobile-first Flutter companion for AI models and agents. Inspired by [Sathi](https://github.com/ss44/sathi.ai), independent of Dank Material Shell, and no longer limited to Hermes. Android first, with shared core logic and Linux/macOS runners.
+A lightweight, conversation-first Flutter client for AI models and agents. Hermes is the primary native-agent compatibility target; the broader direction follows [Sathi](https://github.com/ss44/sathi.ai)'s multi-agent feel. Direct models and native agent clients use separate adapters, with behavior driven by each connection's verified features. Android first, independent of Dank Material Shell. See the [product direction](docs/PRODUCT_DIRECTION.md) and [contributor guardrails](.agents/AGENTS.md).
 
 ## What works in this implementation
 
