@@ -1,13 +1,13 @@
 # Saathi — product specification
 
 ## Identity and purpose
-A standalone, mobile-first Flutter home for AI conversations, inspired by the user's Sathi DMS client. It is not tied to DMS, Hermes, or a single model vendor. Working name: **Saathi**. Android is first; Linux/macOS share the core and may eventually replace Sathi on desktop.
+The [product direction](PRODUCT_DIRECTION.md) is the canonical statement of goals and values. Saathi is a standalone, mobile-first Flutter client that began as a lighter Hermes client and is growing toward Sathi's multi-agent feel. Hermes is the primary native-agent compatibility target, alongside direct-model connections and separate adapters for other agent clients such as OpenClaw. It is independent of DMS and not limited to one vendor. Android is first; desktop shares the core.
 
 ## Core experience
 - Open into a calm conversation screen, not an agent administration dashboard.
 - Configure multiple named instances, including multiple connections of the same provider type.
 - Direct models: OpenAI-compatible servers, Anthropic, Gemini, using provider-specific translation behind one interface.
-- Agent backends: capability-aware adapters, not a false claim of universal parity.
+- Agent clients: separate native adapters with verified, per-connection feature lists. Distinguish supported, unsupported and unknown capabilities; do not imply universal parity or route native controls through a direct-model inference contract.
 - Discover/select models, set a system prompt, render markdown, retain usage metadata where supplied.
 - Local session creation/switching/history with credentials stored separately in platform secure storage.
 - New conversations start empty; no fake response is presented as a live model answer.
