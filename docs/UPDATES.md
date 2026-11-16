@@ -211,11 +211,43 @@ HTML, images or links. Handoff still does not mean installed.
 `assets/changelog.json` schema 1 contains `unreleased` bullets for the next draft
 and `releases` entries (`version`, `changes`) for bundled/offline history. Never
 show unreleased bullets as already released. Keep released entries factual.
-Preparing a new draft reads the unreleased bullets and emits a What's new heading
-with `<!-- saathi-changes:start -->` and `<!-- saathi-changes:end -->` around
-single-line `- ` bullets, alongside the existing technical instructions and owner
-run marker. Published releases remain immutable; cadence and the six-asset gate
-are unchanged. After a release, maintain the bundled released history separately.
+Preparing a new draft reads `unreleased` from the exact selected source commit,
+then subtracts the union of `unreleased` bullets from **every** previously
+published canonical weekly release's peeled tag commit (including beta), using
+the existing fully paginated release inventory. Drafts and noncanonical tags do
+not contribute. Each eligible tag must resolve to a locally available commit
+that is an ancestor of the selected source; even an older invalid/divergent tag
+fails closed, rather than silently dropping that release. Duplicate source SHAs
+are read once. Current order is preserved, so stale, cumulative and rotated notes
+cannot replay previously published bullets, even after an intervening rotation.
+Neither release bodies nor mutable `target_commitish` establish prior notes.
+Only those published source snapshots count: intervening unshipped commits and
+bundled `releases` archives are not publication evidence and never suppress new
+bullets. Archives remain separately curated offline history, not a second ledger.
+The first release, or a historical source predating this asset, contributes no
+prior bullets. Malformed JSON/schema/notes, missing Git objects and unreadable Git
+data fail closed; errors never fall back to the entire current list. Empty deltas
+honestly say “No additional change notes for this version.” They do not imply
+that no code changed.
+
+The body has a What's new heading with `<!-- saathi-changes:start -->` and
+`<!-- saathi-changes:end -->` around single-line `- ` bullets, alongside the
+existing technical instructions and owner run marker. Unchanged-tree skipping
+still precedes allocation/draft creation. No source/version auto-commits are
+needed; cadence, signing, draft/publish and the six-asset gate are unchanged.
+Curate `releases` separately against verified source ranges, not recycled release
+bodies; keep older entries unchanged. The repaired history uses `cee731..71ef8ae`
+for 2026.47.2 (#22, #24–27), `71ef8ae..71d7e27` for 2026.47.3 (#30), and
+`71d7e27..1d18b09` for 2026.47.4 (#35, #42, #43, #45, #46, #49, #56).
+Documentation/CI-only changes are not app features. The notes-display fix remains
+unreleased; it is not a feature of the existing 2026.47.4 binary.
+
+Published assets stay immutable. A deliberate human-notes-only metadata repair
+can use the pure, tested `replace_human_block(body, notes)` helper: it requires
+exactly one ordered marker pair and preserves all outside bytes, including the
+technical instructions and workflow owner marker. This does not rebuild or
+republish assets. Existing clients can read corrected release notes on a fresh
+successful update check.
 
 The updater reads only that marked section from the existing bounded release-list
 response, after normal manifest/repository/channel/asset validation. It retains

@@ -78,7 +78,9 @@ void main() {
             .widgetList<Text>(find.byType(Text))
             .map((t) => t.data)
             .join('\n'));
-    expect(find.textContaining('A simpler App updates screen'), findsNothing);
+    expect(
+        find.textContaining('instead of repeating older notes'), findsNothing);
+    expect(find.textContaining('A simpler App updates screen'), findsOneWidget);
     fixture.responseOverride = (_) => throw Exception('offline');
     await tester.runAsync(() => controller.check(force: true));
     await tester.pumpAndSettle();

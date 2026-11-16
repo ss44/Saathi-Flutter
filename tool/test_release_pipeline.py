@@ -17,8 +17,8 @@ class PlanningTests(unittest.TestCase):
                        dt.date(2026, 11, 12))
 
     def test_human_notes_body_preserves_owner_and_boilerplate(self):
-        body = rp.release_body('123')
         notes = json.loads(Path('assets/changelog.json').read_text())['unreleased']
+        body = rp.release_body('123', notes)
 
         self.assertIn("## What's new", body)
         self.assertIn('<!-- saathi-changes:start -->', body)
@@ -114,11 +114,14 @@ class PlanningTests(unittest.TestCase):
                 self.assertTrue(payload['prerelease'])
                 self.assertEqual(payload['target_commitish'], SHA)
             return draft.copy()
-        with patch.object(rp, 'api', api), patch.object(rp, 'command', return_value=''):
+        with patch.object(rp, 'api', api), patch.object(rp, 'command', return_value=''), \
+                patch.object(rp, 'select_release_notes', return_value=['Source-pinned note']) as selected:
             # version_info owns the clock; pin it through the imported function.
             original = rp.version_info
             with patch.object(rp, 'version_info', side_effect=lambda tag, run, **kw: original(tag, run, today=dt.date(2026, 11, 12), existing_tags=kw.get('existing_tags', []))):
                 result = rp.prepare('o/r', SHA, 7, '123')
+        selected.assert_called_once_with(SHA, [])
+        self.assertIn('- Source-pinned note\n', events[1][2]['body'])
         self.assertEqual(result['release_id'], 15)
         self.assertEqual([e[1] for e in events], ['GET', 'POST', 'GET'])
 

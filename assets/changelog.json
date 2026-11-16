@@ -1,13 +1,39 @@
 {
   "schema": 1,
   "unreleased": [
-    "A simpler App updates screen with clearer buttons and everyday wording.",
-    "Read the full recent change history below the update button.",
-    "Swipe in from the edge to open your conversations.",
-    "Find supported Hermes conversations alongside chats saved on your device.",
-    "Enjoy playful waiting messages while a reply arrives, with 200 new lines."
+    "App updates now shows the changes for each version instead of repeating older notes."
   ],
   "releases": [
+    {
+      "version": "2026.47.4",
+      "changes": [
+        "Reconnect to supported Hermes jobs and recover their replies without sending your message again.",
+        "Review approval requests and answer clarification questions from supported Hermes agents.",
+        "See active agent work above the message box and browse related agent conversations where supported.",
+        "See the active conversation's title at the top of the chat.",
+        "The message box stays at the bottom, above the keyboard, while conversation history scrolls.",
+        "Connection actions now use pencil and trash icons for Edit and Delete.",
+        "Choose real Hermes models and their providers for new conversations."
+      ]
+    },
+    {
+      "version": "2026.47.3",
+      "changes": [
+        "Queue follow-up messages while a reply is in progress; they send in order after it finishes."
+      ]
+    },
+    {
+      "version": "2026.47.2",
+      "changes": [
+        "A simpler App updates screen with clearer buttons and everyday wording.",
+        "Read the full recent change history below the update button.",
+        "Swipe in from the edge to open your conversations.",
+        "Find supported Hermes conversations alongside chats saved on your device.",
+        "Search conversations saved on this device.",
+        "Enjoy playful waiting messages while a reply arrives, with 200 new lines.",
+        "Preview an improved draft prompt, then choose whether to apply it or keep your original without sending it."
+      ]
+    },
     {
       "version": "2026.47.1",
       "changes": [
