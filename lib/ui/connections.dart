@@ -94,12 +94,19 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                                   child: Row(children: [
                                     for (final a in ['Edit', 'Delete'])
                                       Expanded(
-                                          child: TextButton(
+                                          child: IconButton(
+                                              tooltip: a,
+                                              constraints: const BoxConstraints(
+                                                  minWidth: 48, minHeight: 48),
                                               onPressed: controller
                                                       .canChangeConnections
                                                   ? () => action(c, a)
                                                   : null,
-                                              child: Text(a)))
+                                              icon: Icon(
+                                                  a == 'Edit'
+                                                      ? Icons.edit_outlined
+                                                      : Icons.delete_outline,
+                                                  semanticLabel: a)))
                                   ])),
                             TweenAnimationBuilder<double>(
                                 key: ValueKey('slide-${c['id']}'),
