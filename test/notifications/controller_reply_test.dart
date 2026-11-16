@@ -14,10 +14,12 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final store = FailingStore(await SharedPreferences.getInstance());
     final response = Completer<http.Response>();
+    final dispatched = Completer<void>();
     var sends = 0;
     final c = ChatController(store,
         coreFactory: () => SaathiCore(client: MockClient((_) {
               sends++;
+              dispatched.complete();
               return response.future;
             })));
     await c.load();
@@ -43,6 +45,8 @@ void main() {
       throw StateError('OS unavailable');
     };
     final sending = c.send('hello');
+    // Exercise completion after dispatch, not permission revoked during setup.
+    await dispatched.future;
     c.select(other);
     store.fail = true;
     response.complete(

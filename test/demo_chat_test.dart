@@ -124,7 +124,7 @@ void main() {
   });
 
   testWidgets(
-      'provider error is safe, leaves no fabricated response and permits retry',
+      'provider error is safe and preserves uncertain accepted input without retry',
       (tester) async {
     final store = await makeStore();
     await store.saveConnection({
@@ -151,7 +151,13 @@ void main() {
     expect(find.byKey(const Key('chat-error')), findsOneWidget);
     expect(find.textContaining('private-key'), findsNothing);
     expect(find.byType(MessageView), findsNothing);
-    expect(find.widgetWithText(TextField, 'Try this'), findsOneWidget);
+    expect(find.text('Not sent again: Try this'), findsOneWidget);
+    expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('composer')))
+            .controller!
+            .text,
+        isEmpty);
     expect((await store.load()).chats.single['messages'], isEmpty);
   });
 }

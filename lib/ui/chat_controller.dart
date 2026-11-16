@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import '../core/saathi_core.dart';
@@ -35,7 +36,189 @@ class ChatSession {
 
 typedef CoreFactory = SaathiCore Function();
 
+enum _DispatchResult { completed, dispatchedUnknown, notDispatched }
+
+class _DispatchPermission {
+  final QueuedFollowup source;
+  bool revoked = false;
+  _DispatchPermission(this.source);
+}
+
+class QueuedFollowup {
+  final String text;
+  final ChatSession session;
+  final Map<String, dynamic> connection;
+  QueuedFollowup(this.text, this.session, this.connection);
+}
+
 class ChatController extends ChangeNotifier {
+  final List<QueuedFollowup> _outbox = [];
+  List<QueuedFollowup> get outbox => List.unmodifiable(
+      _outbox.where((item) => identical(item.session, current)));
+  final Map<ChatSession, QueuedFollowup> _uncertain = {};
+  final Map<ChatSession, String> _paused = {};
+  QueuedFollowup? get uncertainInput => _uncertain[current];
+  String? get queueStatus =>
+      uncertainInput != null || outbox.isNotEmpty ? _paused[current] : null;
+  bool _draining = false, _background = false;
+  _DispatchPermission? _preparing;
+
+  bool _bound(QueuedFollowup item) =>
+      identical(current, item.session) &&
+      sessions.contains(item.session) &&
+      connections.any((c) => identical(c, item.connection)) &&
+      item.connection['id'] == item.session.connectionId;
+
+  bool submit(String text) {
+    final session = current;
+    if (_disposed ||
+        loading ||
+        readOnly ||
+        changingConnection ||
+        unsavedChanges ||
+        queueStatus != null ||
+        uncertainInput != null ||
+        _background ||
+        session == null ||
+        text.trim().isEmpty) {
+      return false;
+    }
+    final connection =
+        connections.singleWhere((c) => c['id'] == session.connectionId);
+    _outbox.add(QueuedFollowup(text, session, connection));
+    unawaited(_drainOutbox());
+    notifyListeners();
+    return true;
+  }
+
+  void cancelQueued(QueuedFollowup item) {
+    _outbox.remove(item);
+    if (!_outbox.any((i) => identical(i.session, item.session)) &&
+        !_uncertain.containsKey(item.session)) {
+      _paused.remove(item.session);
+    }
+    notifyListeners();
+  }
+
+  // Call only after acknowledgment of the unknown server outcome.
+  void abandonHeldOutbox(ChatSession session) {
+    if (_disposed || !_uncertain.containsKey(session)) return;
+    _outbox.removeWhere((item) => identical(item.session, session));
+    _uncertain.remove(session);
+    _paused.remove(session);
+    notifyListeners();
+  }
+
+  void pauseQueue(String reason,
+      {ChatSession? session, bool allSources = false}) {
+    final source = session ?? current;
+    final preparing = _preparing;
+    if (preparing != null &&
+        (allSources || identical(preparing.source.session, source))) {
+      preparing.revoked = true;
+      _paused[preparing.source.session] = reason;
+    }
+    for (final item in _outbox) {
+      if (allSources || identical(item.session, source)) {
+        _paused[item.session] = reason;
+      }
+    }
+    notifyListeners();
+  }
+
+  void setQueueBackground(bool background) {
+    _background = background;
+    if (background) {
+      pauseQueue(
+          'Queue paused while Saathi is in the background. Return and choose Resume.',
+          allSources: true);
+    }
+  }
+
+  bool get canResumeQueue =>
+      !_disposed &&
+      !_background &&
+      !busy &&
+      !loading &&
+      !readOnly &&
+      !changingConnection &&
+      !unsavedChanges &&
+      uncertainInput == null &&
+      outbox.isNotEmpty &&
+      outbox.every(_bound);
+
+  void resumeQueue() {
+    if (!canResumeQueue) return;
+    _paused.remove(current);
+    unawaited(_drainOutbox());
+  }
+
+  void _scheduleSelectedQueue() {
+    if (!_draining &&
+        !busy &&
+        !_disposed &&
+        !_background &&
+        !loading &&
+        !readOnly &&
+        !changingConnection &&
+        !unsavedChanges &&
+        queueStatus == null &&
+        uncertainInput == null &&
+        outbox.isNotEmpty &&
+        outbox.every(_bound)) {
+      scheduleMicrotask(_drainOutbox);
+    }
+  }
+
+  Future<void> _drainOutbox() async {
+    if (_draining || busy || _disposed) return;
+    _draining = true;
+    try {
+      while (outbox.isNotEmpty && !_disposed) {
+        if (busy) break;
+        if (queueStatus != null || uncertainInput != null) break;
+        if (_background ||
+            loading ||
+            readOnly ||
+            changingConnection ||
+            unsavedChanges ||
+            !_bound(outbox.first)) {
+          pauseQueue(
+              'Queue paused. Restore the original conversation and connection, and save before resuming.');
+          break;
+        }
+        final item = outbox.first;
+        _outbox.remove(item);
+        final result = await _dispatch(item.text, source: item);
+        if (result == _DispatchResult.notDispatched) {
+          _outbox.insert(0, item);
+          _paused.putIfAbsent(item.session,
+              () => 'Not sent. Queue held. Choose Resume when ready.');
+          break;
+        }
+        if (result == _DispatchResult.dispatchedUnknown) {
+          _uncertain[item.session] = item;
+          _paused[item.session] =
+              'Outcome unknown. The last request may have executed. It will not be sent again. Start a new conversation safely, or explicitly abandon this held outbox.';
+          break;
+        }
+        if (unsavedChanges) {
+          pauseQueue(
+              'Queue paused until the response is saved. Then choose Resume.',
+              allSources: true);
+          break;
+        }
+      }
+    } finally {
+      _draining = false;
+      _paused.removeWhere((session, _) =>
+          !_uncertain.containsKey(session) &&
+          !_outbox.any((item) => identical(item.session, session)));
+      _scheduleSelectedQueue();
+      notifyListeners();
+    }
+  }
+
   final SaathiStore store;
   final CoreFactory coreFactory;
   void Function(String sessionId)? onReplyReceived;
@@ -53,6 +236,7 @@ class ChatController extends ChangeNotifier {
 
   @override
   void dispose() {
+    if (_disposed) return;
     _disposed = true;
     onReplyReceived = null;
     super.dispose();
@@ -229,6 +413,10 @@ class ChatController extends ChangeNotifier {
   }
 
   void select(ChatSession session) {
+    if (!identical(current, session)) {
+      pauseQueue(
+          'Queue paused because the conversation changed. Return to the original conversation and choose Resume.');
+    }
     current = session;
     if (!_loadFailed) error = null;
     notifyListeners();
@@ -271,36 +459,69 @@ class ChatController extends ChangeNotifier {
   }
 
   Future<bool> send(String text) async {
-    final session = current;
+    if (_draining ||
+        unsavedChanges ||
+        _background ||
+        _paused.containsKey(current) ||
+        outbox.isNotEmpty) {
+      return false;
+    }
+    return await _dispatch(text) == _DispatchResult.completed;
+  }
+
+  // Only the drain may bypass public FIFO admission for its captured head.
+  Future<_DispatchResult> _dispatch(String text,
+      {QueuedFollowup? source}) async {
+    final session = source?.session ?? current;
     if (_disposed ||
         _loadFailed ||
         loading ||
         changingConnection ||
         busy ||
+        _uncertain.containsKey(session) ||
         session == null ||
         text.trim().isEmpty) {
-      return false;
+      return _DispatchResult.notDispatched;
     }
     final found = connections.where((c) => c['id'] == session.connectionId);
     if (found.isEmpty) {
       error =
           'This conversation’s connection is unavailable. Create a new conversation.';
       notifyListeners();
-      return false;
+      return _DispatchResult.notDispatched;
     }
+    final connection = source?.connection ?? found.single;
+    final permission = _DispatchPermission(
+        source ?? QueuedFollowup(text, session, connection));
+    _preparing = permission;
     busy = true;
     error = null;
     pendingText = text;
     notifyListeners();
+    var responseCompleted = false;
+    var dispatched = false;
     SaathiCore? core;
     try {
-      core = await coreFor(found.single);
+      core = await coreFor(connection);
+      if (_disposed ||
+          permission.revoked ||
+          !_bound(permission.source) ||
+          _paused.containsKey(session) ||
+          _background ||
+          _loadFailed ||
+          !sessions.contains(session) ||
+          !connections.any((c) => identical(c, connection))) {
+        return _DispatchResult.notDispatched;
+      }
       core.setSystemPrompt(session.systemPrompt);
       core.registerModel(
           ModelInfo(providerId: session.connectionId, name: session.model));
       core.selectModel('${session.connectionId}|${session.model}');
       core.restoreHistory(session.messages);
+      _preparing = null;
+      dispatched = true;
       final result = await core.sendMessage(text);
+      responseCompleted = true;
       session.messages.addAll([
         ChatMessage(role: 'user', content: text),
         ChatMessage(role: 'model', content: result.text)
@@ -318,19 +539,35 @@ class ChatController extends ChangeNotifier {
         error =
             'Response received but not saved. Keep this conversation open and try saving again before closing Saathi.';
       }
-      return true;
+      return _DispatchResult.completed;
     } on ProviderException catch (e) {
       error = e.message;
-      return false;
+      return dispatched
+          ? _DispatchResult.dispatchedUnknown
+          : _DispatchResult.notDispatched;
     } catch (_) {
       error =
           'Could not complete or save this response. Check your connection and secure storage.';
-      return false;
+      return dispatched
+          ? _DispatchResult.dispatchedUnknown
+          : _DispatchResult.notDispatched;
     } finally {
+      if (identical(_preparing, permission)) _preparing = null;
       core?.close();
       busy = false;
       pendingText = null;
+      if (dispatched && !responseCompleted) {
+        _uncertain[session] = QueuedFollowup(text, session, connection);
+        _paused[session] =
+            'Outcome unknown. The last request may have executed. It will not be sent again. Start a new conversation safely, or explicitly abandon this held outbox.';
+      }
+      if (!_draining && unsavedChanges) {
+        pauseQueue(
+            'Queue paused until the response is saved. Then choose Resume.',
+            allSources: true);
+      }
       notifyListeners();
+      _scheduleSelectedQueue();
     }
   }
 }
