@@ -1,0 +1,2 @@
+# Branding image assertions import PIL; keep CI and local test environments aligned.
+Pillow==13.0.0
