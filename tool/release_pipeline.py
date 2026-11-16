@@ -86,6 +86,20 @@ def validate_draft(release, tag, commit, run_id):
         raise ValueError('REST release ID must be numeric')
 
 
+def release_body(run_id):
+    """Human notes are separate from technical distribution instructions."""
+    changelog = json.loads(Path('assets/changelog.json').read_text())
+    notes = changelog.get('unreleased')
+    if changelog.get('schema') != 1 or not isinstance(notes, list) or not all(
+            isinstance(note, str) and note.strip() and '\n' not in note
+            and '\r' not in note and '<!--' not in note for note in notes):
+        raise ValueError('Invalid unreleased change notes')
+    human = "## What's new\n<!-- saathi-changes:start -->\n"
+    human += ''.join('- ' + note + '\n' for note in notes)
+    human += '<!-- saathi-changes:end -->\n\n'
+    return human + Path('docs/DESKTOP_RELEASE_NOTES.md').read_text() + '\n' + marker(run_id)
+
+
 def prepare(repository, commit, run_number, run_id):
     releases = inventory(api, repository)
     tags = command('git', 'tag', '--list').splitlines()
@@ -96,7 +110,7 @@ def prepare(repository, commit, run_number, run_id):
     result = plan(releases, tags, commit, run_number, run_id, tree)
     if result['release_required'] == 'true':
         if not result['release_id']:
-            body = Path('docs/DESKTOP_RELEASE_NOTES.md').read_text() + '\n' + marker(run_id)
+            body = release_body(run_id)
             created = api(f'repos/{repository}/releases', 'POST', dict(
                 tag_name=result['tag'], target_commitish=commit,
                 name='Saathi ' + result['version'], body=body, draft=True, prerelease=True))

@@ -1,5 +1,6 @@
 """Offline change-aware orchestration contracts."""
 import datetime as dt
+import json
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -14,6 +15,18 @@ class PlanningTests(unittest.TestCase):
     def plan(self, releases=(), tags=(), tree=lambda ref: ref):
         return rp.plan(list(releases), list(tags), SHA, 7, '123', tree,
                        dt.date(2026, 11, 12))
+
+    def test_human_notes_body_preserves_owner_and_boilerplate(self):
+        body = rp.release_body('123')
+        notes = json.loads(Path('assets/changelog.json').read_text())['unreleased']
+
+        self.assertIn("## What's new", body)
+        self.assertIn('<!-- saathi-changes:start -->', body)
+        self.assertIn('<!-- saathi-changes:end -->', body)
+        for note in notes:
+            self.assertIn('- ' + note, body)
+        self.assertIn(Path('docs/DESKTOP_RELEASE_NOTES.md').read_text(), body)
+        self.assertIn(rp.marker('123'), body)
 
     def test_first_release(self):
         result = self.plan()

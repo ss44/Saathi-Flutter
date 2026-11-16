@@ -4,3 +4,4 @@ library;
 export 'update_version.dart';
 export 'update_service.dart';
 export 'update_controller.dart';
+export 'release_notes.dart';

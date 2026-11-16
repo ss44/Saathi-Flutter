@@ -201,6 +201,30 @@ Do not commit keys/passwords or embed GitHub tokens in the application.
 - GitHub release/asset REST metadata: https://docs.github.com/en/rest/releases/releases
   and https://docs.github.com/en/rest/releases/assets
 
+## Change notes and App updates screen
+
+The screen shows the installed version, a plain-language status and a consentful
+Install update action on Android (Open releases on desktop), followed by the full
+recent released history, newest first. Notes are plain text, never executable
+HTML, images or links. Handoff still does not mean installed.
+
+`assets/changelog.json` schema 1 contains `unreleased` bullets for the next draft
+and `releases` entries (`version`, `changes`) for bundled/offline history. Never
+show unreleased bullets as already released. Keep released entries factual.
+Preparing a new draft reads the unreleased bullets and emits a What's new heading
+with `<!-- saathi-changes:start -->` and `<!-- saathi-changes:end -->` around
+single-line `- ` bullets, alongside the existing technical instructions and owner
+run marker. Published releases remain immutable; cadence and the six-asset gate
+are unchanged. After a release, maintain the bundled released history separately.
+
+The updater reads only that marked section from the existing bounded release-list
+response, after normal manifest/repository/channel/asset validation. It retains
+recent notes even when no update is newer than the installed version. Missing or
+malformed notes do not fail an update check: known versions fall back to bundled
+notes; unknown versions say notes are unavailable. Nonempty remote notes replace
+bundled notes for the same version; history is sorted by version precedence.
+No raw-main request, new service, credentials or dependencies are introduced.
+
 ## Verification
 
 ```sh
