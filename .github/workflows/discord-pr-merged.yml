@@ -1,0 +1,124 @@
+name: Discord merged PR notification
+
+# Inspect trusted merge metadata after main changes; never run PR code or use
+# pull_request_target. Direct pushes and unmerged PRs do not notify Discord.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: discord-pr-merged-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Post job-done GIF and merged PR link
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_PR_WEBHOOK_URL }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import secrets
+          import urllib.request
+          from pathlib import Path
+
+          GIFS = (
+              'https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif',
+              'https://media.giphy.com/media/g9582DNuQppxC/giphy.gif',
+              'https://media.giphy.com/media/111ebonMs90YLu/giphy.gif',
+          )
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+          def read_json(opener, url, payload=None, headers=None):
+              data = None if payload is None else json.dumps(payload).encode('utf-8')
+              request = urllib.request.Request(url, data=data, headers={
+                  'Content-Type': 'application/json',
+                  'User-Agent': 'Saathi-Merged-PR-Notifier/1.0',
+                  **(headers or {}),
+              })
+              try:
+                  with opener.open(request, timeout=20) as response:
+                      raw = response.read(1048577)
+                      if len(raw) > 1048576:
+                          raise ValueError('Oversized response')
+                      return json.loads(raw)
+              except Exception:
+                  # Exceptions may contain credentials or private response bodies.
+                  # Do not automatically retry an uncertain notification POST.
+                  raise RuntimeError('Notification request failed; sensitive details suppressed.') from None
+
+          def main():
+              event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+              if event.get('ref') != 'refs/heads/main':
+                  return
+              commit = event.get('after', '')
+              repository = os.environ['GITHUB_REPOSITORY']
+              if (not re.fullmatch(r'[a-f0-9]{40}', commit)
+                      or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository)):
+                  raise ValueError('Invalid merge identity')
+              webhook = os.environ.get('DISCORD_WEBHOOK_URL', '')
+              if not re.fullmatch(r'https://discord\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+', webhook):
+                  raise ValueError('Missing or invalid Discord webhook secret')
+              opener = urllib.request.build_opener(NoRedirect())
+              headers = {
+                  'Accept': 'application/vnd.github+json',
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                  'X-GitHub-Api-Version': '2022-11-28',
+              }
+              merged = {}
+              for page in range(1, 11):
+                  rows = read_json(opener,
+                      f'https://api.github.com/repos/{repository}/commits/{commit}/pulls?per_page=100&page={page}',
+                      headers=headers)
+                  if not isinstance(rows, list):
+                      raise RuntimeError('Invalid GitHub PR inventory')
+                  for pr in rows:
+                      if (pr.get('state') == 'closed' and pr.get('merged_at')
+                              and pr.get('merge_commit_sha') == commit
+                              and pr.get('base', {}).get('ref') == 'main'
+                              and pr.get('base', {}).get('repo', {}).get('full_name') == repository):
+                          number = pr.get('number')
+                          if type(number) is not int or number <= 0:
+                              raise ValueError('Invalid merged PR number')
+                          merged[number] = pr
+                  if len(rows) < 100:
+                      break
+              else:
+                  raise RuntimeError('GitHub PR inventory exceeded notification limit')
+              for number in sorted(merged):
+                  link = f'https://github.com/{repository}/pull/{number}'
+                  payload = {
+                      'content': f'Job done! 🎉 PR #{number} merged.\n{link}',
+                      'allowed_mentions': {'parse': []},
+                      'embeds': [{'image': {'url': secrets.choice(GIFS)}}],
+                  }
+                  posted = read_json(opener, webhook + '?wait=true', payload)
+                  message_id = posted.get('id', '')
+                  if not isinstance(message_id, str) or not re.fullmatch(r'[0-9]{1,32}', message_id):
+                      raise RuntimeError('Discord did not acknowledge a message ID')
+                  saved = read_json(opener, webhook + '/messages/' + message_id)
+                  images = [embed.get('image', {}).get('url') for embed in saved.get('embeds', [])]
+                  if (saved.get('id') != message_id or saved.get('content') != payload['content']
+                          or payload['embeds'][0]['image']['url'] not in images):
+                      raise RuntimeError('Discord message readback did not match')
+                  print(f'Discord message verified: {message_id}; PR #{number}.')
+              if not merged:
+                  print('No PR merged by this commit; nothing sent.')
+
+          if __name__ == '__main__':
+              main()
+          PY
