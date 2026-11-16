@@ -1,3 +1,5 @@
 # Agent workspace
 
-Start with [the parallel delivery plan](WORK_PLAN.md). Project-specific agent notes and task briefs belong here; keep durable project rules in `../AGENTS.md` and product decisions in `../docs/`. Coordinate shared files through the integration owner, and use separate worktrees for parallel implementation.
+Start with [the contributor guardrails](AGENTS.md), [product direction](../docs/PRODUCT_DIRECTION.md) and [delivery ownership](WORK_PLAN.md). The root `AGENTS.md` makes these rules applicable across the repository.
+
+Keep durable product decisions in `docs/PRODUCT_DIRECTION.md`, technical contracts in the relevant adapter documents, and task scope in GitHub issues and PRs. Do not duplicate a temporary task list here or overwrite another worktree's changes.
