@@ -10,22 +10,28 @@ import '../storage/saathi_store.dart';
 class ChatSession {
   final String id, connectionId, model, systemPrompt;
   final String? upstreamProvider;
+  final String? remoteSessionId, remoteTitle;
   final List<ChatMessage> messages;
   ChatSession(
       {required this.id,
       required this.connectionId,
       required this.model,
       this.upstreamProvider,
+      this.remoteSessionId,
+      this.remoteTitle,
       this.systemPrompt = '',
       List<ChatMessage>? messages})
       : messages = messages ?? [];
   String get title =>
-      messages.isEmpty ? 'New conversation' : messages.first.content;
+      remoteTitle ??
+      (messages.isEmpty ? 'New conversation' : messages.first.content);
   Map<String, dynamic> toJson() => {
         'id': id,
         'connectionId': connectionId,
         'model': model,
         if (upstreamProvider != null) 'upstreamProvider': upstreamProvider,
+        if (remoteSessionId != null) 'remoteSessionId': remoteSessionId,
+        if (remoteTitle != null) 'remoteTitle': remoteTitle,
         'systemPrompt': systemPrompt,
         'messages': messages.map((m) => m.toJson()).toList()
       };
@@ -34,6 +40,8 @@ class ChatSession {
       connectionId: json['connectionId'],
       model: json['model'],
       upstreamProvider: json['upstreamProvider'] as String?,
+      remoteSessionId: json['remoteSessionId'] as String?,
+      remoteTitle: json['remoteTitle'] as String?,
       systemPrompt: json['systemPrompt'] ?? '',
       messages: (json['messages'] as List)
           .map((m) => ChatMessage.fromJson(Map<String, dynamic>.from(m)))
@@ -272,7 +280,17 @@ class ChatController extends ChangeNotifier {
   ReplyNotifications? notifications;
   final List<Map<String, dynamic>> connections = [];
   final List<ChatSession> sessions = [];
-  ChatSession? current;
+  ChatSession? _current;
+  int _selectionGeneration = 0;
+
+  /// Selection authority is revoked on the first change, even after A→B→A.
+  int get selectionGeneration => _selectionGeneration;
+  ChatSession? get current => _current;
+  set current(ChatSession? session) {
+    if (!identical(_current, session)) _selectionGeneration++;
+    _current = session;
+  }
+
   bool loading = true, busy = false, unsavedChanges = false;
   bool _disposed = false;
   bool _loadFailed = false;
@@ -306,13 +324,150 @@ class ChatController extends ChangeNotifier {
   final RunClientFactory? runClientFactory;
   final bool _runDiscovery;
   final Map<String, RunOperation> runs = {};
+  final _streamText = <String, String>{};
+  final _streamCursors = <String, BigInt>{};
+  final _observationProblems = <String, String>{};
+  String? get runObservationProblem => _observationProblems[currentRun?.key];
+  String? get streamingText => runPending ? _streamText[currentRun?.key] : null;
+
+  /// Observations from the existing activity attachment, never a second stream
+  /// or inference. Only an authoritative status read can settle the journal.
+  void observeRunEvent(ScopedRunSnapshot scope, Map<String, Object?> event,
+      {String? cursor}) {
+    if (!scope.isCurrent() || event['run_id'] != scope.snapshot.runId) return;
+    final op = runs[scope.localChatId];
+    if (op == null || op.key != scope.operationKey || op.snapshot.terminal) {
+      return;
+    }
+    final sequence = cursor == null ? null : BigInt.tryParse(cursor);
+    if (sequence == null ||
+        sequence <= (_streamCursors[op.key] ?? BigInt.from(-1))) {
+      return;
+    }
+    _streamCursors[op.key] = sequence;
+    if (event['event'] == 'message.delta' && event['delta'] is String) {
+      final text = '${_streamText[op.key] ?? ''}${event['delta']}';
+      if (text.length <= 256 * 1024) _streamText[op.key] = text;
+      notifyListeners();
+    }
+    if ([
+      'run.completed',
+      'run.failed',
+      'run.cancelled',
+      'run.interrupted',
+      'approval.request',
+      'clarify.request'
+    ].contains(event['event'])) {
+      unawaited(checkRunStatus(sessionId: scope.localChatId));
+    }
+  }
+
+  void runStreamDisconnected(ScopedRunSnapshot scope) {
+    final op = runs[scope.localChatId];
+    if (!scope.isCurrent() ||
+        op == null ||
+        op.snapshot.terminal ||
+        op.committed) {
+      return;
+    }
+    _observationProblems[op.key] =
+        'Live updates disconnected. Check status; the server may still be working.';
+    notifyListeners();
+  }
+
   final _runUpdates = StreamController<RunSnapshot>.broadcast();
 
   /// Compatibility stream; new integrations should use scopedRunSnapshots.
   Stream<RunSnapshot> get runSnapshots => _runUpdates.stream;
   final _scopedRunUpdates = StreamController<ScopedRunSnapshot>.broadcast();
   final _connectionRevisions = Expando<Object>();
+  // Mutation-start revocation survives rollback to the same connection map.
+  final _controlRevisions = Expando<Object>();
   final _activityEvents = Expando<bool>();
+  final _nativeSteer = Expando<bool>();
+  final _nativeStop = Expando<bool>();
+  bool controlBusy = false;
+  Map<String, dynamic>? get _selectedConnection =>
+      connections.where((c) => c['id'] == current?.connectionId).firstOrNull;
+  bool get canGuideRun =>
+      !busy &&
+      !changingConnection &&
+      !controlBusy &&
+      currentRun?.runId != null &&
+      currentRun?.snapshot.state == RunState.running &&
+      _selectedConnection != null &&
+      _nativeSteer[_selectedConnection!] == true;
+  bool get canStopRun =>
+      !busy &&
+      !changingConnection &&
+      !controlBusy &&
+      runPending &&
+      currentRun?.runId != null &&
+      !currentRun!.snapshot.terminal &&
+      _selectedConnection != null &&
+      _nativeStop[_selectedConnection!] == true;
+
+  void _rememberRunFeatures(Map<String, dynamic> connection, RunClient client) {
+    _activityEvents[connection] = client.eventsSupported;
+    _nativeSteer[connection] = client.canSteer;
+    _nativeStop[connection] = client.canStop;
+  }
+
+  Future<bool> controlRun({String? guidance}) async {
+    if (guidance == null ? !canStopRun : !canGuideRun) return false;
+    final session = current!,
+        op = currentRun!,
+        connection = _selectedConnection!;
+    final generation = _runsGeneration;
+    final revision = _controlRevisions[connection] ??= Object();
+    final selection = selectionGeneration;
+    bool valid() =>
+        generation == _runsGeneration &&
+        selection == selectionGeneration &&
+        identical(revision, _controlRevisions[connection]) &&
+        identical(current, session) &&
+        _active(session, connection, op);
+    controlBusy = true;
+    if (guidance == null) {
+      _paused[session] =
+          'Stopped work pauses the queue. Review the result before choosing Resume.';
+      pauseQueue(_paused[session]!, session: session);
+    }
+    notifyListeners();
+    RunClient? client;
+    try {
+      client = await _runClient(connection, isCurrent: valid);
+      client.bind(op);
+      if (!await client.discover() || !valid()) return false;
+      _rememberRunFeatures(connection, client);
+      await client.status(op, _ledger, isCurrent: valid);
+      if (op.snapshot.terminal) {
+        await _reconcile(session, connection, op);
+        return false;
+      }
+      await client.control(op, guidance: guidance, isCurrent: valid);
+      await client.status(op, _ledger, isCurrent: valid);
+      await _reconcile(session, connection, op);
+      if (valid() && !op.snapshot.terminal) {
+        error = guidance == null
+            ? 'Stop requested. Waiting for the server to confirm the outcome.'
+            : 'Guidance accepted for a checkpoint; not a new turn or proof it was read.';
+      }
+      return valid();
+    } catch (_) {
+      if (valid()) {
+        error =
+            'Control outcome unconfirmed. Do not repeat guidance; check status.';
+      }
+      return false;
+    } finally {
+      client?.close();
+      controlBusy = false;
+      _scheduleSelectedQueue();
+      notifyListeners();
+    }
+  }
+
   Stream<ScopedRunSnapshot> get scopedRunSnapshots => _scopedRunUpdates.stream;
   RunOperation? get currentRun => runs[current?.id];
   bool get runPending =>
@@ -326,6 +481,91 @@ class ChatController extends ChangeNotifier {
         coreFactory = coreFactory ?? (() => SaathiCore());
 
   RunLedger get _ledger => RunLedger(store.secrets);
+
+  /// Continue an API-owned conversation through native Runs. Desktop/CLI rows
+  /// require a canonical gateway grant; never transplant them through REST.
+  bool attachingRemote = false;
+  Future<void> continueRemote(
+      Map<String, dynamic> connection, RemoteSession remote,
+      {bool Function()? isOwnerCurrent}) async {
+    if (busy ||
+        attachingRemote ||
+        _runsPaused ||
+        !isCurrentConnection(connection) ||
+        remote.source != 'api_server') {
+      throw StateError('This session requires canonical gateway attachment');
+    }
+    final generation = _runsGeneration;
+    final selected = current;
+    final selection = selectionGeneration;
+    bool valid() =>
+        !_disposed &&
+        !_runsPaused &&
+        (isOwnerCurrent?.call() ?? true) &&
+        identical(current, selected) &&
+        selection == selectionGeneration &&
+        generation == _runsGeneration &&
+        isCurrentConnection(connection);
+    attachingRemote = true;
+    notifyListeners();
+    SaathiCore? core;
+    RunClient? client;
+    try {
+      core = await coreFor(connection);
+      if (!valid()) throw StateError('Connection changed');
+      client = await _runClient(connection, isCurrent: valid);
+      if (!await client.discover() || !valid()) {
+        throw StateError('Native continuation unavailable');
+      }
+      final page =
+          await core.loadRemoteHistory(connection['id'] as String, remote.id);
+      if (!valid() || page.sessionId != remote.id) {
+        throw StateError('Session identity changed');
+      }
+      final existing = sessions
+          .where((s) =>
+              s.connectionId == connection['id'] &&
+              s.remoteSessionId == page.sessionId)
+          .firstOrNull;
+      if (existing != null) {
+        select(existing);
+        return;
+      }
+      final session = ChatSession(
+          id: 'remote_${runIdentity()}',
+          connectionId: connection['id'] as String,
+          remoteSessionId: page.sessionId,
+          remoteTitle: remote.title,
+          model: remote.data['model'] as String? ?? 'Server model',
+          upstreamProvider: remote.data['provider'] as String?,
+          messages: [
+            for (final row in page.messages)
+              if (['user', 'assistant'].contains(row['role']) &&
+                  row['display_kind'] != 'hidden' &&
+                  row['content'] is String)
+                ChatMessage(
+                    role: row['role'] == 'assistant' ? 'model' : 'user',
+                    content: row['content'] as String)
+          ]);
+      sessions.add(session);
+      try {
+        await persist();
+      } catch (_) {
+        sessions.remove(session);
+        rethrow;
+      }
+      if (!valid()) throw StateError('Session attachment revoked');
+      select(session);
+      _rememberRunFeatures(connection, client);
+      notifyListeners();
+    } finally {
+      core?.close();
+      client?.close();
+      attachingRemote = false;
+      notifyListeners();
+    }
+  }
+
   Future<AgentControlsController?> openRunControls(
       {required bool Function() isOwnerCurrent}) async {
     final session = current;
@@ -339,8 +579,13 @@ class ChatController extends ChangeNotifier {
     final runId = operation.runId!;
     final epoch = connection['authorityEpoch'];
     final origin = connection['url'];
+    final controlRevision = _controlRevisions[connection] ??= Object();
+    final selection = selectionGeneration;
     bool valid() =>
         isOwnerCurrent() &&
+        selection == selectionGeneration &&
+        !changingConnection &&
+        identical(controlRevision, _controlRevisions[connection]) &&
         identical(current, session) &&
         _active(session, connection, operation) &&
         operation.key == key &&
@@ -492,6 +737,11 @@ class ChatController extends ChangeNotifier {
         generation == _runsGeneration && _active(session, connection, op);
     if (!isCurrent()) return;
     final snapshot = op.snapshot;
+    if (snapshot.terminal) {
+      _streamText.remove(op.key);
+      _streamCursors.remove(op.key);
+      _observationProblems.remove(op.key);
+    }
     if (!_runUpdates.isClosed) _runUpdates.add(snapshot);
     if (!_scopedRunUpdates.isClosed) {
       final revision = _connectionRevisions[connection] ??= Object();
@@ -543,6 +793,11 @@ class ChatController extends ChangeNotifier {
         await _commitRun(session, connection, op);
         if (!isCurrent()) return;
         unsavedChanges = false;
+        error = null;
+        if (snapshot.output.trim().isEmpty) {
+          error =
+              'The server finished without a text response. Nothing will be resent.';
+        }
       } catch (_) {
         if (!isCurrent()) return;
         unsavedChanges = true;
@@ -601,7 +856,7 @@ class ChatController extends ChangeNotifier {
       }
       if (!await client.discover()) throw StateError('Runs unavailable');
       if (!isCurrent()) return;
-      _activityEvents[c] = client.eventsSupported;
+      _rememberRunFeatures(c, client);
       if (op.runId == null) {
         // Explicit reconnect only: identical key/body, within the replay window.
         await client.submit(op, _ledger, isCurrent: isCurrent);
@@ -614,12 +869,15 @@ class ChatController extends ChangeNotifier {
           await client.status(op, _ledger, isCurrent: isCurrent);
         }
         if (!isCurrent()) return;
+        _observationProblems.remove(op.key);
         await _reconcile(session, c, op);
       }
       error ??= op.runId == null
           ? 'Admission saved; outcome unknown. Reconnect without sending again.'
           : null;
     } catch (_) {
+      _observationProblems[op.key] =
+          'Could not confirm this run. Check status using the original connection; nothing will be resent automatically.';
       error =
           'Could not confirm this run. Keep its original connection and use Reconnect. Do not resend.';
     } finally {
@@ -649,10 +907,10 @@ class ChatController extends ChangeNotifier {
     try {
       if (!isCurrent()) throw StateError('Stale run');
       final supported = await client.discover();
-      _activityEvents[connection] = client.eventsSupported;
+      _rememberRunFeatures(connection, client);
       if (!isCurrent()) throw StateError('Stale run');
       if (!supported) {
-        if (previous != null) {
+        if (previous != null || session.remoteSessionId != null) {
           throw StateError('Existing run requires its original Runs authority');
         }
         return null;
@@ -665,6 +923,7 @@ class ChatController extends ChangeNotifier {
           authorityEpoch: connection['authorityEpoch'] as String?,
           isCurrent: isCurrent,
           local: session.id,
+          existingSessionId: session.remoteSessionId,
           input: text,
           model: session.model,
           provider: session.upstreamProvider,
@@ -803,6 +1062,7 @@ class ChatController extends ChangeNotifier {
       {String? apiKey}) async {
     _checkMutation(id);
     final old = connections.singleWhere((c) => c['id'] == id);
+    _controlRevisions[old] = Object();
     final revised =
         old['type'] != values['type'] || old['url'] != values['url'];
     final next = <String, dynamic>{
@@ -837,6 +1097,7 @@ class ChatController extends ChangeNotifier {
 
   Future<void> deleteConnection(String id) async {
     _checkMutation(id);
+    _controlRevisions[connections.singleWhere((c) => c['id'] == id)] = Object();
     changingConnection = true;
     notifyListeners();
     try {
@@ -1084,6 +1345,8 @@ class ChatController extends ChangeNotifier {
           : _DispatchResult.notDispatched;
     } catch (_) {
       if (runs[session.id] != null && !runs[session.id]!.committed) {
+        _observationProblems[runs[session.id]!.key] =
+            'Native outcome unconfirmed. Check status; this input will not be resent automatically.';
         _paused[session] =
             'Native outcome unconfirmed. Check status using the original operation; do not resend.';
         error = _paused[session];

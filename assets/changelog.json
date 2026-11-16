@@ -1,6 +1,9 @@
 {
   "schema": 1,
   "unreleased": [
+    "Hold Send to review an optimized prompt, without adding another button to your message box.",
+    "Choose a separate prompt optimizer globally or for one conversation, then review, apply or undo its rewrite.",
+    "Continue supported API-owned Hermes conversations and see streamed reply text without sending old history again.",
     "App updates now shows the changes for each version instead of repeating older notes."
   ],
   "releases": [

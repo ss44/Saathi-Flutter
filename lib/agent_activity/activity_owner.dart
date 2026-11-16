@@ -111,11 +111,18 @@ class ActivityOwner {
       transport.connect(a.binding.runId, lastEventId: a.cursor).listen((e) {
         if (!_valid(a) || generation != a.generation) return;
         a.cursor = e.cursor;
+        controller.observeRunEvent(a.scope, e.data, cursor: e.cursor);
         model.event(a.binding, e.data, cursor: e.cursor);
       }, onError: (Object _) {
-        if (generation == a.generation) model.disconnected(a.binding);
+        if (generation == a.generation) {
+          model.disconnected(a.binding);
+          controller.runStreamDisconnected(a.scope);
+        }
       }, onDone: () {
-        if (generation == a.generation) model.disconnected(a.binding);
+        if (generation == a.generation) {
+          model.disconnected(a.binding);
+          controller.runStreamDisconnected(a.scope);
+        }
       });
     } catch (_) {
       if (!_disposed && generation == a.generation) {

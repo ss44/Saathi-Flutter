@@ -97,14 +97,15 @@ class _RemoteSessionsPageState extends State<RemoteSessionsPage> {
             style: TextStyle(fontSize: 24, fontWeight: FontWeight.w600)),
         const SizedBox(height: 12),
         const Text(
-            'Read-only browsing. Existing desktop / CLI conversations cannot be taken over using REST. Their history is never replayed into a new conversation.'),
+            'API-owned conversations can continue through native Runs after checking this connection. Desktop / CLI conversations require a canonical gateway grant, not the API-server key. History is never replayed into another conversation.'),
         const SizedBox(height: 16),
         for (final session in sessions)
           ListTile(
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.cloud_outlined),
               title: Text(session.title),
-              subtitle: Text('${session.source ?? 'Remote'} · Read-only'),
+              subtitle: Text(
+                  '${session.source ?? 'Remote'} · ${session.source == 'api_server' ? 'Native continuation' : 'Gateway connection required'}'),
               onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute<void>(
@@ -247,14 +248,41 @@ class _RemoteHistoryPageState extends State<RemoteHistoryPage> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis)),
       body: ListView(padding: const EdgeInsets.all(22), children: [
-        const Text('Read-only · Server-owned conversation',
+        Text(
+            widget.session.source == 'api_server'
+                ? 'Server conversation'
+                : 'Read-only · Gateway attachment required',
             style: TextStyle(fontWeight: FontWeight.w600)),
         const SizedBox(height: 10),
-        const Text(
-            'Live attachment is not available in this build. No messages or transcript will be uploaded from this screen. Only public user and assistant text is shown.'),
+        Text(widget.session.source == 'api_server'
+            ? 'Continue with this server’s native Runs connection. History stays on its original server; only new input is sent.'
+            : 'This desktop or messaging session needs an authenticated canonical gateway connection. The API-server key cannot mint that grant. History will not be copied to another chat.'),
+        if (widget.session.source == 'api_server')
+          FilledButton(
+              onPressed:
+                  !current || loading || widget.controller.attachingRemote
+                      ? null
+                      : () async {
+                          try {
+                            await widget.controller.continueRemote(
+                                widget.connection, widget.session,
+                                isOwnerCurrent: () => current);
+                            if (mounted && context.mounted) {
+                              Navigator.of(context)
+                                  .popUntil((route) => route.isFirst);
+                            }
+                          } catch (_) {
+                            if (mounted) {
+                              setState(() => error =
+                                  'Native continuation could not be confirmed. Check this connection’s Runs support and session access. Nothing was sent.');
+                            }
+                          }
+                        },
+              child: const Text('Continue conversation')),
         const Divider(height: 32),
-        for (final m in messages
-            .where((m) => ['user', 'assistant', 'model'].contains(m['role'])))
+        for (final m in messages.where((m) =>
+            m['display_kind'] != 'hidden' &&
+            ['user', 'assistant', 'model'].contains(m['role'])))
           if (visibleContent(m['content']).isNotEmpty)
             Padding(
                 padding: const EdgeInsets.only(bottom: 24),

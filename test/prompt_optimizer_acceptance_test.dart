@@ -9,11 +9,15 @@ import 'package:saathi/core/saathi_core.dart';
 import 'package:saathi/storage/saathi_store.dart';
 import 'package:saathi/ui/chat_controller.dart';
 import 'package:saathi/ui/prompt_optimizer.dart';
+import 'package:saathi/ui/optimizer_settings.dart';
+import 'package:saathi/ui/optimizer_review.dart';
 
 class DelayedSecrets extends MemorySecrets {
   final pending = Completer<String?>();
+  bool armed = false;
   @override
-  Future<String?> read(String id) => pending.future;
+  Future<String?> read(String id) =>
+      armed ? pending.future : Future.value('fixture');
 }
 
 String response(String text) => jsonEncode({
@@ -24,13 +28,25 @@ String response(String text) => jsonEncode({
       ]
     });
 
-Future<ChatController> controller(SecretStore secrets,
-    Future<http.Response> Function(http.Request) handler) async {
+Future<ChatController> controller(
+    SecretStore secrets, Future<http.Response> Function(http.Request) handler,
+    {bool catalogFixture = true}) async {
   SharedPreferences.setMockInitialValues({});
   final c = ChatController(
       SaathiStore(
           preferences: await SharedPreferences.getInstance(), secrets: secrets),
-      coreFactory: () => SaathiCore(client: MockClient(handler)));
+      coreFactory: () => SaathiCore(client: MockClient((request) async {
+            if (catalogFixture && request.method == 'GET') {
+              return http.Response(
+                  jsonEncode({
+                    'data': [
+                      {'id': 'test'}
+                    ]
+                  }),
+                  200);
+            }
+            return handler(request);
+          })));
   c.loading = false;
   c.connections.add({
     'id': 'direct',
@@ -45,13 +61,18 @@ Future<ChatController> controller(SecretStore secrets,
       model: 'test',
       systemPrompt: 'PRIVATE SYSTEM',
       messages: [ChatMessage(role: 'user', content: 'PRIVATE HISTORY')]);
+  await c.saveOptimizerSelection(
+      const OptimizerSelection(connectionId: 'direct', model: 'test'));
   return c;
 }
 
 Future<void> open(
     WidgetTester tester, ChatController c, TextEditingController draft,
-    {double scale = 1, double keyboard = 0}) async {
+    {double scale = 1,
+    double keyboard = 0,
+    List<NavigatorObserver> observers = const []}) async {
   await tester.pumpWidget(MaterialApp(
+      navigatorObservers: observers,
       builder: (context, child) => MediaQuery(
           data: MediaQuery.of(context).copyWith(
               textScaler: TextScaler.linear(scale),
@@ -59,10 +80,17 @@ Future<void> open(
           child: child!),
       home: Scaffold(body: PromptOptimizer(controller: c, composer: draft))));
   await tester.tap(find.byTooltip('Improve prompt'));
-  await tester.pumpAndSettle();
+  await flush(tester);
 }
 
 Future<void> improve(WidgetTester tester) async {
+  await flush(tester);
+  final secrets = tester
+      .widget<PromptReview>(find.byType(PromptReview))
+      .controller
+      .store
+      .secrets;
+  if (secrets is DelayedSecrets) secrets.armed = true;
   await tester.tap(find.text('Improve'));
   await tester.pump();
 }
@@ -255,11 +283,12 @@ void main() {
             .onPressed,
         isNull);
     expect(requests, 0);
-    await tester
-        .tap(find.byType(DropdownButtonFormField<Map<String, dynamic>>));
+    await tester.tap(find.text('Choose optimizer'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Direct').last);
-    await tester.pumpAndSettle();
+    await flush(tester);
+    await tester.tap(find.text('test').last);
+    await flush(tester);
     expect(requests, 0);
     await improve(tester);
     await flush(tester);

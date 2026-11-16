@@ -403,6 +403,7 @@ class RunClient {
 
   Future<RunOperation> prepare(RunLedger ledger,
       {required String local,
+      String? existingSessionId,
       required String input,
       required String model,
       String? provider,
@@ -416,7 +417,8 @@ class RunClient {
     final op = RunOperation({
       if (authorityEpoch != null) 'authorityEpoch': authorityEpoch,
       'local': local,
-      'session': previous?.sessionId ?? 'saathi_${runIdentity()}',
+      'session':
+          previous?.sessionId ?? existingSessionId ?? 'saathi_${runIdentity()}',
       'key': runIdentity(),
       'scope': scope,
       'origin': base.toString(),
@@ -425,10 +427,11 @@ class RunClient {
     op.data['payload'] = jsonEncode({
       'input': input,
       'session_id': op.sessionId,
-      'model': model,
-      if (provider != null) 'provider': provider,
-      if (instructions.isNotEmpty) 'instructions': instructions,
-      if (previous == null && history.isNotEmpty)
+      if (existingSessionId == null) 'model': model,
+      if (existingSessionId == null && provider != null) 'provider': provider,
+      if (existingSessionId == null && instructions.isNotEmpty)
+        'instructions': instructions,
+      if (existingSessionId == null && previous == null && history.isNotEmpty)
         'conversation_history': history
     });
     if (previous?.data['journalDirty'] == true) {
@@ -501,7 +504,10 @@ class RunClient {
     bind(op);
     final (code, data, _) = await _request('GET', '/v1/runs/${_id(op.runId!)}');
     if (isCurrent != null && !isCurrent()) throw StateError('Stale run');
-    if (code != 200 || data['run_id'] != op.runId) {
+    if (code != 200 ||
+        data['run_id'] != op.runId ||
+        (data.containsKey('session_id') &&
+            data['session_id'] != op.sessionId)) {
       throw StateError('Run status unavailable');
     }
     RunLedger._validateSnapshot(data);
@@ -522,6 +528,41 @@ class RunClient {
       (capabilities['features'] as Map)['run_unknown_resolution'] == true &&
       _endpoint('run_unknown_resolution', 'POST',
           '/v1/runs/{run_id}/resolve-unknown');
+
+  bool get canSteer =>
+      capabilities['features'] is Map &&
+      (capabilities['features'] as Map)['run_steer'] == true &&
+      _endpoint('run_steer', 'POST', '/v1/runs/{run_id}/steer');
+  bool get canStop =>
+      capabilities['features'] is Map &&
+      (capabilities['features'] as Map)['run_stop'] == true &&
+      _endpoint('run_stop', 'POST', '/v1/runs/{run_id}/stop');
+
+  /// One control attempt. A timeout may have delivered guidance; never retry it
+  /// or convert it to another inference. Stop ACK is not terminal cancellation.
+  Future<void> control(RunOperation op,
+      {String? guidance, required bool Function() isCurrent}) async {
+    bind(op);
+    if (!isCurrent() ||
+        op.runId == null ||
+        (guidance == null
+            ? !canStop
+            : !canSteer ||
+                guidance.trim().isEmpty ||
+                op.snapshot.state != RunState.running)) {
+      throw StateError('Control unavailable');
+    }
+    final (code, data, _) = await _request('POST',
+        '/v1/runs/${_id(op.runId!)}/${guidance == null ? 'stop' : 'steer'}',
+        body: jsonEncode(
+            guidance == null ? <String, dynamic>{} : {'input': guidance}));
+    if (!isCurrent() ||
+        code != 200 ||
+        data['run_id'] != op.runId ||
+        (guidance != null && data['accepted'] != true)) {
+      throw StateError('Control outcome unconfirmed');
+    }
+  }
 
   bool get canApprove =>
       capabilities['features'] is Map &&

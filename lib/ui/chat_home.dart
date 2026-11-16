@@ -5,6 +5,8 @@ import '../agent_activity/activity_model.dart';
 import '../core/saathi_core.dart' show RemoteSession;
 import 'remote_sessions.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:flutter/semantics.dart';
 import 'local_history_search.dart';
 import '../update_host.dart';
 import 'package:flutter/services.dart';
@@ -18,6 +20,7 @@ import 'connections.dart';
 import 'safe_markdown.dart';
 import 'conversation_servers.dart';
 import 'prompt_optimizer.dart';
+import 'optimizer_settings.dart';
 
 const muted = Color(0xFF6A7470);
 
@@ -119,7 +122,70 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
     });
   }
 
+  String? shownStream;
+  bool followStream = false;
+  int scrollRevision = 0;
+  ChatController? shownOwner;
+  int? shownSelection;
+
+  void followOutput({bool newInput = false}) {
+    if (!scroll.hasClients || !followStream) return;
+    final owner = c;
+    final session = owner.current;
+    final selection = owner.selectionGeneration;
+    final operation = owner.currentRun;
+    final connection = owner.connections
+        .where((connection) => connection['id'] == session?.connectionId)
+        .firstOrNull;
+    final position = scroll.position;
+    final revision = scrollRevision;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // Layout may grow the live edge, but neither a reader gesture nor a
+      // source/selection change may transfer this frame's follow permission.
+      if (!mounted ||
+          !identical(c, owner) ||
+          owner.selectionGeneration != selection ||
+          !identical(owner.current, session) ||
+          (!newInput && !identical(owner.currentRun, operation)) ||
+          connection == null ||
+          !owner.isCurrentConnection(connection) ||
+          !scroll.hasClients ||
+          !identical(scroll.position, position) ||
+          !followStream ||
+          revision != scrollRevision ||
+          position.userScrollDirection != ScrollDirection.idle) {
+        return;
+      }
+      if (newInput) {
+        unawaited(position.animateTo(position.maxScrollExtent,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut));
+      } else {
+        position.jumpTo(position.maxScrollExtent);
+      }
+    });
+  }
+
   void syncServers() {
+    final selectionChanged =
+        !identical(shownOwner, c) || shownSelection != c.selectionGeneration;
+    if (selectionChanged) {
+      shownOwner = c;
+      shownSelection = c.selectionGeneration;
+      followStream = false;
+    }
+    final text = c.streamingText;
+    if (shownStream != text) {
+      shownStream = text;
+      // Follow real output only while the reader is already at the live edge.
+      // Never pull someone away from older history or change composer focus.
+      if (!selectionChanged &&
+          scroll.hasClients &&
+          (followStream || scroll.position.extentAfter < 120)) {
+        followStream = true;
+        followOutput();
+      }
+    }
     if (controls != null && !controls!.isCurrent) revokeControls();
     for (final connection in serverCaches.keys.toList()) {
       if (!c.isCurrentConnection(connection)) {
@@ -279,17 +345,12 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   Future<void> send() async {
     final text = composer.text.trim();
     if (c.submit(text)) {
+      followStream = true;
       composer.clear();
+      followOutput(newInput: true);
     }
     if (mounted) {
       setState(() {});
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (scroll.hasClients) {
-          scroll.animateTo(scroll.position.maxScrollExtent,
-              duration: const Duration(milliseconds: 200),
-              curve: Curves.easeOut);
-        }
-      });
     }
   }
 
@@ -330,6 +391,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
         final thinking = run == null
             ? c.busy
             : c.runPending &&
+                c.runObservationProblem == null &&
                 (run.snapshot.state == RunState.queued ||
                     run.snapshot.state == RunState.running);
         final localMatches =
@@ -366,6 +428,8 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                         overflow: TextOverflow.ellipsis)
                   ]),
               actions: [
+                if (session != null)
+                  OptimizerSettingsButton(controller: c, chat: session),
                 IconButton(
                     tooltip: 'New conversation',
                     onPressed: c.busy ? null : newChat,
@@ -535,33 +599,66 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                         : 'New conversation'))
                                               ]
                                             ])))
-                                : ListView(
-                                    controller: scroll,
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 22, vertical: 24),
-                                    children: [
-                                        for (var i = 0;
-                                            i < session.messages.length;
-                                            i++)
-                                          MessageView(
-                                              key: ValueKey('${session.id}-$i'),
-                                              text: session.messages[i].content,
-                                              user: session.messages[i].role ==
-                                                  'user'),
-                                        if (c.pendingText != null)
-                                          MessageView(
-                                              text: c.pendingText!, user: true),
-                                        if (thinking)
-                                          const Padding(
-                                              padding: EdgeInsets.symmetric(
-                                                  vertical: 18),
-                                              child: BusyThinking(busy: true))
-                                      ])),
+                                : NotificationListener<
+                                        ScrollUpdateNotification>(
+                                    onNotification: (event) {
+                                      // Wheel, trackpad and ballistic updates
+                                      // have no dragDetails, but still revoke
+                                      // an already scheduled follow frame.
+                                      if (event.dragDetails != null ||
+                                          scroll.position.userScrollDirection !=
+                                              ScrollDirection.idle) {
+                                        scrollRevision++;
+                                        followStream =
+                                            event.metrics.extentAfter < 120;
+                                      }
+                                      return false;
+                                    },
+                                    child: ListView(
+                                        controller: scroll,
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 22, vertical: 24),
+                                        children: [
+                                          for (var i = 0;
+                                              i < session.messages.length;
+                                              i++)
+                                            MessageView(
+                                                key: ValueKey(
+                                                    '${session.id}-$i'),
+                                                text:
+                                                    session.messages[i].content,
+                                                user:
+                                                    session.messages[i].role ==
+                                                        'user'),
+                                          if (c.pendingText != null)
+                                            MessageView(
+                                                text: c.pendingText!,
+                                                user: true),
+                                          if (c.streamingText?.isNotEmpty ??
+                                              false)
+                                            MessageView(
+                                                text: c.streamingText!,
+                                                user: false),
+                                          if (thinking &&
+                                              (c.streamingText?.isEmpty ??
+                                                  true))
+                                            Padding(
+                                                padding: EdgeInsets.symmetric(
+                                                    vertical: 18),
+                                                child: run == null
+                                                    ? const BusyThinking(
+                                                        busy: true)
+                                                    : const Text(
+                                                        'Waiting for the server response',
+                                                        key: Key(
+                                                            'native-waiting')))
+                                        ]))),
                         if (c.outbox.isNotEmpty ||
                             c.queueStatus != null ||
                             c.uncertainInput != null ||
                             c.readOnly ||
                             c.error != null ||
+                            c.runObservationProblem != null ||
                             c.unsavedChanges)
                           ConstrainedBox(
                             // Feedback scrolls within a bounded share of the body;
@@ -641,6 +738,8 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                         padding: EdgeInsets.all(16),
                                         child: Text(
                                             'Read-only · This connection was removed or changed. Start a new conversation to send messages.')),
+                                  if (c.runObservationProblem != null)
+                                    Text(c.runObservationProblem!),
                                   if (c.error != null)
                                     Container(
                                         width: double.infinity,
@@ -734,6 +833,36 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                 model: activity.model,
                                 onOpenParent: openActivityParent,
                                 onOpenChildHistory: openActivityChild),
+                            if (c.canGuideRun || c.canStopRun)
+                              Row(
+                                  mainAxisAlignment: MainAxisAlignment.end,
+                                  children: [
+                                    if (c.canGuideRun)
+                                      IconButton(
+                                          tooltip: 'Guide current work',
+                                          onPressed: composer.text
+                                                  .trim()
+                                                  .isEmpty
+                                              ? null
+                                              : () async {
+                                                  final text = composer.text;
+                                                  if (await c.controlRun(
+                                                          guidance: text) &&
+                                                      mounted &&
+                                                      composer.text == text) {
+                                                    composer.clear();
+                                                    setState(() {});
+                                                  }
+                                                },
+                                          icon: const Icon(Icons
+                                              .assistant_direction_outlined)),
+                                    if (c.canStopRun)
+                                      IconButton(
+                                          tooltip: 'Stop current work',
+                                          onPressed: () => c.controlRun(),
+                                          icon: const Icon(
+                                              Icons.stop_circle_outlined)),
+                                  ]),
                             Container(
                                 padding: const EdgeInsets.fromLTRB(15, 4, 5, 4),
                                 decoration: BoxDecoration(
@@ -765,27 +894,67 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                               decoration: const InputDecoration(
                                                   hintText: 'Message Saathi',
                                                   border: InputBorder.none))),
-                                      IconButton.filled(
-                                          tooltip: 'Send',
-                                          onPressed: c.readOnly ||
-                                                  c.changingConnection ||
-                                                  session == null ||
-                                                  c.unsavedChanges ||
-                                                  c.queueStatus != null ||
-                                                  composer.text.trim().isEmpty
-                                              ? null
-                                              : send,
-                                          icon: const Icon(
-                                              Icons.arrow_upward_rounded))
+                                      PromptOptimizer(
+                                          key: ValueKey(session?.id),
+                                          controller: c,
+                                          composer: composer,
+                                          triggerBuilder: (context, openMenu) =>
+                                              Focus(
+                                                  onKeyEvent: (node, event) {
+                                                    if (openMenu != null &&
+                                                        event is KeyDownEvent &&
+                                                        (event.logicalKey ==
+                                                                LogicalKeyboardKey
+                                                                    .contextMenu ||
+                                                            (event.logicalKey ==
+                                                                    LogicalKeyboardKey
+                                                                        .f10 &&
+                                                                HardwareKeyboard
+                                                                    .instance
+                                                                    .isShiftPressed))) {
+                                                      openMenu();
+                                                      return KeyEventResult
+                                                          .handled;
+                                                    }
+                                                    return KeyEventResult
+                                                        .ignored;
+                                                  },
+                                                  child: MergeSemantics(
+                                                      child: Semantics(
+                                                          onLongPress: openMenu,
+                                                          customSemanticsActions:
+                                                              openMenu == null
+                                                                  ? null
+                                                                  : {
+                                                                      CustomSemanticsAction(
+                                                                              label: 'Optimize prompt'):
+                                                                          openMenu,
+                                                                    },
+                                                          child:
+                                                              GestureDetector(
+                                                                  excludeFromSemantics:
+                                                                      true,
+                                                                  // Consume a hold even when optimization is disabled.
+                                                                  onLongPress: () =>
+                                                                      openMenu
+                                                                          ?.call(),
+                                                                  onSecondaryTap:
+                                                                      openMenu,
+                                                                  child: Tooltip(
+                                                                      message:
+                                                                          'Send',
+                                                                      triggerMode:
+                                                                          TooltipTriggerMode
+                                                                              .manual,
+                                                                      child: IconButton.filled(
+                                                                          onPressed: c.readOnly || c.changingConnection || session == null || c.unsavedChanges || c.queueStatus != null || composer.text.trim().isEmpty
+                                                                              ? null
+                                                                              : send,
+                                                                          icon:
+                                                                              const Icon(Icons.arrow_upward_rounded))))))))
                                     ])),
                             if (MediaQuery.viewInsetsOf(context).bottom ==
                                 0) ...[
-                              Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: PromptOptimizer(
-                                      key: ValueKey(session?.id),
-                                      controller: c,
-                                      composer: composer)),
                               const SizedBox(height: 8),
                               const Text(
                                   'AI can make mistakes. Review important details.',

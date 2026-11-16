@@ -4,6 +4,7 @@ import '../notifications/settings.dart';
 import '../core/saathi_core.dart';
 import 'chat_controller.dart';
 import 'remote_sessions.dart';
+import 'optimizer_settings.dart';
 
 const providerLabels = {
   'openai': 'OpenAI-compatible',
@@ -63,6 +64,7 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
       appBar: AppBar(title: const Text('Connections'), actions: [
+        OptimizerSettingsButton(controller: controller),
         if (controller.notifications != null)
           NotificationSettingsButton(notifications: controller.notifications!),
         const UpdateSettingsButton()

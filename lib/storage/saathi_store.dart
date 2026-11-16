@@ -212,6 +212,8 @@ class SaathiStore {
             'connectionId',
             'model',
             'upstreamProvider',
+            'remoteSessionId',
+            'remoteTitle',
             'systemPrompt'
           ])
             if (chat.containsKey(key)) key: chat[key],
