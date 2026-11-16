@@ -26,4 +26,8 @@ Saathi is an independent Flutter app, not a QML port or DMS frontend. The origin
 - Connection editing/removal (the first UI supports adding connections), attachments/share-sheet intake, and production desktop installation/tray behavior.
 
 ## Layout verification
+The composer stays outside the scrolling transcript and queue/recovery feedback, at the bottom safe area (above the keyboard when open). The transcript fills the space left by the composer and native-run controls; short feedback uses only its content height, while long feedback scrolls within a bounded share of that remaining space. Agent activity stays directly above the input.
+
+`test/ui/pinned_composer_test.dart` covers empty, short and long history at 360px/390px, 2× text, multiline drafts, bottom safe-area padding and keyboard open/closed. Queue recovery and the joint pending-approval/live-child-activity tests also exercise reachable controls without sending another inference request.
+
 Widget tests exercise 390×844 and 360px with 2× text and keyboard insets. `docs/previews/saathi-*.png` are Flutter test renders, not physical Android screenshots. The populated conversation previews contain explicitly synthetic display fixtures; no provider was contacted to create them. The older `chat.png`/`activity.png` files are historical Iris demo renders.
