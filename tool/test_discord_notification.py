@@ -56,7 +56,8 @@ class DiscordNotificationTests(unittest.TestCase):
         return self.saved
 
     def run_main(self):
-        with patch.dict(self.scope['main'].__globals__, {'read_json': self.fake_json}):
+        with patch.dict(self.scope['main'].__globals__, {
+                'read_json': self.fake_json, 'read_bytes': lambda *a: self.blob}):
             self.scope['main']()
 
     def test_merge_posts_random_gif_pr_link_and_verifies(self):
@@ -64,7 +65,7 @@ class DiscordNotificationTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 4)
         self.assertIn('/pulls/17', self.calls[1][0])
         self.assertIn(self.pr['title'], self.saved['content'])
-        self.assertIn(self.pr['body'], self.saved['content'])
+        self.assertNotIn(self.pr['body'], self.saved['content'])
         self.assertIn('/commits/' + 'a' * 40 + '/pulls', self.calls[0][0])
         self.assertIn('https://github.com/example/repository/pull/17', self.saved['content'])
         self.assertEqual(self.saved['allowed_mentions'], {'parse': []})
@@ -73,30 +74,54 @@ class DiscordNotificationTests(unittest.TestCase):
         self.assertTrue(self.calls[3][0].endswith('/messages/123456789'))
         self.assertIsNone(self.calls[2][2])
 
-    def test_empty_description_is_honest(self):
-        self.pr['body'] = None
-        self.run_main()
-        self.assertIn('No description provided.', self.saved['content'])
-
-    def test_long_unicode_is_complete_attachment(self):
-        self.pr['body'] = '🦊' * 1200 + '\n$(touch /not-executed) @everyone'
-        captured = []
+    def test_discord_trims_outer_whitespace_without_changing_text(self):
+        self.pr['title'] = 'CI: Full title 🐍\n\n'
         original = self.fake_json
-        def transport(opener, url, payload=None, headers=None, attachment=None):
-            if attachment:
-                captured.append(attachment)
-            result = original(opener, url, payload, headers)
-            if payload is not None and attachment:
-                self.saved['attachments'] = [{'filename': attachment[0], 'size': len(attachment[1]),
-                    'url': 'https://cdn.discordapp.com/attachments/1/2/report.md'}]
+
+        def normalized(opener, url, payload=None, headers=None, attachment=None):
+            result = original(opener, url, payload, headers, attachment)
+            if '/messages/' in url:
+                return dict(result, content=result['content'].strip())
             return result
-        with patch.dict(self.scope['main'].__globals__, {
-                'read_json': transport, 'read_bytes': lambda *a, **kw: captured[0][1]}):
+
+        with patch.dict(self.scope['main'].__globals__, {'read_json': normalized}):
             self.scope['main']()
-        self.assertEqual(len(captured), 1)
-        self.assertIn(self.pr['body'], captured[0][1].decode('utf-8'))
-        self.assertIn(self.pr['title'], captured[0][1].decode('utf-8'))
+        self.assertNotIn(self.pr['body'], self.saved['content'])
+        self.assertEqual(sum(payload is not None for _, payload, _ in self.calls), 1)
+
+    def test_unused_description_is_neither_read_nor_validated(self):
+        for body in (None, '', {'invalid': 'unused'}, 42):
+            with self.subTest(body=body):
+                self.pr['body'] = body
+                self.run_main()
+                self.assertEqual(self.saved['content'],
+                    'Job done! 🎉 PR #17 merged.\nhttps://github.com/example/repository/pull/17\n\n' + self.pr['title'])
+                self.assertNotIn('attachments', self.saved)
+        del self.pr['body']
+        self.run_main()
+
+    def test_long_hostile_unicode_description_is_omitted_without_attachment(self):
+        self.pr['body'] = '🦊' * 1200 + '\n$(touch /not-executed) @everyone <@123> 漢字'
+        self.run_main()
+        self.assertIn(self.pr['title'], self.saved['content'])
+        self.assertNotIn(self.pr['body'], self.saved['content'])
+        self.assertNotIn('attachments', self.saved)
+        self.assertEqual(self.saved['allowed_mentions'], {'parse': []})
+
+    def test_shared_sender_long_build_failure_is_complete_attachment(self):
+        report = 'Native build cycle: failure\nhttps://github.com/ss44/Saathi-Flutter/actions/runs/321\n\n' + (
+            'Failed job 🦊 漢字 @everyone $(exit 1)\nCompile: failure\n'
+            'https://github.com/ss44/Saathi-Flutter/actions/runs/321/job/1\n' * 40)
+        send = self.scope['send_notification']
+        with patch.dict(send.__globals__, {'read_json': self.fake_json,
+                'read_bytes': lambda *a: self.blob}):
+            send(None, os.environ['DISCORD_WEBHOOK_URL'], report,
+                 self.scope['FAILURE_GIFS'], 'native-run-321.md')
+        self.assertEqual(self.blob, report.encode('utf-8'))
+        self.assertEqual(self.saved['attachments'][0]['filename'], 'native-run-321.md')
         self.assertIn('attached', self.saved['content'])
+        self.assertEqual(self.saved['allowed_mentions'], {'parse': []})
+        self.assertIn(self.saved['embeds'][0]['image']['url'], self.scope['FAILURE_GIFS'])
         self.assertLessEqual(len(self.saved['content'].encode('utf-16-le')) // 2, 2000)
 
     def build_fixture(self, conclusion='success', jobs=None):
@@ -184,7 +209,7 @@ class DiscordNotificationTests(unittest.TestCase):
         self.pr['body'] = '<@123> `shell` 🐍 漢字'
         self.run_main()
         self.assertIn(self.pr['title'], self.saved['content'])
-        self.assertIn(self.pr['body'], self.saved['content'])
+        self.assertNotIn(self.pr['body'], self.saved['content'])
         self.assertEqual(self.saved['allowed_mentions'], {'parse': []})
 
     def test_original_branch_guard(self):

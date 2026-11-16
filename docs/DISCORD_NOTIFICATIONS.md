@@ -9,9 +9,10 @@ Pushes to `main` retain the original merged-only guard: the associated PR must
 be closed, actually merged, and match that exact pushed merge SHA, base branch
 and original repository. Direct pushes and closed-but-unmerged PRs do not post.
 For each matching PR, a separate authoritative `GET /repos/{owner}/{repo}/pulls/{number}`
-is revalidated before using its complete title and body. Ordinary text is inline
-as data, not interpolated into shell code. A missing/empty body is labelled
-**No description provided.** The PR link and random celebration GIF remain.
+is revalidated before using its complete title. The compact report contains the
+full title, PR number/link and random celebration GIF only. The PR body is never
+read, validated, posted or attached, even when long, hostile or Unicode. Ordinary
+text is data, not interpolated into shell code.
 
 The only `workflow_run` subscription is `completed` for **Desktop and Android
 binary releases**. It never starts a build, observes Verify Saathi, observes
@@ -39,9 +40,10 @@ verification; live availability remains an external dependency.
 
 Discord content is limited to 2,000 characters. The notifier conservatively counts
 UTF-16 units, including astral Unicode. Reports over that limit use one complete
-UTF-8 Markdown attachment containing the full report, full PR title/body where
-applicable, and links. The message explicitly says the complete report is attached;
-no title, description or failure list is silently truncated. The attachment
+UTF-8 Markdown attachment containing the full report and links. This preserves
+complete long native-build failure lists, including job/step details and log links;
+PR descriptions are never included. The message explicitly says the complete
+report is attached; no title or failure list is silently truncated. The attachment
 filename is generated from validated numeric IDs, never untrusted metadata.
 A conservative local 8 MiB attachment cap fails before POST if exceeded. JSON
 responses are capped at 1 MiB; HTTP requests have 20-second timeouts. These are
@@ -49,7 +51,8 @@ safety bounds, not a claim of unlimited Discord storage or API pagination.
 
 The upload uses multipart `payload_json` and `files[0]`, with explicit attachment
 metadata. Mentions are disabled for both paths. `wait=true` acknowledges the POST;
-then the exact returned message ID is fetched and content/GIF are checked. If
+then the exact returned message ID is fetched and text/GIF are checked. Discord's
+outer-whitespace trimming is permitted; meaningful text changes still fail. If
 attached, the filename and size must match, and a public GET of the validated
 Discord CDN attachment must return byte-for-byte identical complete UTF-8 data.
 No bearer token or webhook credentials are forwarded to that CDN GET. Unexpected
@@ -75,9 +78,11 @@ actionlint .github/workflows/discord-pr-merged.yml
 ```
 
 Tests execute the exact inline script with controlled responses and synthetic
-credentials: inline/empty/long/Unicode/hostile PR data, merge/base/SHA guards,
+credentials: full PR titles and omission of empty/invalid/long/Unicode/hostile
+PR bodies, merge/base/SHA guards,
 native success/skips/failure/timeouts/cancellation, identity rejection, pagination,
-full-report attachments, upload bounds, transport/credential routing, readback
+actual shared-sender complete build-failure attachments, upload bounds,
+transport/credential routing, readback
 corruption, no redirects, no raw logs and no uncertain POST retries.
 
 Real Discord delivery is separate acceptance. After review, CI and merge, the
