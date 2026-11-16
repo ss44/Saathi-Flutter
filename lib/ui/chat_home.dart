@@ -20,12 +20,13 @@ class ChatHome extends StatefulWidget {
   State<ChatHome> createState() => _ChatHomeState();
 }
 
-class _ChatHomeState extends State<ChatHome> {
+class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   bool drawerOpen = false;
   final serverCaches = <Map<String, dynamic>, ConversationServerCache>{};
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     c.addListener(syncServers);
     syncServers();
   }
@@ -42,6 +43,11 @@ class _ChatHomeState extends State<ChatHome> {
           connection, () => ConversationServerCache(c, connection));
       if (drawerOpen && !cache.loaded && !cache.loading) cache.load();
     }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    c.setQueueBackground(state != AppLifecycleState.resumed);
   }
 
   final composer = TextEditingController();
@@ -69,6 +75,11 @@ class _ChatHomeState extends State<ChatHome> {
     }
     searchDebounce?.cancel();
     historySearch.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    c.pauseQueue(
+        'Queue paused because the chat screen closed. Choose Resume when you return.',
+        allSources: true);
+
     composer.dispose();
     scroll.dispose();
     super.dispose();
@@ -91,7 +102,7 @@ class _ChatHomeState extends State<ChatHome> {
 
   Future<void> send() async {
     final text = composer.text.trim();
-    if (await c.send(text)) {
+    if (c.submit(text)) {
       composer.clear();
     }
     if (mounted) {
@@ -346,27 +357,98 @@ class _ChatHomeState extends State<ChatHome> {
                                             EdgeInsets.symmetric(vertical: 18),
                                         child: BusyThinking(busy: true))
                                 ])),
-                  if (c.readOnly)
-                    const Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Text(
-                            'Read-only · This connection was removed or changed. Start a new conversation to send messages.')),
-                  if (c.error != null)
-                    Container(
-                        width: double.infinity,
-                        color: Theme.of(context).colorScheme.errorContainer,
-                        padding: const EdgeInsets.all(16),
-                        child: Text(c.error!,
-                            key: const Key('chat-error'),
-                            style: TextStyle(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onErrorContainer))),
-                  if (c.unsavedChanges)
-                    TextButton.icon(
-                        onPressed: c.retrySave,
-                        icon: const Icon(Icons.save_outlined),
-                        label: const Text('Try saving again')),
+                  if (c.outbox.isNotEmpty ||
+                      c.queueStatus != null ||
+                      c.uncertainInput != null ||
+                      c.readOnly ||
+                      c.error != null ||
+                      c.unsavedChanges)
+                    Flexible(
+                      child: ListView(
+                          key: const Key('chat-feedback'),
+                          shrinkWrap: true,
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          children: [
+                            if (c.outbox.isNotEmpty ||
+                                c.queueStatus != null ||
+                                c.uncertainInput != null)
+                              const Text(
+                                  'Queued · Kept only while Saathi stays open.',
+                                  style: TextStyle(fontSize: 12)),
+                            if (c.queueStatus != null) Text(c.queueStatus!),
+                            if (c.canResumeQueue && c.queueStatus != null)
+                              TextButton(
+                                  onPressed: c.resumeQueue,
+                                  child: const Text('Resume queue')),
+                            if (c.uncertainInput != null)
+                              SelectableText(
+                                  'Not sent again: ${c.uncertainInput!.text}'),
+                            if (c.uncertainInput != null)
+                              TextButton(
+                                child: const Text('Abandon held outbox'),
+                                onPressed: () async {
+                                  final source = c.uncertainInput!.session;
+                                  final confirmed = await showDialog<bool>(
+                                    context: context,
+                                    builder: (context) => AlertDialog(
+                                      scrollable: true,
+                                      title: const Text(
+                                          'Abandon unknown request?'),
+                                      content: const Text(
+                                          'The last request may have executed. Discarding the held outbox does not stop the server or prove there were no side effects. This removes the unknown input and ALL queued followers for this conversation only. Nothing will be resent, and completion is still unknown. You can instead keep this blocked and start a new conversation.'),
+                                      actions: [
+                                        TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(context, false),
+                                            child: const Text('Keep blocked')),
+                                        TextButton(
+                                            onPressed: () =>
+                                                Navigator.pop(context, true),
+                                            child: const Text('Abandon all')),
+                                      ],
+                                    ),
+                                  );
+                                  if (confirmed == true) {
+                                    c.abandonHeldOutbox(source);
+                                  }
+                                },
+                              ),
+                            for (final item in c.outbox)
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Queued'),
+                                subtitle: Text(item.text,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis),
+                                trailing: TextButton(
+                                    onPressed: () => c.cancelQueued(item),
+                                    child: const Text('Cancel')),
+                              ),
+                            if (c.readOnly)
+                              const Padding(
+                                  padding: EdgeInsets.all(16),
+                                  child: Text(
+                                      'Read-only · This connection was removed or changed. Start a new conversation to send messages.')),
+                            if (c.error != null)
+                              Container(
+                                  width: double.infinity,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .errorContainer,
+                                  padding: const EdgeInsets.all(16),
+                                  child: Text(c.error!,
+                                      key: const Key('chat-error'),
+                                      style: TextStyle(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .onErrorContainer))),
+                            if (c.unsavedChanges)
+                              TextButton.icon(
+                                  onPressed: c.retrySave,
+                                  icon: const Icon(Icons.save_outlined),
+                                  label: const Text('Try saving again')),
+                          ]),
+                    ),
                   SafeArea(
                       top: false,
                       child: Padding(
@@ -388,11 +470,16 @@ class _ChatHomeState extends State<ChatHome> {
                                               key: const Key('composer'),
                                               controller: composer,
                                               enabled: session != null &&
-                                                  !c.busy &&
+                                                  !c.unsavedChanges &&
                                                   !c.readOnly &&
                                                   !c.changingConnection,
                                               minLines: 1,
-                                              maxLines: 6,
+                                              maxLines: MediaQuery.viewInsetsOf(
+                                                              context)
+                                                          .bottom >
+                                                      0
+                                                  ? 2
+                                                  : 6,
                                               textCapitalization:
                                                   TextCapitalization.sentences,
                                               onChanged: (_) => setState(() {}),
@@ -404,7 +491,8 @@ class _ChatHomeState extends State<ChatHome> {
                                           onPressed: c.readOnly ||
                                                   c.changingConnection ||
                                                   session == null ||
-                                                  c.busy ||
+                                                  c.unsavedChanges ||
+                                                  c.queueStatus != null ||
                                                   composer.text.trim().isEmpty
                                               ? null
                                               : send,
