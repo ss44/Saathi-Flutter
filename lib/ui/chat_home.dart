@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'local_history_search.dart';
 import '../update_host.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -41,6 +43,20 @@ class _ChatHomeState extends State<ChatHome> {
   }
 
   final composer = TextEditingController();
+  final historySearch = TextEditingController();
+  Timer? searchDebounce;
+  String historyQuery = '';
+  void searchHistory(String value) {
+    searchDebounce?.cancel();
+    if (value.trim().isEmpty) {
+      setState(() => historyQuery = '');
+    } else {
+      searchDebounce = Timer(const Duration(milliseconds: 200), () {
+        if (mounted) setState(() => historyQuery = value);
+      });
+    }
+  }
+
   final scroll = ScrollController();
   ChatController get c => widget.controller;
   @override
@@ -49,6 +65,8 @@ class _ChatHomeState extends State<ChatHome> {
     for (final cache in serverCaches.values) {
       cache.dispose();
     }
+    searchDebounce?.cancel();
+    historySearch.dispose();
     composer.dispose();
     scroll.dispose();
     super.dispose();
@@ -119,6 +137,8 @@ class _ChatHomeState extends State<ChatHome> {
       listenable: c,
       builder: (context, _) {
         final session = c.current;
+        final localMatches =
+            searchLocalHistory(c.sessions.reversed, historyQuery);
         final names = c.connections
             .where((entry) => entry['id'] == session?.connectionId);
         final subtitle = session == null
@@ -171,47 +191,98 @@ class _ChatHomeState extends State<ChatHome> {
                   child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                const Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Text('Conversations',
-                        style: TextStyle(
-                            fontSize: 24, fontWeight: FontWeight.w600))),
+                if (MediaQuery.viewInsetsOf(context).bottom == 0)
+                  const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text('Conversations',
+                          style: TextStyle(
+                              fontSize: 24, fontWeight: FontWeight.w600))),
+                if (MediaQuery.viewInsetsOf(context).bottom == 0)
+                  Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: FilledButton.icon(
+                          onPressed: c.busy
+                              ? null
+                              : () {
+                                  Navigator.pop(context);
+                                  newChat();
+                                },
+                          icon: const Icon(Icons.add),
+                          label: const Text('New conversation'))),
                 Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: FilledButton.icon(
-                        onPressed: c.busy
-                            ? null
-                            : () {
-                                Navigator.pop(context);
-                                newChat();
-                              },
-                        icon: const Icon(Icons.add),
-                        label: const Text('New conversation'))),
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: TextField(
+                    key: const Key('local-history-search'),
+                    controller: historySearch,
+                    onChanged: searchHistory,
+                    decoration: InputDecoration(
+                      labelText: 'Search local chats',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: IconButton(
+                          tooltip: 'Clear search',
+                          onPressed: () {
+                            historySearch.clear();
+                            searchHistory('');
+                          },
+                          icon: const Icon(Icons.close)),
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 12),
                 Expanded(
-                    child: ListView(children: [
-                  const ListTile(title: Text('On this device')),
-                  for (final s in c.sessions.reversed)
-                    ListTile(
-                        selected: s == session,
-                        enabled: !c.busy,
-                        title: Text(s.title,
-                            maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle: Text('On this device · ${s.model}',
-                            maxLines: 1, overflow: TextOverflow.ellipsis),
-                        onTap: () {
-                          c.select(s);
-                          composer.clear();
-                          Navigator.pop(context);
-                        }),
-                  for (final cache in serverCaches.values)
-                    ConversationServer(
-                        key: ObjectKey(cache.connection), cache: cache),
-                ])),
-                const Padding(
-                    padding: EdgeInsets.all(20),
-                    child: Text('Local history stays bound to its connection.',
-                        style: TextStyle(color: muted)))
+                    child: ListView.builder(
+                        itemCount: 2 +
+                            (localMatches.isEmpty && historyQuery.isNotEmpty
+                                ? 1
+                                : localMatches.length) +
+                            serverCaches.length,
+                        itemBuilder: (context, index) {
+                          if (index == 0) {
+                            return const ListTile(
+                                title: Text('On this device'));
+                          }
+                          final localCount =
+                              localMatches.isEmpty && historyQuery.isNotEmpty
+                                  ? 1
+                                  : localMatches.length;
+                          if (index == 1 + localCount + serverCaches.length) {
+                            return MediaQuery.viewInsetsOf(context).bottom == 0
+                                ? const Padding(
+                                    padding: EdgeInsets.all(12),
+                                    child: Text(
+                                        'Search stays on this device. History stays with its original connection and is not end-to-end encrypted.',
+                                        style: TextStyle(color: muted)))
+                                : const SizedBox.shrink();
+                          }
+                          if (index > localCount) {
+                            final cache = serverCaches.values
+                                .elementAt(index - localCount - 1);
+                            return ConversationServer(
+                                key: ObjectKey(cache.connection), cache: cache);
+                          }
+                          if (localMatches.isEmpty) {
+                            return const ListTile(
+                                title: Text('No matching conversations'));
+                          }
+                          final match = localMatches[index - 1];
+                          final s = match.session;
+                          return ListTile(
+                              selected: s == session,
+                              enabled: !c.busy,
+                              title: Text(s.title,
+                                  maxLines: 1, overflow: TextOverflow.ellipsis),
+                              subtitle: Text(
+                                  match.snippet == null
+                                      ? 'On this device · ${s.model}'
+                                      : '${match.snippet}\nOn this device · ${s.model}',
+                                  maxLines: match.snippet == null ? 1 : 3,
+                                  overflow: TextOverflow.ellipsis),
+                              onTap: () {
+                                c.select(s);
+                                composer.clear();
+                                Navigator.pop(context);
+                              });
+                        })),
               ]))),
           body: c.loading
               ? const Center(child: CircularProgressIndicator())

@@ -136,7 +136,9 @@ void main() {
       });
       await t.pumpAndSettle();
       final drawerScroll = find.descendant(
-          of: find.byType(Drawer), matching: find.byType(Scrollable));
+          of: find.descendant(
+              of: find.byType(Drawer), matching: find.byType(ListView)),
+          matching: find.byType(Scrollable));
       await t.scrollUntilVisible(find.text('Try again'), 200,
           scrollable: drawerScroll);
       expect(find.textContaining('PRIVATE'), findsNothing);
@@ -150,7 +152,9 @@ void main() {
       await t.pumpAndSettle();
       await t.scrollUntilVisible(find.text('Remote first'), 150,
           scrollable: find.descendant(
-              of: find.byType(Drawer), matching: find.byType(Scrollable)));
+              of: find.descendant(
+                  of: find.byType(Drawer), matching: find.byType(ListView)),
+              matching: find.byType(Scrollable)));
       await t.ensureVisible(find.text('Remote first'));
       await t.pumpAndSettle();
       expect(find.text('Remote first').hitTestable(), findsOneWidget);
