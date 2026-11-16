@@ -5,13 +5,17 @@ name: Discord merged PR notification
 on:
   push:
     branches: [main]
+  workflow_run:
+    workflows: ['Desktop and Android binary releases']
+    types: [completed]
 
 permissions:
   contents: read
   pull-requests: read
+  actions: read
 
 concurrency:
-  group: discord-pr-merged-${{ github.sha }}
+  group: discord-notification-${{ github.event.workflow_run.id || github.sha }}-${{ github.event.workflow_run.run_attempt || 1 }}
   cancel-in-progress: false
 
 jobs:
@@ -39,14 +43,31 @@ jobs:
               'https://media.giphy.com/media/111ebonMs90YLu/giphy.gif',
           )
 
+          FAILURE_GIFS = (
+              'https://media.giphy.com/media/9Y5BbDSkSTiY8/giphy.gif',
+              'https://media.giphy.com/media/8L0Pky6C83SzkzU55a/giphy.gif',
+              'https://media.giphy.com/media/d2lcHJTG5Tscg/giphy.gif',
+          )
+          BUILD_WORKFLOW = 'Desktop and Android binary releases'
+          BUILD_PATH = '.github/workflows/release-desktop.yml'
+
           class NoRedirect(urllib.request.HTTPRedirectHandler):
               def redirect_request(self, req, fp, code, msg, headers, newurl):
                   return None
 
-          def read_json(opener, url, payload=None, headers=None):
+          def read_json(opener, url, payload=None, headers=None, attachment=None):
               data = None if payload is None else json.dumps(payload).encode('utf-8')
+              content_type = 'application/json'
+              if attachment is not None:
+                  filename, raw = attachment
+                  boundary = 'saathi-' + secrets.token_hex(24)
+                  content_type = 'multipart/form-data; boundary=' + boundary
+                  data = (f'--{boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\n'
+                          'Content-Type: application/json\r\n\r\n').encode() + data + (
+                          f'\r\n--{boundary}\r\nContent-Disposition: form-data; name="files[0]"; '
+                          f'filename="{filename}"\r\nContent-Type: text/markdown; charset=utf-8\r\n\r\n').encode() + raw + f'\r\n--{boundary}--\r\n'.encode()
               request = urllib.request.Request(url, data=data, headers={
-                  'Content-Type': 'application/json',
+                  'Content-Type': content_type,
                   'User-Agent': 'Saathi-Merged-PR-Notifier/1.0',
                   **(headers or {}),
               })
@@ -61,13 +82,143 @@ jobs:
                   # Do not automatically retry an uncertain notification POST.
                   raise RuntimeError('Notification request failed; sensitive details suppressed.') from None
 
+          MAX_ATTACHMENT = 8 * 1024 * 1024
+
+          def read_bytes(opener, url, limit=MAX_ATTACHMENT):
+              try:
+                  with opener.open(urllib.request.Request(url, headers={
+                          'User-Agent': 'Saathi-Notifier/1.0'}), timeout=20) as response:
+                      data = response.read(limit + 1)
+                      if len(data) > limit:
+                          raise ValueError('Oversized attachment')
+                      return data
+              except Exception:
+                  raise RuntimeError('Attachment request failed; sensitive details suppressed.') from None
+
+          def send_notification(opener, webhook, report, gifs, filename):
+              # UTF-16 units conservatively account for astral Unicode at Discord's limit.
+              attachment = None
+              content = report
+              if len(report.encode('utf-16-le')) // 2 > 2000:
+                  raw = report.encode('utf-8')
+                  if len(raw) > MAX_ATTACHMENT:
+                      raise RuntimeError('Complete report exceeds attachment limit; nothing sent')
+                  attachment = (filename, raw)
+                  content = report.split('\n\n', 1)[0] + '\nComplete report attached (UTF-8 Markdown).'
+                  if len(content.encode('utf-16-le')) // 2 > 2000:
+                      raise RuntimeError('Notification summary exceeds message limit')
+              payload = {'content': content, 'allowed_mentions': {'parse': []},
+                         'embeds': [{'image': {'url': secrets.choice(gifs)}}]}
+              if attachment:
+                  payload['attachments'] = [{'id': 0, 'filename': filename}]
+                  posted = read_json(opener, webhook + '?wait=true', payload, attachment=attachment)
+              else:
+                  posted = read_json(opener, webhook + '?wait=true', payload)
+              message_id = posted.get('id', '')
+              if not isinstance(message_id, str) or not re.fullmatch(r'[0-9]{1,32}', message_id):
+                  raise RuntimeError('Discord did not acknowledge a message ID')
+              saved = read_json(opener, webhook + '/messages/' + message_id)
+              images = [embed.get('image', {}).get('url') for embed in saved.get('embeds', [])]
+              if (saved.get('id') != message_id or saved.get('content') != content
+                      or payload['embeds'][0]['image']['url'] not in images):
+                  raise RuntimeError('Discord message readback did not match')
+              attachments = saved.get('attachments', [])
+              if attachment:
+                  if (len(attachments) != 1 or attachments[0].get('filename') != filename
+                          or attachments[0].get('size') != len(attachment[1])):
+                      raise RuntimeError('Discord attachment readback did not match')
+                  url = attachments[0].get('url', '')
+                  if not re.fullmatch(r'https://cdn\.discordapp\.com/attachments/[0-9]+/[0-9]+/[A-Za-z0-9_.%-]+(?:\?[^\s#]*)?', url):
+                      raise RuntimeError('Invalid Discord attachment destination')
+                  # Public CDN GET: no GitHub bearer or webhook credential, no redirects.
+                  if read_bytes(opener, url) != attachment[1]:
+                      raise RuntimeError('Discord attachment content readback did not match')
+              elif attachments:
+                  raise RuntimeError('Unexpected Discord attachment')
+              print(f'Discord message verified: {message_id}.')
+
+          def notify_build(opener, webhook, repository, event, headers):
+              run = event.get('workflow_run', {})
+              if (repository != 'ss44/Saathi-Flutter' or event.get('action') != 'completed'
+                      or run.get('name') != BUILD_WORKFLOW or run.get('status') != 'completed'
+                      or run.get('repository', {}).get('full_name') != repository
+                      or run.get('head_repository', {}).get('full_name') != repository):
+                  return
+              run_id, attempt = run.get('id'), run.get('run_attempt')
+              if (type(run_id) is not int or run_id <= 0 or type(attempt) is not int or attempt <= 0
+                      or not re.fullmatch(r'[a-f0-9]{40}', run.get('head_sha', ''))):
+                  raise RuntimeError('Invalid native run identity')
+              api = f'https://api.github.com/repos/{repository}/actions'
+              workflow = read_json(opener, api + '/workflows/release-desktop.yml', headers=headers)
+              actual = read_json(opener, api + f'/runs/{run_id}', headers=headers)
+              if (workflow.get('name') != BUILD_WORKFLOW or workflow.get('path') != BUILD_PATH
+                      or workflow.get('id') != run.get('workflow_id')
+                      or actual.get('path') != BUILD_PATH
+                      or any(actual.get(key) != run.get(key) for key in (
+                          'id', 'workflow_id', 'name', 'status', 'conclusion', 'run_attempt', 'head_sha'))
+                      or actual.get('repository', {}).get('full_name') != repository
+                      or actual.get('head_repository', {}).get('full_name') != repository):
+                  raise RuntimeError('Native workflow/run identity mismatch')
+              outcome = actual.get('conclusion')
+              if outcome not in ('success', 'failure', 'timed_out', 'cancelled', 'skipped',
+                                 'neutral', 'action_required', 'stale', 'startup_failure'):
+                  raise RuntimeError('Unknown native run outcome')
+              jobs, seen = [], set()
+              total = None
+              for page in range(1, 11):
+                  inventory = read_json(opener,
+                      api + f'/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page={page}', headers=headers)
+                  rows, count = inventory.get('jobs'), inventory.get('total_count')
+                  if (not isinstance(rows, list) or type(count) is not int or count < 0
+                          or (total is not None and count != total)):
+                      raise RuntimeError('Invalid native jobs inventory')
+                  total = count
+                  for job in rows:
+                      job_id = job.get('id')
+                      if type(job_id) is not int or job_id <= 0 or job_id in seen or job.get('run_id') != run_id:
+                          raise RuntimeError('Invalid native job identity')
+                      seen.add(job_id)
+                      jobs.append(job)
+                  if len(rows) < 100:
+                      break
+              else:
+                  raise RuntimeError('Native jobs exceeded notification limit')
+              if len(jobs) != total:
+                  raise RuntimeError('Incomplete native jobs inventory')
+              link = f'https://github.com/{repository}/actions/runs/{run_id}/attempts/{attempt}'
+              title = 'Native build cycle succeeded' if outcome == 'success' else f'Native build cycle: {outcome}'
+              lines = [f'{title}.\n{link}', '']
+              if outcome == 'success':
+                  native = [j for j in jobs if j.get('name', '').startswith('Build ')]
+                  if native and all(j.get('conclusion') == 'success' for j in native):
+                      lines.append('Reported native jobs succeeded; see the run for publication status.')
+                  elif native and all(j.get('conclusion') == 'skipped' for j in native):
+                      lines.append('Native builds skipped; not evidence of a new release (for example, unchanged source).')
+                  else:
+                      lines.append('Native build details unavailable or incomplete; not evidence of a new release.')
+              bad = {'failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure'}
+              details = []
+              for job in jobs:
+                  steps = [s for s in job.get('steps', []) if s.get('conclusion') in bad]
+                  if job.get('conclusion') in bad or steps:
+                      job_link = f'https://github.com/{repository}/actions/runs/{run_id}/job/{job["id"]}'
+                      details.append(f'- Job: {job.get("name", "Unnamed job")} — {job.get("conclusion")}\n  Logs: {job_link}')
+                      for step in steps:
+                          details.append(f'  - Step: {step.get("name", "Unnamed step")} — {step.get("conclusion")}')
+              lines.extend(details)
+              if outcome != 'success' and not details:
+                  lines.append('No failed job/step details available from GitHub; see the run. No root cause inferred.')
+              send_notification(opener, webhook, '\n'.join(lines),
+                  GIFS if outcome == 'success' else FAILURE_GIFS, f'native-run-{run_id}-{attempt}.md')
+
           def main():
               event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
-              if event.get('ref') != 'refs/heads/main':
+              build_event = os.environ.get('GITHUB_EVENT_NAME') == 'workflow_run'
+              if not build_event and event.get('ref') != 'refs/heads/main':
                   return
               commit = event.get('after', '')
               repository = os.environ['GITHUB_REPOSITORY']
-              if (not re.fullmatch(r'[a-f0-9]{40}', commit)
+              if ((not build_event and not re.fullmatch(r'[a-f0-9]{40}', commit))
                       or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository)):
                   raise ValueError('Invalid merge identity')
               webhook = os.environ.get('DISCORD_WEBHOOK_URL', '')
@@ -79,6 +230,9 @@ jobs:
                   'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
                   'X-GitHub-Api-Version': '2022-11-28',
               }
+              if build_event:
+                  notify_build(opener, webhook, repository, event, headers)
+                  return
               merged = {}
               for page in range(1, 11):
                   rows = read_json(opener,
@@ -101,21 +255,18 @@ jobs:
                   raise RuntimeError('GitHub PR inventory exceeded notification limit')
               for number in sorted(merged):
                   link = f'https://github.com/{repository}/pull/{number}'
-                  payload = {
-                      'content': f'Job done! 🎉 PR #{number} merged.\n{link}',
-                      'allowed_mentions': {'parse': []},
-                      'embeds': [{'image': {'url': secrets.choice(GIFS)}}],
-                  }
-                  posted = read_json(opener, webhook + '?wait=true', payload)
-                  message_id = posted.get('id', '')
-                  if not isinstance(message_id, str) or not re.fullmatch(r'[0-9]{1,32}', message_id):
-                      raise RuntimeError('Discord did not acknowledge a message ID')
-                  saved = read_json(opener, webhook + '/messages/' + message_id)
-                  images = [embed.get('image', {}).get('url') for embed in saved.get('embeds', [])]
-                  if (saved.get('id') != message_id or saved.get('content') != payload['content']
-                          or payload['embeds'][0]['image']['url'] not in images):
-                      raise RuntimeError('Discord message readback did not match')
-                  print(f'Discord message verified: {message_id}; PR #{number}.')
+                  pr = read_json(opener,
+                      f'https://api.github.com/repos/{repository}/pulls/{number}', headers=headers)
+                  if (pr.get('number') != number or pr.get('state') != 'closed'
+                          or not pr.get('merged_at') or pr.get('merge_commit_sha') != commit
+                          or pr.get('base', {}).get('ref') != 'main'
+                          or pr.get('base', {}).get('repo', {}).get('full_name') != repository):
+                      raise RuntimeError('Authoritative PR identity mismatch')
+                  title, body = pr.get('title'), pr.get('body')
+                  if not isinstance(title, str) or (body is not None and not isinstance(body, str)):
+                      raise RuntimeError('Invalid PR text')
+                  report = f'Job done! 🎉 PR #{number} merged.\n{link}\n\n{title}\n\n{body if body else "No description provided."}'
+                  send_notification(opener, webhook, report, GIFS, f'pr-{number}.md')
               if not merged:
                   print('No PR merged by this commit; nothing sent.')
 
