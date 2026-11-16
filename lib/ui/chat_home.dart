@@ -5,6 +5,8 @@ import '../update_host.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import '../agent_runs/run_client.dart';
+import '../agent_controls/agent_controls.dart';
+import '../agent_controls/agent_controls_panel.dart';
 import 'chat_controller.dart';
 import 'busy_thinking.dart';
 import 'connections.dart';
@@ -23,18 +25,112 @@ class ChatHome extends StatefulWidget {
 
 class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   bool drawerOpen = false;
+  AgentControlsController? controls;
+  bool openingControls = false;
+  Object controlsOwner = Object();
+  StreamSubscription<ScopedRunSnapshot>? controlsUpdates;
+
+  void revokeControls() {
+    controlsOwner = Object();
+    controls?.revoke();
+    controls = null;
+  }
+
+  Future<void> reviewControls() async {
+    if (openingControls || controls != null) return;
+    openingControls = true;
+    final owner = controlsOwner;
+    AgentControlsController? acquired;
+    try {
+      final controller = await c.openRunControls(
+          isOwnerCurrent: () => mounted && identical(owner, controlsOwner));
+      if (controller == null) return;
+      acquired = controller;
+      controls = controller;
+      if (!mounted) {
+        revokeControls();
+        return;
+      }
+      await showModalBottomSheet<void>(
+          context: context,
+          isScrollControlled: true,
+          useSafeArea: true,
+          showDragHandle: true,
+          builder: (context) => SizedBox(
+              height: MediaQuery.sizeOf(context).height * .75,
+              child: AnimatedBuilder(
+                  animation: c,
+                  builder: (context, _) => controller.isCurrent
+                      ? AgentControlsPanel(
+                          controller: controller, redact: controller.redact)
+                      : const Center(
+                          child: Text('Request no longer available.')))));
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content:
+                Text('Could not open requests. Check status and try again.')));
+      }
+    } finally {
+      revokeControls();
+      acquired?.dispose();
+      openingControls = false;
+    }
+  }
+
   final serverCaches = <Map<String, dynamic>, ConversationServerCache>{};
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     c.addListener(syncServers);
+    listenControls();
     c.pauseRuns(
         WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed);
     syncServers();
   }
 
+  @override
+  void didUpdateWidget(covariant ChatHome oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (identical(oldWidget.controller, c)) return;
+    revokeControls();
+    controlsUpdates?.cancel();
+    oldWidget.controller.removeListener(syncServers);
+    oldWidget.controller.pauseRuns(true);
+    for (final cache in serverCaches.values) {
+      cache.dispose();
+    }
+    serverCaches.clear();
+    c.addListener(syncServers);
+    listenControls();
+    c.pauseRuns(
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed);
+    syncServers();
+  }
+
+  void listenControls() {
+    controlsUpdates = c.scopedRunSnapshots.listen((event) {
+      final controller = controls;
+      if (controller == null ||
+          !controller.isCurrent ||
+          !event.isCurrent() ||
+          event.localChatId != c.current?.id ||
+          event.operationKey != c.currentRun?.key ||
+          !identical(event.connectionRevision,
+              controller.boundary.scope.authorityToken)) {
+        return;
+      }
+      try {
+        controller.updateSnapshot(PendingControlsSnapshot.fromJson(
+            controller.boundary.scope, event.snapshot.data));
+        // The normal poll is authoritative; never issue another poll from it.
+      } catch (_) {/* The next explicit refresh reports malformed status. */}
+    });
+  }
+
   void syncServers() {
+    if (controls != null && !controls!.isCurrent) revokeControls();
     for (final connection in serverCaches.keys.toList()) {
       if (!c.isCurrentConnection(connection)) {
         serverCaches.remove(connection)!.dispose();
@@ -52,6 +148,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     c.setQueueBackground(state != AppLifecycleState.resumed);
     c.pauseRuns(state != AppLifecycleState.resumed);
+    if (state != AppLifecycleState.resumed) revokeControls();
   }
 
   Future<void> acknowledgeUnknown() async {
@@ -103,6 +200,8 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   ChatController get c => widget.controller;
   @override
   void dispose() {
+    controlsUpdates?.cancel();
+    revokeControls();
     c.removeListener(syncServers);
     for (final cache in serverCaches.values) {
       cache.dispose();
@@ -496,24 +595,63 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                   if (c.currentRun != null && c.runPending)
                     Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Wrap(
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            children: [
-                              Text('Run: ${c.currentRun!.snapshot.status}'),
-                              TextButton(
-                                  onPressed:
-                                      c.busy ? null : () => c.checkRunStatus(),
-                                  child: Text(c.currentRun!.runId == null
-                                      ? 'Reconnect'
-                                      : 'Check status')),
-                              if (c.currentRun!.snapshot.status == 'unknown' &&
-                                  c.currentRun!.runId != null)
-                                TextButton(
-                                    onPressed:
-                                        c.busy ? null : acknowledgeUnknown,
-                                    child: const Text(
-                                        'Acknowledge unknown outcome')),
-                            ])),
+                        child: !c.currentRun!.snapshot.terminal &&
+                                c.currentRun!.snapshot.pendingControls
+                                    .isNotEmpty
+                            ? Row(children: [
+                                Expanded(
+                                    child: TextButton.icon(
+                                        onPressed: reviewControls,
+                                        icon: const Icon(Icons.pending_actions),
+                                        label: Text(
+                                            c.currentRun!.snapshot
+                                                    .pendingControls
+                                                    .any((p) =>
+                                                        p['kind'] == 'approval')
+                                                ? 'Review action'
+                                                : 'Answer needed',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis))),
+                                IconButton(
+                                    tooltip: 'Check status',
+                                    onPressed: c.busy
+                                        ? null
+                                        : () => c.checkRunStatus(),
+                                    icon: const Icon(Icons.refresh)),
+                              ])
+                            : Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                    Row(children: [
+                                      Expanded(
+                                          child: Text(
+                                              'Run: ${c.currentRun!.snapshot.status}',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis)),
+                                      if (c.currentRun!.runId == null)
+                                        TextButton(
+                                            onPressed: c.busy
+                                                ? null
+                                                : () => c.checkRunStatus(),
+                                            child: const Text('Reconnect'))
+                                      else
+                                        IconButton(
+                                            tooltip: 'Check status',
+                                            onPressed: c.busy
+                                                ? null
+                                                : () => c.checkRunStatus(),
+                                            icon: const Icon(Icons.refresh)),
+                                    ]),
+                                    if (c.currentRun!.snapshot.status ==
+                                            'unknown' &&
+                                        c.currentRun!.runId != null)
+                                      TextButton(
+                                          onPressed: c.busy
+                                              ? null
+                                              : acknowledgeUnknown,
+                                          child: const Text(
+                                              'Acknowledge unknown outcome')),
+                                  ])),
                   SafeArea(
                       top: false,
                       child: Padding(
