@@ -9,6 +9,7 @@ import 'busy_thinking.dart';
 import 'connections.dart';
 import 'safe_markdown.dart';
 import 'conversation_servers.dart';
+import 'prompt_optimizer.dart';
 
 const muted = Color(0xFF6A7470);
 
@@ -410,6 +411,12 @@ class _ChatHomeState extends State<ChatHome> {
                                           icon: const Icon(
                                               Icons.arrow_upward_rounded))
                                     ])),
+                            Align(
+                                alignment: Alignment.centerLeft,
+                                child: PromptOptimizer(
+                                    key: ValueKey(session?.id),
+                                    controller: c,
+                                    composer: composer)),
                             const SizedBox(height: 8),
                             const Text(
                                 'AI can make mistakes. Review important details.',
