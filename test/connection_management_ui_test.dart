@@ -6,7 +6,129 @@ import 'package:saathi/ui/chat_controller.dart';
 import 'package:saathi/ui/connections.dart';
 import 'package:saathi/ui/chat_home.dart';
 
+Finder railAction(IconData icon) => find.widgetWithIcon(IconButton, icon);
+
 void main() {
+  for (final width in [360.0, 390.0]) {
+    testWidgets('swipe icons are accessible and preserve actions at $width/2x',
+        (t) async {
+      t.view.physicalSize = Size(width, 844);
+      t.view.devicePixelRatio = 1;
+      addTearDown(t.view.resetPhysicalSize);
+      addTearDown(t.view.resetDevicePixelRatio);
+      final semantics = t.ensureSemantics();
+      SharedPreferences.setMockInitialValues({});
+      final c = ChatController(SaathiStore(
+          preferences: await SharedPreferences.getInstance(),
+          secrets: MemorySecrets()));
+      addTearDown(c.dispose);
+      await c.load();
+      await c.addConnection({
+        'id': 'icons',
+        'name': 'Fixture',
+        'type': 'hermes',
+        'url': 'https://example.test'
+      }, 'fixture-secret');
+      final original = Map<String, dynamic>.from(c.connections.single);
+      await t.pumpWidget(MaterialApp(
+          builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context)
+                  .copyWith(textScaler: const TextScaler.linear(2)),
+              child: child!),
+          home: ConnectionsPage(controller: c)));
+      await t.scrollUntilVisible(find.text('Fixture'), 200,
+          scrollable: find.byType(Scrollable));
+      await t.pumpAndSettle();
+      await t.drag(find.text('Fixture'), const Offset(-300, 0));
+      await t.pumpAndSettle();
+      for (final entry in {
+        Icons.edit_outlined: 'Edit',
+        Icons.delete_outline: 'Delete'
+      }.entries) {
+        final button = railAction(entry.key);
+        expect(button.hitTestable(), findsOneWidget);
+        expect(t.widget<IconButton>(button).tooltip, entry.value);
+        expect(
+            t.getSemantics(button),
+            matchesSemantics(
+                label: entry.value,
+                isButton: true,
+                hasEnabledState: true,
+                isEnabled: true,
+                hasTapAction: true,
+                hasFocusAction: true,
+                isFocusable: true));
+        expect(t.getSize(button).width, greaterThanOrEqualTo(48));
+        expect(t.getSize(button).height, greaterThanOrEqualTo(48));
+      }
+      expect(find.text('Edit'), findsNothing);
+      expect(find.text('Delete'), findsNothing);
+      await t.tap(railAction(Icons.edit_outlined));
+      await t.pumpAndSettle();
+      expect(find.byType(AddConnectionPage), findsOneWidget);
+      expect(find.text('Edit connection'), findsOneWidget);
+      expect(
+          t
+              .widget<TextFormField>(find.byType(TextFormField).first)
+              .controller!
+              .text,
+          'Fixture');
+      await t.scrollUntilVisible(find.byKey(const Key('connection-key')), 200,
+          scrollable: find
+              .descendant(
+                  of: find.byType(AddConnectionPage),
+                  matching: find.byType(Scrollable))
+              .first);
+      final key = t.widget<TextField>(find.descendant(
+          of: find.byKey(const Key('connection-key')),
+          matching: find.byType(TextField)));
+      expect(key.obscureText, isTrue);
+      expect(key.controller!.text, 'fixture-secret');
+      Navigator.of(t.element(find.byType(AddConnectionPage))).pop();
+      await t.pumpAndSettle();
+      await t.drag(find.text('Fixture'), const Offset(-300, 0));
+      await t.pumpAndSettle();
+      await t.tap(railAction(Icons.delete_outline));
+      await t.pumpAndSettle();
+      expect(find.text('Delete “Fixture”?'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Delete'), findsOneWidget);
+      await t.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await t.pumpAndSettle();
+      expect(c.connections.single, original);
+      expect((await c.store.load()).connections.single, original);
+      expect(await c.store.secrets.read('icons'), 'fixture-secret');
+      await t.tap(find.byTooltip('Connection actions'));
+      await t.pumpAndSettle();
+      expect(find.widgetWithText(PopupMenuItem<String>, 'Edit').hitTestable(),
+          findsOneWidget);
+      expect(find.widgetWithText(PopupMenuItem<String>, 'Delete').hitTestable(),
+          findsOneWidget);
+      Navigator.of(t.element(find.byType(PopupMenuItem<String>).first)).pop();
+      await t.pumpAndSettle();
+      await t.drag(find.text('Fixture'), const Offset(-300, 0));
+      await t.pumpAndSettle();
+      c.busy = true;
+      c.notifyListeners();
+      await t.pumpAndSettle();
+      expect(c.canChangeConnections, isFalse);
+      for (final icon in [Icons.edit_outlined, Icons.delete_outline]) {
+        expect(t.widget<IconButton>(railAction(icon)).onPressed, isNull);
+        await t.tap(railAction(icon));
+      }
+      expect(
+          t
+              .widget<PopupMenuButton<String>>(
+                  find.byType(PopupMenuButton<String>))
+              .enabled,
+          isFalse);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(AddConnectionPage), findsNothing);
+      expect(c.connections.single, original);
+      expect(t.takeException(), isNull);
+      await t.pumpWidget(const SizedBox.shrink());
+      semantics.dispose();
+    });
+  }
   for (final width in [390.0, 360.0]) {
     testWidgets(
         'edit form scrolls Save into keyboard viewport at $width and 2x text',
@@ -75,8 +197,8 @@ void main() {
     await t.pumpAndSettle();
     expect(t.getTopLeft(find.text('First')), first);
     expect(t.getTopLeft(find.text('Second')).dx, second.dx - 160);
-    expect(find.text('Edit'), findsOneWidget);
-    await t.tap(find.text('Delete'));
+    expect(railAction(Icons.edit_outlined), findsOneWidget);
+    await t.tap(railAction(Icons.delete_outline));
     await t.pumpAndSettle();
     expect(c.connections, hasLength(2));
     await t.tap(find.text('Delete').last);
@@ -127,9 +249,9 @@ void main() {
     await t.pumpAndSettle();
     expect(t.getTopLeft(find.text('Fixture')).dx, lessThan(before.dx - 100));
     expect(c.connections, hasLength(1));
-    expect(find.text('Edit'), findsOneWidget);
+    expect(railAction(Icons.edit_outlined), findsOneWidget);
     expect(find.byTooltip('Browse remote sessions'), findsOneWidget);
-    await t.tap(find.text('Edit'));
+    await t.tap(railAction(Icons.edit_outlined));
     await t.pumpAndSettle();
     expect(find.text('Edit connection'), findsOneWidget);
     expect(find.text('Fixture'), findsOneWidget);
