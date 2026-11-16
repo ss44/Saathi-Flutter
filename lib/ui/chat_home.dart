@@ -92,8 +92,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     c.addListener(syncServers);
     listenControls();
-    c.pauseRuns(
-        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed);
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    c.pauseRuns(lifecycle != AppLifecycleState.resumed,
+        pauseCatalog:
+            lifecycle != null && lifecycle != AppLifecycleState.detached);
     syncServers();
   }
 

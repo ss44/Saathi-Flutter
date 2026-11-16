@@ -9,11 +9,13 @@ import '../storage/saathi_store.dart';
 
 class ChatSession {
   final String id, connectionId, model, systemPrompt;
+  final String? upstreamProvider;
   final List<ChatMessage> messages;
   ChatSession(
       {required this.id,
       required this.connectionId,
       required this.model,
+      this.upstreamProvider,
       this.systemPrompt = '',
       List<ChatMessage>? messages})
       : messages = messages ?? [];
@@ -23,6 +25,7 @@ class ChatSession {
         'id': id,
         'connectionId': connectionId,
         'model': model,
+        if (upstreamProvider != null) 'upstreamProvider': upstreamProvider,
         'systemPrompt': systemPrompt,
         'messages': messages.map((m) => m.toJson()).toList()
       };
@@ -30,6 +33,7 @@ class ChatSession {
       id: json['id'],
       connectionId: json['connectionId'],
       model: json['model'],
+      upstreamProvider: json['upstreamProvider'] as String?,
       systemPrompt: json['systemPrompt'] ?? '',
       messages: (json['messages'] as List)
           .map((m) => ChatMessage.fromJson(Map<String, dynamic>.from(m)))
@@ -92,6 +96,14 @@ class ChatController extends ChangeNotifier {
   String? get queueStatus =>
       uncertainInput != null || outbox.isNotEmpty ? _paused[current] : null;
   bool _draining = false, _background = false;
+  int _catalogGeneration = 0;
+  bool _catalogPaused = false;
+
+  /// Background/disposal revokes discovery permanently, even after resume.
+  int get catalogGeneration => _catalogGeneration;
+  bool get canDiscoverModels =>
+      !_disposed && !_background && !_catalogPaused && !changingConnection;
+
   _DispatchPermission? _preparing;
 
   bool _bound(QueuedFollowup item) =>
@@ -160,6 +172,7 @@ class ChatController extends ChangeNotifier {
   void setQueueBackground(bool background) {
     _background = background;
     if (background) {
+      _catalogGeneration++;
       pauseQueue(
           'Queue paused while Saathi is in the background. Return and choose Resume.',
           allSources: true);
@@ -395,11 +408,21 @@ class ChatController extends ChangeNotifier {
     }
   }
 
-  void pauseRuns(bool paused) {
-    if (paused) _runsGeneration++;
+  /// Initial native-run suspension need not block a foreground setup flow.
+  /// Actual lifecycle/owner revocation always pauses catalogs by default.
+  void pauseRuns(bool paused, {bool pauseCatalog = true}) {
+    if (paused) {
+      _runsGeneration++;
+      _catalogGeneration++;
+    }
+    _catalogPaused = paused && pauseCatalog;
     _runsPaused = paused;
     _poll?.cancel();
     if (!paused && !_disposed) _schedulePoll();
+    // Revoke authority above immediately, but notify after owner lifecycle
+    // callbacks finish: widgets may be locked and activity must pause before
+    // validating its temporarily suspended observation authority.
+    Future.microtask(notifyListeners);
   }
 
   void _schedulePoll() {
@@ -644,6 +667,7 @@ class ChatController extends ChangeNotifier {
           local: session.id,
           input: text,
           model: session.model,
+          provider: session.upstreamProvider,
           instructions: session.systemPrompt,
           history: session.messages
               .map((m) => {
@@ -828,21 +852,39 @@ class ChatController extends ChangeNotifier {
     }
   }
 
-  Future<List<ModelInfo>> discover(Map<String, dynamic> c) async {
-    final core = await coreFor(c);
+  Future<List<ModelInfo>> discover(Map<String, dynamic> c,
+      {bool Function()? isCurrent}) async {
+    final generation = catalogGeneration;
+    bool valid() =>
+        canDiscoverModels &&
+        generation == catalogGeneration &&
+        (c['type'] != 'hermes' || isCurrentConnection(c)) &&
+        !changingConnection &&
+        (isCurrent?.call() ?? true);
+    if (!valid()) throw StateError('Stale catalog');
+    final core = coreFactory();
     try {
-      return await core.discoverModels(c['id']);
+      final key = await store.secrets.read(c['id']) ?? '';
+      if (!valid()) throw StateError('Stale catalog');
+      core.addProvider(config(c, key));
+      final result = await core.discoverModels(c['id'], isCurrent: valid);
+      if (!valid()) throw StateError('Stale catalog');
+      return result;
     } finally {
       core.close();
     }
   }
 
-  Future<void> newSession(
-      Map<String, dynamic> c, String model, String prompt) async {
+  Future<void> newSession(Map<String, dynamic> c, String model, String prompt,
+      {String? upstreamProvider}) async {
+    if (upstreamProvider != null && !isCurrentConnection(c)) {
+      throw StateError('Stale connection');
+    }
     _checkMutation(c['id'] as String);
     final session = ChatSession(
         id: DateTime.now().microsecondsSinceEpoch.toString(),
         connectionId: c['id'],
+        upstreamProvider: upstreamProvider,
         model: model,
         systemPrompt: prompt);
     final previous = current;
@@ -1006,9 +1048,12 @@ class ChatController extends ChangeNotifier {
         return _DispatchResult.notDispatched;
       }
       core.setSystemPrompt(session.systemPrompt);
-      core.registerModel(
-          ModelInfo(providerId: session.connectionId, name: session.model));
-      core.selectModel('${session.connectionId}|${session.model}');
+      final selected = ModelInfo(
+          providerId: session.connectionId,
+          name: session.model,
+          upstreamProvider: session.upstreamProvider);
+      core.registerModel(selected);
+      core.selectModel(selected.id);
       core.restoreHistory(session.messages);
       _preparing = null;
       dispatched = true;

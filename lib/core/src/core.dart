@@ -257,8 +257,12 @@ class SaathiCore {
     }
   }
 
-  Future<List<ModelInfo>> discoverModels(String providerId) async {
+  Future<List<ModelInfo>> discoverModels(String providerId,
+      {bool Function()? isCurrent}) async {
     final config = _provider(providerId);
+    if (config.type == ProviderType.hermes) {
+      return _discoverHermesModels(config, isCurrent: isCurrent);
+    }
     final isGemini = config.type == ProviderType.gemini;
     final json =
         await _json(config, isGemini ? '/v1beta/models' : '/v1/models');
@@ -300,6 +304,64 @@ class SaathiCore {
     }
     _ensureSelection();
     return List.unmodifiable(discovered);
+  }
+
+  Future<List<ModelInfo>> _discoverHermesModels(ProviderConfig config,
+      {bool Function()? isCurrent}) async {
+    void check() {
+      if ((isCurrent != null && !isCurrent()) ||
+          !identical(_providers[config.id], config)) {
+        throw StateError('Stale catalog');
+      }
+    }
+
+    check();
+    final capabilities = await discoverCapabilities(config.id);
+    check();
+    final endpoint = capabilities['endpoints']?['model_options'];
+    if (capabilities['features']?['model_options'] != true ||
+        endpoint is! Map ||
+        endpoint['method'] != 'GET' ||
+        endpoint['path'] != '/api/model/options') {
+      throw const ProviderException(
+          'This server does not advertise a model catalog. Update Hermes or check the original server configuration.');
+    }
+    final payload =
+        await _json(config, '/api/model/options?include_unconfigured=false');
+    check();
+    final discovered = <String, ModelInfo>{};
+    if (payload is! Map || payload['providers'] is! List) {
+      throw const ProviderException(
+          'Invalid model catalog. Check or update the Hermes server.');
+    }
+    for (final row in payload['providers']) {
+      if (row is! Map ||
+          row['slug'] is! String ||
+          (row['slug'] as String).trim().isEmpty ||
+          row['models'] is! List) {
+        throw const ProviderException(
+            'Invalid model catalog. Check or update the Hermes server.');
+      }
+      if (row['authenticated'] == false) continue;
+      for (final name in row['models']) {
+        if (name is! String || name.trim().isEmpty) {
+          throw const ProviderException(
+              'Invalid model catalog. Check or update the Hermes server.');
+        }
+        final model = ModelInfo(
+            providerId: config.id,
+            name: name,
+            upstreamProvider: row['slug'],
+            displayName:
+                '${row['name'] is String ? row['name'] : row['slug']} · $name');
+        discovered[model.id] = model;
+      }
+    }
+    check();
+    _models.removeWhere((_, model) => model.providerId == config.id);
+    _models.addAll(discovered);
+    _ensureSelection();
+    return List.unmodifiable(discovered.values);
   }
 
   Future<ChatResult> sendMessage(String text) async {
@@ -419,8 +481,12 @@ class SaathiCore {
           'content': message.content
         },
     ];
-    final json = await _json(config, '/v1/chat/completions',
-        body: {'model': model.name, 'messages': wire});
+    final json = await _json(config, '/v1/chat/completions', body: {
+      'model': model.name,
+      if (config.type == ProviderType.hermes && model.upstreamProvider != null)
+        'provider': model.upstreamProvider,
+      'messages': wire
+    });
     final choices = json['choices'] as List? ?? [];
     if (choices.isEmpty || choices.first['message']?['content'] is! String) {
       throw const ProviderException('Provider returned no text response');
@@ -484,6 +550,9 @@ class SaathiCore {
       request.followRedirects = false;
       request.body = jsonEncode({
         'model': model.name,
+        if (config.type == ProviderType.hermes &&
+            model.upstreamProvider != null)
+          'provider': model.upstreamProvider,
         'stream': true,
         'stream_options': {'include_usage': true},
         'messages': [

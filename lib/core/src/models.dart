@@ -39,13 +39,21 @@ class ProviderConfig {
 
 class ModelInfo {
   const ModelInfo(
-      {required this.providerId, required this.name, String? displayName})
+      {required this.providerId,
+      required this.name,
+      this.upstreamProvider,
+      String? displayName})
       : _displayName = displayName;
   final String providerId;
   final String name;
+
+  /// Hermes runtime provider slug, distinct from the configured connection ID.
+  final String? upstreamProvider;
   final String? _displayName;
   String get displayName => _displayName ?? name;
-  String get id => '$providerId|$name';
+  String get id => upstreamProvider == null
+      ? '$providerId|$name'
+      : '$providerId|${Uri.encodeComponent(upstreamProvider!)}|${Uri.encodeComponent(name)}';
 }
 
 class ChatMessage {

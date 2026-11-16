@@ -405,6 +405,7 @@ class RunClient {
       {required String local,
       required String input,
       required String model,
+      String? provider,
       required String instructions,
       required List<Map<String, dynamic>> history,
       String? authorityEpoch,
@@ -425,6 +426,7 @@ class RunClient {
       'input': input,
       'session_id': op.sessionId,
       'model': model,
+      if (provider != null) 'provider': provider,
       if (instructions.isNotEmpty) 'instructions': instructions,
       if (previous == null && history.isNotEmpty)
         'conversation_history': history
