@@ -410,6 +410,48 @@ class NewChatPage extends StatefulWidget {
 class _NewChatPageState extends State<NewChatPage> {
   Map<String, dynamic>? connection;
   List<ModelInfo> models = [];
+  ModelInfo? selectedModel;
+  int catalogRevision = 0;
+  int? catalogGeneration;
+
+  bool get catalogCurrent =>
+      widget.controller.canDiscoverModels &&
+      catalogGeneration == widget.controller.catalogGeneration &&
+      connection != null &&
+      widget.controller.isCurrentConnection(connection!);
+
+  void clearCatalog() {
+    models = [];
+    selectedModel = null;
+    model.clear();
+  }
+
+  void syncController() {
+    if (!mounted) return;
+    final revoked = !catalogCurrent;
+    if (revoked) catalogRevision++;
+    final revision = catalogRevision;
+    // Revoke synchronously, but defer all notifier/UI writes: ChatHome can
+    // revoke during unmount while Flutter has locked the widget tree.
+    Future.microtask(() {
+      if (!mounted) return;
+      setState(() {
+        if (revoked && revision == catalogRevision) {
+          discovering = false;
+          clearCatalog();
+          final connections = widget.controller.connections;
+          if (connection != null &&
+              !widget.controller.isCurrentConnection(connection!)) {
+            connection = connections
+                    .where((c) => c['id'] == connection!['id'])
+                    .firstOrNull ??
+                connections.firstOrNull;
+          }
+        }
+      });
+    });
+  }
+
   final model = TextEditingController(), prompt = TextEditingController();
   String? error;
   bool discovering = false, starting = false;
@@ -419,51 +461,79 @@ class _NewChatPageState extends State<NewChatPage> {
     if (widget.controller.connections.isNotEmpty) {
       connection = widget.controller.connections.first;
     }
+    catalogGeneration = widget.controller.catalogGeneration;
+    widget.controller.addListener(syncController);
   }
 
   @override
   void dispose() {
+    widget.controller.removeListener(syncController);
+    catalogRevision++;
     model.dispose();
     prompt.dispose();
     super.dispose();
   }
 
   Future<void> discover() async {
+    if (!widget.controller.canDiscoverModels || connection == null) return;
     final target = connection!;
+    catalogGeneration = widget.controller.catalogGeneration;
+    final revision = ++catalogRevision;
+    bool valid() =>
+        mounted &&
+        revision == catalogRevision &&
+        catalogCurrent &&
+        identical(connection, target) &&
+        widget.controller.isCurrentConnection(target);
     setState(() {
       discovering = true;
+      models = [];
+      selectedModel = null;
+      model.clear();
       error = null;
     });
     try {
-      final result = await widget.controller.discover(target);
-      if (mounted && connection == target) {
+      final result = await widget.controller.discover(target, isCurrent: valid);
+      if (valid()) {
         setState(() {
           models = result;
           if (result.isEmpty) {
-            error = 'No models returned. Enter a model ID manually.';
+            error = target['type'] == 'hermes'
+                ? 'No configured models returned. Add a provider on the Hermes server, then try again.'
+                : 'No models returned. Enter a model ID manually.';
           }
         });
       }
     } on ProviderException catch (e) {
-      if (mounted) setState(() => error = e.message);
+      if (valid()) setState(() => error = e.message);
     } catch (_) {
-      if (mounted) {
-        setState(() => error =
-            'Discovery failed. Check the URL and credentials, or enter a model ID.');
+      if (valid()) {
+        setState(() => error = target['type'] == 'hermes'
+            ? 'Could not load models. Check the original Hermes server and API key, then try again.'
+            : 'Discovery failed. Check the URL and credentials, or enter a model ID.');
       }
     } finally {
-      if (mounted) setState(() => discovering = false);
+      // Cleanup belongs to the request, not its revocable result authority.
+      // A stale finisher must never reset a newer request's loading state.
+      if (mounted && revision == catalogRevision) {
+        setState(() {
+          discovering = false;
+          if (!valid()) clearCatalog();
+        });
+      }
     }
   }
 
   Future<void> start() async {
+    if (connection?['type'] == 'hermes' && !catalogCurrent) return;
     setState(() {
       starting = true;
       error = null;
     });
     try {
-      await widget.controller
-          .newSession(connection!, model.text.trim(), prompt.text.trim());
+      await widget.controller.newSession(
+          connection!, model.text.trim(), prompt.text.trim(),
+          upstreamProvider: selectedModel?.upstreamProvider);
       if (mounted) Navigator.pop(context);
     } catch (_) {
       if (mounted) {
@@ -480,6 +550,7 @@ class _NewChatPageState extends State<NewChatPage> {
       appBar: AppBar(title: const Text('New conversation')),
       body: ListView(padding: const EdgeInsets.all(20), children: [
         DropdownButtonFormField<String>(
+            key: ValueKey(connection),
             initialValue: connection?['id'],
             isExpanded: true,
             decoration: const InputDecoration(labelText: 'Connection'),
@@ -493,6 +564,8 @@ class _NewChatPageState extends State<NewChatPage> {
                       connection = widget.controller.connections
                           .firstWhere((c) => c['id'] == id);
                       models = [];
+                      selectedModel = null;
+                      catalogRevision++;
                       model.clear();
                       error = null;
                     })),
@@ -509,6 +582,7 @@ class _NewChatPageState extends State<NewChatPage> {
         const SizedBox(height: 16),
         OutlinedButton.icon(
             onPressed: connection == null ||
+                    !widget.controller.canDiscoverModels ||
                     discovering ||
                     connection?['type'] == 'openclaw'
                 ? null
@@ -520,17 +594,24 @@ class _NewChatPageState extends State<NewChatPage> {
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'Available models'),
               items: models
-                  .map((m) => DropdownMenuItem(
-                      value: m.name, child: Text(m.displayName)))
+                  .map((m) =>
+                      DropdownMenuItem(value: m.id, child: Text(m.displayName)))
                   .toList(),
-              onChanged: (v) => setState(() => model.text = v!)),
+              onChanged: (v) => setState(() {
+                    if (!catalogCurrent) return;
+                    selectedModel = models.singleWhere((m) => m.id == v);
+                    model.text = selectedModel!.name;
+                  })),
         const SizedBox(height: 16),
         TextField(
             controller: model,
+            readOnly: connection?['type'] == 'hermes',
             onChanged: (_) => setState(() {}),
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
                 labelText: 'Model ID',
-                helperText: 'Pick a discovered model or enter an exact ID.')),
+                helperText: connection?['type'] == 'hermes'
+                    ? 'Choose a model from this server’s catalog.'
+                    : 'Pick a discovered model or enter an exact ID.')),
         const SizedBox(height: 16),
         TextField(
             controller: prompt,
@@ -552,6 +633,8 @@ class _NewChatPageState extends State<NewChatPage> {
             onPressed: connection == null ||
                     connection?['type'] == 'openclaw' ||
                     model.text.trim().isEmpty ||
+                    (connection?['type'] == 'hermes' &&
+                        (selectedModel == null || !catalogCurrent)) ||
                     starting
                 ? null
                 : start,

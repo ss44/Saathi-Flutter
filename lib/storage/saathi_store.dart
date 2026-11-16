@@ -207,7 +207,13 @@ class SaathiStore {
     final safe = [
       for (final chat in chats)
         {
-          for (final key in ['id', 'connectionId', 'model', 'systemPrompt'])
+          for (final key in [
+            'id',
+            'connectionId',
+            'model',
+            'upstreamProvider',
+            'systemPrompt'
+          ])
             if (chat.containsKey(key)) key: chat[key],
           'messages': [
             for (final message in (chat['messages'] as List? ?? []))
