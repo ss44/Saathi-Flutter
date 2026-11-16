@@ -487,156 +487,181 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
               : Column(children: [
                   const UpdateAvailabilityBanner(),
                   Expanded(
-                      child: session == null ||
-                              session.messages.isEmpty &&
-                                  c.pendingText == null &&
-                                  !thinking &&
-                                  !c.busy
-                          ? Center(
-                              child: SingleChildScrollView(
-                                  padding: const EdgeInsets.all(32),
-                                  child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        const Icon(Icons.spa_outlined,
-                                            size: 42, color: Color(0xFF3E6559)),
-                                        const SizedBox(height: 22),
-                                        const Text('A little space to think.',
-                                            textAlign: TextAlign.center,
-                                            style: TextStyle(
-                                                fontSize: 27,
-                                                fontWeight: FontWeight.w500)),
-                                        const SizedBox(height: 12),
-                                        Text(
-                                            session == null
-                                                ? 'Connect a model and begin a conversation.\nNothing is sent until you choose to send.'
-                                                : 'What’s on your mind?',
-                                            textAlign: TextAlign.center,
-                                            style: const TextStyle(
-                                                color: muted, height: 1.6)),
-                                        if (session == null) ...[
-                                          const SizedBox(height: 24),
-                                          FilledButton(
-                                              onPressed: newChat,
-                                              child: Text(c.connections.isEmpty
-                                                  ? 'Connect a model'
-                                                  : 'New conversation'))
-                                        ]
-                                      ])))
-                          : ListView(
-                              controller: scroll,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 22, vertical: 24),
-                              children: [
-                                  for (var i = 0;
-                                      i < session.messages.length;
-                                      i++)
-                                    MessageView(
-                                        key: ValueKey('${session.id}-$i'),
-                                        text: session.messages[i].content,
-                                        user:
-                                            session.messages[i].role == 'user'),
-                                  if (c.pendingText != null)
-                                    MessageView(
-                                        text: c.pendingText!, user: true),
-                                  if (thinking)
-                                    const Padding(
-                                        padding:
-                                            EdgeInsets.symmetric(vertical: 18),
-                                        child: BusyThinking(busy: true))
-                                ])),
-                  if (c.outbox.isNotEmpty ||
-                      c.queueStatus != null ||
-                      c.uncertainInput != null ||
-                      c.readOnly ||
-                      c.error != null ||
-                      c.unsavedChanges)
-                    Flexible(
-                      child: ListView(
-                          key: const Key('chat-feedback'),
-                          shrinkWrap: true,
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          children: [
-                            if (c.outbox.isNotEmpty ||
-                                c.queueStatus != null ||
-                                c.uncertainInput != null)
-                              const Text(
-                                  'Queued · Kept only while Saathi stays open.',
-                                  style: TextStyle(fontSize: 12)),
-                            if (c.queueStatus != null) Text(c.queueStatus!),
-                            if (c.canResumeQueue && c.queueStatus != null)
-                              TextButton(
-                                  onPressed: c.resumeQueue,
-                                  child: const Text('Resume queue')),
-                            if (c.uncertainInput != null)
-                              SelectableText(
-                                  'Not sent again: ${c.uncertainInput!.text}'),
-                            if (c.uncertainInput != null)
-                              TextButton(
-                                child: const Text('Abandon held outbox'),
-                                onPressed: () async {
-                                  final source = c.uncertainInput!.session;
-                                  final confirmed = await showDialog<bool>(
-                                    context: context,
-                                    builder: (context) => AlertDialog(
-                                      scrollable: true,
-                                      title: const Text(
-                                          'Abandon unknown request?'),
-                                      content: const Text(
-                                          'The last request may have executed. Discarding the held outbox does not stop the server or prove there were no side effects. This removes the unknown input and ALL queued followers for this conversation only. Nothing will be resent, and completion is still unknown. You can instead keep this blocked and start a new conversation.'),
-                                      actions: [
-                                        TextButton(
-                                            onPressed: () =>
-                                                Navigator.pop(context, false),
-                                            child: const Text('Keep blocked')),
-                                        TextButton(
-                                            onPressed: () =>
-                                                Navigator.pop(context, true),
-                                            child: const Text('Abandon all')),
-                                      ],
+                    child: LayoutBuilder(
+                      // Use the space left after the composer and run controls,
+                      // so feedback cannot push them beyond the usable screen.
+                      builder: (_, constraints) => Column(children: [
+                        Expanded(
+                            child: session == null ||
+                                    session.messages.isEmpty &&
+                                        c.pendingText == null &&
+                                        !thinking &&
+                                        !c.busy
+                                ? Center(
+                                    child: SingleChildScrollView(
+                                        padding: const EdgeInsets.all(32),
+                                        child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              const Icon(Icons.spa_outlined,
+                                                  size: 42,
+                                                  color: Color(0xFF3E6559)),
+                                              const SizedBox(height: 22),
+                                              const Text(
+                                                  'A little space to think.',
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(
+                                                      fontSize: 27,
+                                                      fontWeight:
+                                                          FontWeight.w500)),
+                                              const SizedBox(height: 12),
+                                              Text(
+                                                  session == null
+                                                      ? 'Connect a model and begin a conversation.\nNothing is sent until you choose to send.'
+                                                      : 'What’s on your mind?',
+                                                  textAlign: TextAlign.center,
+                                                  style: const TextStyle(
+                                                      color: muted,
+                                                      height: 1.6)),
+                                              if (session == null) ...[
+                                                const SizedBox(height: 24),
+                                                FilledButton(
+                                                    onPressed: newChat,
+                                                    child: Text(c
+                                                            .connections.isEmpty
+                                                        ? 'Connect a model'
+                                                        : 'New conversation'))
+                                              ]
+                                            ])))
+                                : ListView(
+                                    controller: scroll,
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 22, vertical: 24),
+                                    children: [
+                                        for (var i = 0;
+                                            i < session.messages.length;
+                                            i++)
+                                          MessageView(
+                                              key: ValueKey('${session.id}-$i'),
+                                              text: session.messages[i].content,
+                                              user: session.messages[i].role ==
+                                                  'user'),
+                                        if (c.pendingText != null)
+                                          MessageView(
+                                              text: c.pendingText!, user: true),
+                                        if (thinking)
+                                          const Padding(
+                                              padding: EdgeInsets.symmetric(
+                                                  vertical: 18),
+                                              child: BusyThinking(busy: true))
+                                      ])),
+                        if (c.outbox.isNotEmpty ||
+                            c.queueStatus != null ||
+                            c.uncertainInput != null ||
+                            c.readOnly ||
+                            c.error != null ||
+                            c.unsavedChanges)
+                          ConstrainedBox(
+                            // Feedback scrolls within a bounded share of the body;
+                            // short feedback gives its unused space to the transcript.
+                            constraints: BoxConstraints(
+                                maxHeight: constraints.maxHeight * .5),
+                            child: ListView(
+                                key: const Key('chat-feedback'),
+                                shrinkWrap: true,
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 16),
+                                children: [
+                                  if (c.outbox.isNotEmpty ||
+                                      c.queueStatus != null ||
+                                      c.uncertainInput != null)
+                                    const Text(
+                                        'Queued · Kept only while Saathi stays open.',
+                                        style: TextStyle(fontSize: 12)),
+                                  if (c.queueStatus != null)
+                                    Text(c.queueStatus!),
+                                  if (c.canResumeQueue && c.queueStatus != null)
+                                    TextButton(
+                                        onPressed: c.resumeQueue,
+                                        child: const Text('Resume queue')),
+                                  if (c.uncertainInput != null)
+                                    SelectableText(
+                                        'Not sent again: ${c.uncertainInput!.text}'),
+                                  if (c.uncertainInput != null)
+                                    TextButton(
+                                      child: const Text('Abandon held outbox'),
+                                      onPressed: () async {
+                                        final source =
+                                            c.uncertainInput!.session;
+                                        final confirmed =
+                                            await showDialog<bool>(
+                                          context: context,
+                                          builder: (context) => AlertDialog(
+                                            scrollable: true,
+                                            title: const Text(
+                                                'Abandon unknown request?'),
+                                            content: const Text(
+                                                'The last request may have executed. Discarding the held outbox does not stop the server or prove there were no side effects. This removes the unknown input and ALL queued followers for this conversation only. Nothing will be resent, and completion is still unknown. You can instead keep this blocked and start a new conversation.'),
+                                            actions: [
+                                              TextButton(
+                                                  onPressed: () =>
+                                                      Navigator.pop(
+                                                          context, false),
+                                                  child: const Text(
+                                                      'Keep blocked')),
+                                              TextButton(
+                                                  onPressed: () =>
+                                                      Navigator.pop(
+                                                          context, true),
+                                                  child: const Text(
+                                                      'Abandon all')),
+                                            ],
+                                          ),
+                                        );
+                                        if (confirmed == true) {
+                                          c.abandonHeldOutbox(source);
+                                        }
+                                      },
                                     ),
-                                  );
-                                  if (confirmed == true) {
-                                    c.abandonHeldOutbox(source);
-                                  }
-                                },
-                              ),
-                            for (final item in c.outbox)
-                              ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                title: const Text('Queued'),
-                                subtitle: Text(item.text,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis),
-                                trailing: TextButton(
-                                    onPressed: () => c.cancelQueued(item),
-                                    child: const Text('Cancel')),
-                              ),
-                            if (c.readOnly)
-                              const Padding(
-                                  padding: EdgeInsets.all(16),
-                                  child: Text(
-                                      'Read-only · This connection was removed or changed. Start a new conversation to send messages.')),
-                            if (c.error != null)
-                              Container(
-                                  width: double.infinity,
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .errorContainer,
-                                  padding: const EdgeInsets.all(16),
-                                  child: Text(c.error!,
-                                      key: const Key('chat-error'),
-                                      style: TextStyle(
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .onErrorContainer))),
-                            if (c.unsavedChanges)
-                              TextButton.icon(
-                                  onPressed: c.retrySave,
-                                  icon: const Icon(Icons.save_outlined),
-                                  label: const Text('Try saving again')),
-                          ]),
+                                  for (final item in c.outbox)
+                                    ListTile(
+                                      contentPadding: EdgeInsets.zero,
+                                      title: const Text('Queued'),
+                                      subtitle: Text(item.text,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis),
+                                      trailing: TextButton(
+                                          onPressed: () => c.cancelQueued(item),
+                                          child: const Text('Cancel')),
+                                    ),
+                                  if (c.readOnly)
+                                    const Padding(
+                                        padding: EdgeInsets.all(16),
+                                        child: Text(
+                                            'Read-only · This connection was removed or changed. Start a new conversation to send messages.')),
+                                  if (c.error != null)
+                                    Container(
+                                        width: double.infinity,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .errorContainer,
+                                        padding: const EdgeInsets.all(16),
+                                        child: Text(c.error!,
+                                            key: const Key('chat-error'),
+                                            style: TextStyle(
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .onErrorContainer))),
+                                  if (c.unsavedChanges)
+                                    TextButton.icon(
+                                        onPressed: c.retrySave,
+                                        icon: const Icon(Icons.save_outlined),
+                                        label: const Text('Try saving again')),
+                                ]),
+                          ),
+                      ]),
                     ),
+                  ),
                   if (c.currentRun != null && c.runPending)
                     Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),

@@ -166,6 +166,23 @@ void main() {
         final draft = List.filled(30, 'long draft').join(' ');
         await t.enterText(find.byKey(const Key('composer')), draft);
         await t.pump();
+        expect(c.submit('Queued while approval is pending'), isTrue);
+        await t.pump();
+        final feedbackScroll = find
+            .descendant(
+                of: find.byKey(const Key('chat-feedback')),
+                matching: find.byType(Scrollable))
+            .first;
+        await t.scrollUntilVisible(find.text('Cancel'), 30,
+            scrollable: feedbackScroll);
+        await Scrollable.ensureVisible(t.element(find.text('Cancel')),
+            alignment: .5);
+        await t.pumpAndSettle();
+        expect(find.text('Cancel').hitTestable(), findsOneWidget);
+        await t.tap(find.text('Cancel'));
+        await t.pump();
+        expect(c.outbox, isEmpty);
+        expect(find.text('Review action').hitTestable(), findsOneWidget);
         expect(find.text('Review action'), findsOneWidget);
         expect(t.getBottomLeft(find.text('Review action')).dy,
             lessThan(t.getTopLeft(find.byKey(const Key('composer'))).dy));
