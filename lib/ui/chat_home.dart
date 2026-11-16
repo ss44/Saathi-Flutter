@@ -5,6 +5,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'chat_controller.dart';
 import 'connections.dart';
 import 'safe_markdown.dart';
+import 'conversation_servers.dart';
 
 const muted = Color(0xFF6A7470);
 
@@ -16,11 +17,38 @@ class ChatHome extends StatefulWidget {
 }
 
 class _ChatHomeState extends State<ChatHome> {
+  bool drawerOpen = false;
+  final serverCaches = <Map<String, dynamic>, ConversationServerCache>{};
+  @override
+  void initState() {
+    super.initState();
+    c.addListener(syncServers);
+    syncServers();
+  }
+
+  void syncServers() {
+    for (final connection in serverCaches.keys.toList()) {
+      if (!c.isCurrentConnection(connection)) {
+        serverCaches.remove(connection)!.dispose();
+      }
+    }
+    for (final connection
+        in c.connections.where((c) => c['type'] == 'hermes')) {
+      final cache = serverCaches.putIfAbsent(
+          connection, () => ConversationServerCache(c, connection));
+      if (drawerOpen && !cache.loaded && !cache.loading) cache.load();
+    }
+  }
+
   final composer = TextEditingController();
   final scroll = ScrollController();
   ChatController get c => widget.controller;
   @override
   void dispose() {
+    c.removeListener(syncServers);
+    for (final cache in serverCaches.values) {
+      cache.dispose();
+    }
     composer.dispose();
     scroll.dispose();
     super.dispose();
@@ -97,6 +125,12 @@ class _ChatHomeState extends State<ChatHome> {
             ? 'Your models. Your space.'
             : '${names.isEmpty ? 'Unavailable connection' : names.first['name']} · ${session.model}';
         return Scaffold(
+          drawerEdgeDragWidth: 48,
+          drawerEnableOpenDragGesture: true,
+          onDrawerChanged: (open) {
+            drawerOpen = open;
+            if (open) syncServers();
+          },
           appBar: AppBar(
               toolbarHeight: MediaQuery.textScalerOf(context).scale(32) + 24,
               titleSpacing: 0,
@@ -156,6 +190,7 @@ class _ChatHomeState extends State<ChatHome> {
                 const SizedBox(height: 12),
                 Expanded(
                     child: ListView(children: [
+                  const ListTile(title: Text('On this device')),
                   for (final s in c.sessions.reversed)
                     ListTile(
                         selected: s == session,
@@ -168,7 +203,10 @@ class _ChatHomeState extends State<ChatHome> {
                           c.select(s);
                           composer.clear();
                           Navigator.pop(context);
-                        })
+                        }),
+                  for (final cache in serverCaches.values)
+                    ConversationServer(
+                        key: ObjectKey(cache.connection), cache: cache),
                 ])),
                 const Padding(
                     padding: EdgeInsets.all(20),

@@ -82,10 +82,18 @@ class ChatController extends ChangeNotifier {
       type: ProviderType.values.byName(c['type']),
       apiKey: key,
       baseUrl: c['url']);
+  bool isCurrentConnection(Map<String, dynamic> connection) =>
+      !_disposed && connections.any((c) => identical(c, connection));
+
   Future<SaathiCore> coreFor(Map<String, dynamic> c) async {
     final core = coreFactory();
-    core.addProvider(config(c, await store.secrets.read(c['id']) ?? ''));
-    return core;
+    try {
+      core.addProvider(config(c, await store.secrets.read(c['id']) ?? ''));
+      return core;
+    } catch (_) {
+      core.close();
+      rethrow;
+    }
   }
 
   Future<void> addConnection(Map<String, dynamic> c, String key) async {

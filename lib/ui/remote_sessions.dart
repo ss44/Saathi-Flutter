@@ -18,13 +18,39 @@ class _RemoteSessionsPageState extends State<RemoteSessionsPage> {
   bool loading = true, more = false;
   int offset = 0;
   String? error;
+  SaathiCore? active;
+  bool inFlight = false;
+  bool get current =>
+      mounted && widget.controller.isCurrentConnection(widget.connection);
+  void connectionChanged() {
+    if (!current && mounted) {
+      active?.close();
+      setState(() {
+        sessions.clear();
+        more = false;
+        error = 'Connection unavailable.';
+        loading = false;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(connectionChanged);
+    active?.close();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
+    widget.controller.addListener(connectionChanged);
     load();
   }
 
   Future<void> load() async {
+    if (inFlight || !current) return;
+    inFlight = true;
     setState(() {
       loading = true;
       error = null;
@@ -32,10 +58,13 @@ class _RemoteSessionsPageState extends State<RemoteSessionsPage> {
     SaathiCore? core;
     try {
       core = await widget.controller.coreFor(widget.connection);
+      if (!current) return;
+      active = core;
       if (offset == 0) await core.discoverCapabilities(widget.connection['id']);
+      if (!current) return;
       final page = await core.listRemoteSessions(widget.connection['id'],
           offset: offset);
-      if (mounted) {
+      if (current) {
         setState(() {
           sessions.addAll(page.sessions
               .where((s) => !sessions.any((old) => old.id == s.id)));
@@ -43,16 +72,20 @@ class _RemoteSessionsPageState extends State<RemoteSessionsPage> {
           more = page.hasMore;
         });
       }
-    } on ProviderException catch (e) {
-      if (mounted) setState(() => error = e.message);
+    } on ProviderException {
+      if (current) {
+        setState(() => error = 'Could not read conversations. Try again.');
+      }
     } catch (_) {
-      if (mounted) {
+      if (current) {
         setState(() => error =
             'Could not read remote sessions. Check server compatibility and credentials.');
       }
     } finally {
       core?.close();
-      if (mounted) setState(() => loading = false);
+      active = null;
+      inFlight = false;
+      if (current) setState(() => loading = false);
     }
   }
 
@@ -114,13 +147,39 @@ class _RemoteHistoryPageState extends State<RemoteHistoryPage> {
   int offset = 0;
   bool loading = true, more = false;
   String? error;
+  SaathiCore? active;
+  bool inFlight = false;
+  bool get current =>
+      mounted && widget.controller.isCurrentConnection(widget.connection);
+  void connectionChanged() {
+    if (!current && mounted) {
+      active?.close();
+      setState(() {
+        messages.clear();
+        more = false;
+        error = 'Connection unavailable.';
+        loading = false;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(connectionChanged);
+    active?.close();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
+    widget.controller.addListener(connectionChanged);
     load();
   }
 
   Future<void> load() async {
+    if (inFlight || !current) return;
+    inFlight = true;
     setState(() {
       loading = true;
       error = null;
@@ -128,10 +187,12 @@ class _RemoteHistoryPageState extends State<RemoteHistoryPage> {
     SaathiCore? core;
     try {
       core = await widget.controller.coreFor(widget.connection);
+      if (!current) return;
+      active = core;
       final page = await core.loadRemoteHistory(
           widget.connection['id'], widget.session.id,
           offset: offset);
-      if (mounted) {
+      if (current) {
         setState(() {
           messages.addAll(page.messages);
           final pagination = page.pagination;
@@ -146,13 +207,17 @@ class _RemoteHistoryPageState extends State<RemoteHistoryPage> {
               (hasMore is bool ? hasMore : returned >= limit);
         });
       }
-    } on ProviderException catch (e) {
-      if (mounted) setState(() => error = e.message);
+    } on ProviderException {
+      if (current) {
+        setState(() => error = 'Could not read conversations. Try again.');
+      }
     } catch (_) {
-      if (mounted) setState(() => error = 'Could not read remote history.');
+      if (current) setState(() => error = 'Could not read remote history.');
     } finally {
       core?.close();
-      if (mounted) setState(() => loading = false);
+      active = null;
+      inFlight = false;
+      if (current) setState(() => loading = false);
     }
   }
 
