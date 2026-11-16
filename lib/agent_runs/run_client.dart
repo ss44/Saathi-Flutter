@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import '../storage/saathi_store.dart';
+import '../agent_controls/agent_controls.dart';
 
 String runIdentity() => List.generate(32,
         (_) => Random.secure().nextInt(256).toRadixString(16).padLeft(2, '0'))
@@ -514,6 +515,70 @@ class RunClient {
       (capabilities['features'] as Map)['run_unknown_resolution'] == true &&
       _endpoint('run_unknown_resolution', 'POST',
           '/v1/runs/{run_id}/resolve-unknown');
+
+  bool get canApprove =>
+      capabilities['features'] is Map &&
+      (capabilities['features'] as Map)['run_approval_response'] == true &&
+      _endpoint('run_approval', 'POST', '/v1/runs/{run_id}/approval');
+
+  /// Discovery has no clarify flag. Only the verified canonical authority
+  /// projection (admission + generation + pending_controls) enables this route.
+  bool canClarify(RunSnapshot snapshot) =>
+      capabilities['features'] is Map &&
+      (capabilities['features'] as Map)['run_status'] == true &&
+      _endpoint('run_status', 'GET', '/v1/runs/{run_id}') &&
+      snapshot.admissionId != null &&
+      snapshot.generation != null &&
+      snapshot.data['pending_controls'] is List;
+
+  String redactKnownSecrets(String text) =>
+      _key.isEmpty ? text : text.replaceAll(_key, '[redacted]');
+
+  Future<(int, Map<String, dynamic>)> respondControl(RunOperation op,
+      {required String requestId,
+      required int generation,
+      String? choice,
+      String? answer,
+      required bool Function() isCurrent}) async {
+    bind(op);
+    if (!isCurrent()) throw StateError('Stale control');
+    final approval = choice != null && answer == null;
+    final pending = PendingControlsSnapshot.fromJson(
+        ControlScope(
+            sourceId: op.localId, runId: op.runId!, authorityToken: op),
+        op.snapshot.data);
+    final matches = pending.controls.where((p) =>
+        p.promptId == requestId &&
+        p.generation == generation &&
+        p.action ==
+            (approval ? ControlAction.approval : ControlAction.clarify));
+    if (matches.length != 1 ||
+        !matches.single.accepts(choice ?? answer ?? '')) {
+      throw StateError('Control no longer pending');
+    }
+    if (requestId.isEmpty ||
+        requestId.length > 256 ||
+        generation < 0 ||
+        (approval
+            ? !canApprove || !['once', 'deny'].contains(choice)
+            : choice != null ||
+                answer == null ||
+                answer.trim().isEmpty ||
+                answer.length > 4000 ||
+                !canClarify(op.snapshot))) {
+      throw StateError('Unsupported control');
+    }
+    final (code, data, _) = await _request('POST',
+        '/v1/runs/${_id(op.runId!)}/${approval ? 'approval' : 'clarify'}',
+        body: jsonEncode({
+          'request_id': requestId,
+          'execution_generation': generation,
+          if (approval) 'choice': choice else 'answer': answer
+        }));
+    if (!isCurrent()) throw StateError('Stale control');
+    return (code, data);
+  }
+
   Future<void> resolveUnknown(RunOperation op, RunLedger ledger,
       {required bool acknowledgedSideEffects,
       bool Function()? isCurrent}) async {

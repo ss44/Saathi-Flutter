@@ -1,5 +1,6 @@
 import 'dart:async';
 import '../agent_runs/run_client.dart';
+import '../agent_controls/agent_controls.dart';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import '../core/saathi_core.dart';
@@ -303,6 +304,88 @@ class ChatController extends ChangeNotifier {
         coreFactory = coreFactory ?? (() => SaathiCore());
 
   RunLedger get _ledger => RunLedger(store.secrets);
+  Future<AgentControlsController?> openRunControls(
+      {required bool Function() isOwnerCurrent}) async {
+    final session = current;
+    final op = currentRun;
+    if (session == null || op?.runId == null) return null;
+    final connection =
+        connections.where((c) => c['id'] == session.connectionId).firstOrNull;
+    if (connection == null) return null;
+    final operation = op!;
+    final key = operation.key;
+    final runId = operation.runId!;
+    final epoch = connection['authorityEpoch'];
+    final origin = connection['url'];
+    bool valid() =>
+        isOwnerCurrent() &&
+        identical(current, session) &&
+        _active(session, connection, operation) &&
+        operation.key == key &&
+        operation.runId == runId &&
+        connection['authorityEpoch'] == epoch &&
+        connection['url'] == origin &&
+        operation.data['authorityEpoch'] == epoch;
+    if (!valid()) return null;
+    final client = await _runClient(connection, isCurrent: valid);
+    try {
+      client.bind(operation);
+      if (!await client.discover() || !valid()) {
+        client.close();
+        return null;
+      }
+      final revision = _connectionRevisions[connection] ??= Object();
+      final scope = ControlScope(
+          sourceId: session.id, runId: runId, authorityToken: revision);
+      final controller = AgentControlsController(
+          ControlBoundary(
+              scope: scope,
+              isCurrentAuthority: (s) => valid() && s.matches(scope),
+              supportsAction: (action) =>
+                  valid() &&
+                  (action == ControlAction.approval
+                      ? client.canApprove
+                      : client.canClarify(operation.snapshot)),
+              refresh: () async {
+                final snapshot =
+                    await client.status(operation, _ledger, isCurrent: valid);
+                if (!valid()) throw StateError('Stale controls');
+                await _reconcile(session, connection, operation);
+                if (!valid()) throw StateError('Stale controls');
+                // A control's fresh GET can observe terminal completion before
+                // the normal poll. Wake only through the existing durable,
+                // source-bound queue gate; explicit pauses remain intact.
+                _scheduleSelectedQueue();
+                return PendingControlsSnapshot.fromJson(scope, snapshot.data);
+              },
+              postDecision: (action, body) async {
+                if (!valid()) throw StateError('Stale controls');
+                final (code, data) = await client.respondControl(operation,
+                    requestId: body['request_id'] as String,
+                    generation: body['execution_generation'] as int,
+                    choice: action == ControlAction.approval
+                        ? body['choice'] as String
+                        : null,
+                    answer: action == ControlAction.clarify
+                        ? body['answer'] as String
+                        : null,
+                    isCurrent: valid);
+                return ControlPostResult(code, data);
+              }),
+          redact: client.redactKnownSecrets,
+          onDispose: client.close);
+      await controller.refresh();
+      if (!valid()) {
+        controller.dispose();
+        return null;
+      }
+      return controller;
+    } catch (_) {
+      client.close();
+      rethrow;
+    }
+  }
+
   void pauseRuns(bool paused) {
     if (paused) _runsGeneration++;
     _runsPaused = paused;
