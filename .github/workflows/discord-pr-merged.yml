@@ -263,10 +263,10 @@ jobs:
                           or pr.get('base', {}).get('ref') != 'main'
                           or pr.get('base', {}).get('repo', {}).get('full_name') != repository):
                       raise RuntimeError('Authoritative PR identity mismatch')
-                  title, body = pr.get('title'), pr.get('body')
-                  if not isinstance(title, str) or (body is not None and not isinstance(body, str)):
+                  title = pr.get('title')
+                  if not isinstance(title, str):
                       raise RuntimeError('Invalid PR text')
-                  report = f'Job done! 🎉 PR #{number} merged.\n{link}\n\n{title}\n\n{body if body else "No description provided."}'
+                  report = f'Job done! 🎉 PR #{number} merged.\n{link}\n\n{title}'
                   send_notification(opener, webhook, report, GIFS, f'pr-{number}.md')
               if not merged:
                   print('No PR merged by this commit; nothing sent.')
