@@ -5,6 +5,7 @@ import '../update_host.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'chat_controller.dart';
+import 'busy_thinking.dart';
 import 'connections.dart';
 import 'safe_markdown.dart';
 import 'conversation_servers.dart';
@@ -342,16 +343,7 @@ class _ChatHomeState extends State<ChatHome> {
                                     const Padding(
                                         padding:
                                             EdgeInsets.symmetric(vertical: 18),
-                                        child: Row(children: [
-                                          SizedBox(
-                                              width: 14,
-                                              height: 14,
-                                              child: CircularProgressIndicator(
-                                                  strokeWidth: 2)),
-                                          SizedBox(width: 12),
-                                          Text('Waiting for response…',
-                                              style: TextStyle(color: muted))
-                                        ]))
+                                        child: BusyThinking(busy: true))
                                 ])),
                   if (c.readOnly)
                     const Padding(

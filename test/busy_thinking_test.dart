@@ -1,0 +1,77 @@
+import 'dart:math';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:saathi/ui/busy_thinking.dart';
+
+Widget host(
+        {bool busy = true,
+        bool reduced = false,
+        double width = 390,
+        double scale = 1}) =>
+    MaterialApp(
+        home: MediaQuery(
+            data: MediaQueryData(
+                size: Size(width, 800),
+                textScaler: TextScaler.linear(scale),
+                disableAnimations: reduced),
+            child: Scaffold(
+                body: SizedBox(
+                    width: width,
+                    child: BusyThinking(busy: busy, random: Random(7))))));
+
+void main() {
+  testWidgets(
+      'rotates only after eight seconds, pauses in background, ends cleanly',
+      (tester) async {
+    final semantics = tester.ensureSemantics();
+    await tester.pumpWidget(host());
+    String quip() =>
+        tester.widget<Text>(find.byKey(const Key('thinking-quip'))).data!;
+    final first = quip();
+    await tester.pump(const Duration(seconds: 7));
+    expect(quip(), first);
+    await tester.pump(const Duration(seconds: 1));
+    expect(quip(), isNot(first));
+    expect(find.bySemanticsLabel('Waiting for reply'), findsOneWidget);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    final paused = quip();
+    await tester.pump(const Duration(seconds: 24));
+    expect(quip(), paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump(const Duration(seconds: 8));
+    expect(quip(), isNot(paused));
+    await tester.pumpWidget(host(busy: false));
+    expect(find.text('Waiting for reply'), findsNothing);
+    await tester.pump(const Duration(seconds: 24));
+    await tester.pumpWidget(const SizedBox());
+    semantics.dispose();
+  });
+  for (final size in [(390.0, 1.0), (360.0, 2.0)]) {
+    testWidgets('reduced motion is static and fits ${size.$1}/${size.$2}',
+        (tester) async {
+      await tester
+          .pumpWidget(host(reduced: true, width: size.$1, scale: size.$2));
+      final first =
+          tester.widget<Text>(find.byKey(const Key('thinking-quip'))).data;
+      await tester.pump(const Duration(seconds: 40));
+      expect(tester.widget<Text>(find.byKey(const Key('thinking-quip'))).data,
+          first);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+  test('shuffle bag exhausts pool and never repeats at a boundary', () {
+    final bag = ThinkingShuffleBag(['a', 'b', 'c'], random: Random(4));
+    String? last;
+    for (var round = 0; round < 20; round++) {
+      final seen = <String>{};
+      for (var i = 0; i < 3; i++) {
+        final next = bag.next();
+        expect(next, isNot(last));
+        seen.add(next);
+        last = next;
+      }
+      expect(seen.length, 3);
+    }
+  });
+}
