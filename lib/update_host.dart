@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'updates/saathi_updates.dart';
 
@@ -129,7 +130,7 @@ class SaathiUpdatesPage extends StatelessWidget {
                     ? 'Download this update?'
                     : 'Open the release page?'),
                 content: Text(android
-                    ? 'Saathi will download and verify the APK, then ask Android to install it. Android may first ask you to allow updates from Saathi. Your conversations are not uploaded.'
+                    ? 'Saathi will download the update, then Android will ask before installing it. Your chats won’t be shared.'
                     : 'This opens GitHub in your browser. Desktop installation is manual; Saathi will not replace or restart itself.'),
                 actions: [
                   TextButton(
@@ -166,70 +167,118 @@ class SaathiUpdatesPage extends StatelessWidget {
               .contains(updates.status);
           final offer = updates.offer;
           final disabledReason = config.distribution == 'play'
-              ? 'This is a Play distribution. GitHub self-updates are disabled; Play updates are not integrated yet.'
-              : 'Automatic updates are not configured for this build. A release repository and a production-signed release are required.';
+              ? 'Use Google Play to check for updates for this app.'
+              : 'Updates are not configured for this app.';
           return Scaffold(
               appBar: AppBar(title: const Text('App updates')),
-              body: ListView(padding: const EdgeInsets.all(24), children: [
-                Text(
-                    'Saathi ${updates.service.installed.name} · build ${updates.service.installed.build}',
-                    style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 16),
-                Text(config.enabled
-                    ? 'Automatic checks run at launch and when you return to the app, at most once every six hours.'
-                    : disabledReason),
-                if (config.enabled) ...[
-                  const SizedBox(height: 8),
-                  Text('${config.owner}/${config.repo} · ${config.channel}'),
-                ],
-                const SizedBox(height: 20),
-                FilledButton.icon(
-                    onPressed: !config.enabled || working
-                        ? null
-                        : () => updates.check(force: true),
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Check for updates')),
-                if (working) ...[
-                  const SizedBox(height: 16),
-                  LinearProgressIndicator(
-                      value: updates.status == UpdateStatus.downloading
-                          ? updates.progress
-                          : null)
-                ],
-                if (updates.status == UpdateStatus.upToDate) ...[
-                  const SizedBox(height: 16),
-                  const Text('No newer eligible release was found.')
-                ],
-                if (updates.error != null) ...[
-                  const SizedBox(height: 16),
-                  Text(updates.error!,
-                      style:
-                          TextStyle(color: Theme.of(context).colorScheme.error))
-                ],
-                if (offer != null) ...[
-                  const SizedBox(height: 24),
-                  Text(
-                      'Available: ${offer.version.name} · build ${offer.version.build}',
-                      style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 8),
-                  Text(updates.supportsAndroidInstall
-                      ? 'The download is checked for size and SHA-256. Android also verifies app identity and signing before accepting an upgrade.'
-                      : 'This release feed currently contains Android APKs. Desktop automatic installation is not implemented.'),
-                  const SizedBox(height: 16),
-                  OutlinedButton(
-                      onPressed:
-                          working ? null : () => _confirm(context, updates),
-                      child: Text(updates.supportsAndroidInstall
-                          ? 'Install update'
-                          : 'Open releases')),
-                ],
-                if (updates.status == UpdateStatus.handedOff) ...[
-                  const SizedBox(height: 16),
-                  Text(updates.supportsAndroidInstall
-                      ? 'Android installer opened. Installation still requires your approval.'
-                      : 'The release page opened. No update was installed by Saathi.')
-                ],
-              ]));
+              body: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                            'Current version: ${updates.service.installed.name}',
+                            style: Theme.of(context).textTheme.titleLarge),
+                        const SizedBox(height: 16),
+                        Text(config.enabled
+                            ? _statusText(updates)
+                            : disabledReason),
+                        const SizedBox(height: 20),
+                        OutlinedButton.icon(
+                            onPressed: !config.enabled || working
+                                ? null
+                                : () => updates.check(force: true),
+                            icon: const Icon(Icons.refresh),
+                            label: const Text('Check for updates')),
+                        if (working) ...[
+                          const SizedBox(height: 16),
+                          LinearProgressIndicator(
+                              value: updates.status == UpdateStatus.downloading
+                                  ? updates.progress
+                                  : null)
+                        ],
+                        if (updates.error != null) ...[
+                          const SizedBox(height: 16),
+                          Text(updates.error!,
+                              style: TextStyle(
+                                  color: Theme.of(context).colorScheme.error))
+                        ],
+                        if (offer != null) ...[
+                          const SizedBox(height: 24),
+                          Text('Available: ${offer.version.name}',
+                              style: Theme.of(context).textTheme.titleMedium),
+                          const SizedBox(height: 8),
+                          Text(updates.supportsAndroidInstall
+                              ? 'Read the changes below before installing. Android will ask for your approval.'
+                              : 'Desktop installation is manual. Open the release page in your browser to choose a download.'),
+                          const SizedBox(height: 16),
+                          FilledButton(
+                              onPressed: working
+                                  ? null
+                                  : () => _confirm(context, updates),
+                              child: Text(updates.supportsAndroidInstall
+                                  ? 'Install update'
+                                  : 'Open releases')),
+                        ],
+                        if (updates.status == UpdateStatus.handedOff) ...[
+                          const SizedBox(height: 16),
+                          Text(updates.supportsAndroidInstall
+                              ? 'Follow Android’s prompts to finish installing.'
+                              : 'The release page opened. No update was installed by Saathi.')
+                        ],
+                        const SizedBox(height: 24),
+                        Text("What's new",
+                            style: Theme.of(context).textTheme.titleLarge),
+                        _ReleaseHistory(remote: updates.service.releaseNotes),
+                      ])));
         });
   }
+}
+
+String _statusText(SaathiUpdateController updates) => switch (updates.status) {
+      UpdateStatus.checking => 'Checking for updates…',
+      UpdateStatus.upToDate => 'You’re up to date.',
+      UpdateStatus.available => 'An update is ready.',
+      UpdateStatus.downloading => 'Downloading your update…',
+      UpdateStatus.error => 'Could not finish the update. Please try again.',
+      UpdateStatus.handedOff => 'Finish the update outside Saathi.',
+      _ => 'Saathi checks for updates automatically.',
+    };
+
+class _ReleaseHistory extends StatefulWidget {
+  const _ReleaseHistory({required this.remote});
+  final List<ReleaseNotes> remote;
+  @override
+  State<_ReleaseHistory> createState() => _ReleaseHistoryState();
+}
+
+class _ReleaseHistoryState extends State<_ReleaseHistory> {
+  final _bundled = rootBundle
+      .loadString('assets/changelog.json', cache: false)
+      .then(ReleaseNotes.fromChangelog)
+      .catchError((Object _) => <ReleaseNotes>[]);
+  @override
+  Widget build(BuildContext context) => FutureBuilder<List<ReleaseNotes>>(
+      future: _bundled,
+      builder: (context, snapshot) {
+        final history =
+            ReleaseNotes.merge(snapshot.data ?? const [], widget.remote);
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (history.isEmpty)
+            Text(snapshot.connectionState == ConnectionState.waiting
+                ? 'Loading changes…'
+                : 'Change notes are not available.'),
+          for (final release in history) ...[
+            const SizedBox(height: 20),
+            Text(release.version,
+                style: Theme.of(context).textTheme.titleMedium),
+            if (release.changes.isEmpty)
+              const Text('Change notes are not available for this version.'),
+            for (final change in release.changes)
+              Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text('• $change')),
+          ],
+        ]);
+      });
 }

@@ -29,7 +29,9 @@ void main() {
     await tester.tap(find.byTooltip('App updates'));
     await tester.pumpAndSettle();
     expect(find.textContaining('not configured'), findsOneWidget);
-    expect(find.text('Saathi 0.1.0 · build 1'), findsOneWidget);
+    expect(find.text('Current version: 0.1.0'), findsOneWidget);
+    expect(find.textContaining('build 1'), findsNothing);
+    expect(find.text("What's new"), findsOneWidget);
   });
   testWidgets(
       'available release is visible but opening it still requires confirmation',
@@ -92,8 +94,8 @@ void main() {
     expect(find.text('App updates'), findsOneWidget);
     expect(find.textContaining('not configured'), findsOneWidget);
     expect(find.text('Check for updates'), findsOneWidget);
-    final button = tester.widget<FilledButton>(
-        find.widgetWithText(FilledButton, 'Check for updates'));
+    final button = tester.widget<OutlinedButton>(
+        find.widgetWithText(OutlinedButton, 'Check for updates'));
     expect(button.onPressed, isNull);
     expect(find.textContaining('0.1.0'), findsOneWidget);
   });

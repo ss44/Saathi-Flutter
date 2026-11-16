@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "unreleased": [
+    "A simpler App updates screen with clearer buttons and everyday wording.",
+    "Read the full recent change history below the update button."
+  ],
+  "releases": [
+    {
+      "version": "2026.47.1",
+      "changes": [
+        "Swipe left on a connection to edit or delete it, or use its menu.",
+        "Edit saved settings and show, replace or clear your saved key.",
+        "Deleting a connection asks for confirmation and keeps your old conversations read-only.",
+        "Changing a connection's server or provider keeps old conversations separate.",
+        "Removed the dashboard-only login that could browse sessions but could not chat."
+      ]
+    },
+    {
+      "version": "2026.46.3",
+      "changes": [
+        "Weekly releases now skip a new download when the app has not changed.",
+        "Improved release publishing so update downloads come from one completed build."
+      ]
+    },
+    {
+      "version": "2026.46.2",
+      "changes": [
+        "Optional Android notifications let you know when a reply arrives while the app is in the background.",
+        "Tap a reply notification to open its conversation.",
+        "Added a dashboard-only session browser; this was removed in version 2026.47.1."
+      ]
+    },
+    {
+      "version": "2026.46.1",
+      "changes": [
+        "First downloadable Saathi release for Android, macOS, Windows and Linux.",
+        "Connect to supported AI providers and keep conversations on your device.",
+        "Browse existing Hermes sessions without moving them into a new conversation.",
+        "Android can check for updates, download them and open the system installer for your approval."
+      ]
+    }
+  ]
+}

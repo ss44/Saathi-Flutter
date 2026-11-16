@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart' as crypto;
 import 'package:http/http.dart' as http;
 
 import 'update_version.dart';
+import 'release_notes.dart';
 
 class UpdateConfig {
   const UpdateConfig(
@@ -80,6 +81,7 @@ class SaathiUpdateService {
   final http.Client _client;
   final bool _ownsClient;
   final Set<UpdateOffer> _issuedOffers = {};
+  List<ReleaseNotes> releaseNotes = const [];
 
   void close() {
     if (_ownsClient) _client.close();
@@ -96,6 +98,7 @@ class SaathiUpdateService {
       throw const UpdateException('Invalid release list');
     }
     UpdateOffer? newest;
+    final notes = <ReleaseNotes>[];
     for (final item in releases) {
       final release = _map(item);
       if (release['draft'] != false || release['prerelease'] is! bool) continue;
@@ -170,6 +173,8 @@ class SaathiUpdateService {
         throw const UpdateException('Artifact metadata mismatch');
       }
       _checkDigest(assetMeta, hash);
+      notes.add(
+          ReleaseNotes(version.name, ReleaseNotes.parseBody(release['body'])));
       if (!version.isNewerThan(installed)) continue;
       final offer = UpdateOffer._(
           version: version,
@@ -185,6 +190,7 @@ class SaathiUpdateService {
       }
     }
     if (newest != null) _issuedOffers.add(newest);
+    releaseNotes = List.unmodifiable(ReleaseNotes.merge(const [], notes));
     return newest;
   }
 
