@@ -1,4 +1,9 @@
 import 'dart:async';
+import '../agent_activity/activity_owner.dart';
+import '../agent_activity/activity_strip.dart';
+import '../agent_activity/activity_model.dart';
+import '../core/saathi_core.dart' show RemoteSession;
+import 'remote_sessions.dart';
 import 'package:flutter/material.dart';
 import 'local_history_search.dart';
 import '../update_host.dart';
@@ -24,6 +29,7 @@ class ChatHome extends StatefulWidget {
 }
 
 class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
+  late ActivityOwner activity;
   bool drawerOpen = false;
   AgentControlsController? controls;
   bool openingControls = false;
@@ -82,26 +88,8 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    activity = ActivityOwner(c);
     WidgetsBinding.instance.addObserver(this);
-    c.addListener(syncServers);
-    listenControls();
-    c.pauseRuns(
-        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed);
-    syncServers();
-  }
-
-  @override
-  void didUpdateWidget(covariant ChatHome oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (identical(oldWidget.controller, c)) return;
-    revokeControls();
-    controlsUpdates?.cancel();
-    oldWidget.controller.removeListener(syncServers);
-    oldWidget.controller.pauseRuns(true);
-    for (final cache in serverCaches.values) {
-      cache.dispose();
-    }
-    serverCaches.clear();
     c.addListener(syncServers);
     listenControls();
     c.pauseRuns(
@@ -145,10 +133,61 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   }
 
   @override
+  void didUpdateWidget(covariant ChatHome oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (identical(oldWidget.controller, c)) return;
+    revokeControls();
+    controlsUpdates?.cancel();
+    oldWidget.controller.removeListener(syncServers);
+    oldWidget.controller.pauseRuns(true);
+    activity.dispose();
+    for (final cache in serverCaches.values) {
+      cache.dispose();
+    }
+    serverCaches.clear();
+    activity = ActivityOwner(c);
+    c.addListener(syncServers);
+    listenControls();
+    final paused =
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
+    c.pauseRuns(paused);
+    activity.setPaused(paused);
+    syncServers();
+  }
+
+  @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     c.setQueueBackground(state != AppLifecycleState.resumed);
     c.pauseRuns(state != AppLifecycleState.resumed);
+    activity.setPaused(state != AppLifecycleState.resumed);
     if (state != AppLifecycleState.resumed) revokeControls();
+  }
+
+  void openActivityParent(ActivityBinding binding) {
+    if (activity.connectionFor(binding) == null) return;
+    final session =
+        c.sessions.where((s) => s.id == binding.localChatId).firstOrNull;
+    if (session == null) return;
+    setState(() {
+      c.current = session;
+      composer.clear();
+    });
+    c.notifyListeners();
+  }
+
+  void openActivityChild(ActivityBinding binding, ChildActivity child) {
+    final connection = activity.connectionFor(binding);
+    if (connection == null || child.childSessionId == null) return;
+    Navigator.push(
+        context,
+        MaterialPageRoute<void>(
+            builder: (_) => RemoteHistoryPage(
+                controller: c,
+                connection: connection,
+                isReadAuthorityCurrent: () =>
+                    activity.connectionFor(binding) != null,
+                session: RemoteSession(
+                    {'id': child.childSessionId!, 'title': child.goal}))));
   }
 
   Future<void> acknowledgeUnknown() async {
@@ -200,6 +239,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   ChatController get c => widget.controller;
   @override
   void dispose() {
+    activity.dispose();
     controlsUpdates?.cancel();
     revokeControls();
     c.removeListener(syncServers);
@@ -658,6 +698,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                           child:
                               Column(mainAxisSize: MainAxisSize.min, children: [
+                            AgentActivityStrip(
+                                model: activity.model,
+                                onOpenParent: openActivityParent,
+                                onOpenChildHistory: openActivityChild),
                             Container(
                                 padding: const EdgeInsets.fromLTRB(15, 4, 5, 4),
                                 decoration: BoxDecoration(
@@ -702,16 +746,19 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                           icon: const Icon(
                                               Icons.arrow_upward_rounded))
                                     ])),
-                            Align(
-                                alignment: Alignment.centerLeft,
-                                child: PromptOptimizer(
-                                    key: ValueKey(session?.id),
-                                    controller: c,
-                                    composer: composer)),
-                            const SizedBox(height: 8),
-                            const Text(
-                                'AI can make mistakes. Review important details.',
-                                style: TextStyle(fontSize: 11, color: muted))
+                            if (MediaQuery.viewInsetsOf(context).bottom ==
+                                0) ...[
+                              Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: PromptOptimizer(
+                                      key: ValueKey(session?.id),
+                                      controller: c,
+                                      composer: composer)),
+                              const SizedBox(height: 8),
+                              const Text(
+                                  'AI can make mistakes. Review important details.',
+                                  style: TextStyle(fontSize: 11, color: muted))
+                            ],
                           ]))),
                 ]),
         );
