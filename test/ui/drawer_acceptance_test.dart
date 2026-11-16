@@ -147,7 +147,10 @@ void main() {
           scrollable: drawerScroll);
       await t.tap(find.text('Local first'));
       await t.pumpAndSettle();
-      expect(find.text('Local first'), findsOneWidget);
+      expect(
+          find.descendant(
+              of: find.byType(AppBar), matching: find.text('Local first')),
+          findsOneWidget);
       await t.tap(find.byTooltip('Open navigation menu'));
       await t.pumpAndSettle();
       await t.scrollUntilVisible(find.text('Remote first'), 150,
