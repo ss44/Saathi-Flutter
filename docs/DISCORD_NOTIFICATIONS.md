@@ -49,7 +49,8 @@ safety bounds, not a claim of unlimited Discord storage or API pagination.
 
 The upload uses multipart `payload_json` and `files[0]`, with explicit attachment
 metadata. Mentions are disabled for both paths. `wait=true` acknowledges the POST;
-then the exact returned message ID is fetched and content/GIF are checked. If
+then the exact returned message ID is fetched and text/GIF are checked. Discord's
+outer-whitespace trimming is permitted; meaningful text changes still fail. If
 attached, the filename and size must match, and a public GET of the validated
 Discord CDN attachment must return byte-for-byte identical complete UTF-8 data.
 No bearer token or webhook credentials are forwarded to that CDN GET. Unexpected

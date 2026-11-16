@@ -73,6 +73,21 @@ class DiscordNotificationTests(unittest.TestCase):
         self.assertTrue(self.calls[3][0].endswith('/messages/123456789'))
         self.assertIsNone(self.calls[2][2])
 
+    def test_discord_trims_outer_whitespace_without_changing_text(self):
+        self.pr['body'] = 'Complete description\nsecond line\n\n'
+        original = self.fake_json
+
+        def normalized(opener, url, payload=None, headers=None, attachment=None):
+            result = original(opener, url, payload, headers, attachment)
+            if '/messages/' in url:
+                return dict(result, content=result['content'].strip())
+            return result
+
+        with patch.dict(self.scope['main'].__globals__, {'read_json': normalized}):
+            self.scope['main']()
+        self.assertIn(self.pr['body'], self.saved['content'])
+        self.assertEqual(sum(payload is not None for _, payload, _ in self.calls), 1)
+
     def test_empty_description_is_honest(self):
         self.pr['body'] = None
         self.run_main()
