@@ -21,7 +21,13 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: dart format --output=none --set-exit-if-changed lib test
-      - run: flutter analyze
-      - run: flutter test --timeout 60s
+      - run: flutter analyze --fatal-infos --fatal-warnings
+      - run: flutter test --coverage --timeout 60s
+      - run: python3 tool/check_coverage.py coverage/lcov.info --minimum 85
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - run: python3 -m pip install -r tool/requirements-test.txt
+      - run: python3 -m unittest discover -s test/branding -v
       - name: Test update metadata (not APK signing or publishing)
         run: python3 -m unittest discover -s tool -p 'test_*.py' -v
