@@ -239,7 +239,13 @@ class _RemoteHistoryPageState extends State<RemoteHistoryPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-      appBar: AppBar(title: Text(widget.session.title)),
+      appBar: AppBar(
+          title: Text(
+              widget.session.title.trim().isEmpty
+                  ? 'New conversation'
+                  : widget.session.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis)),
       body: ListView(padding: const EdgeInsets.all(22), children: [
         const Text('Read-only · Server-owned conversation',
             style: TextStyle(fontWeight: FontWeight.w600)),

@@ -79,13 +79,17 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 100));
     });
     await tester.pumpAndSettle();
-    expect(find.text('Hello'), findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byType(MessageView), matching: find.text('Hello')),
+        findsOneWidget);
     expect(find.byType(MessageView), findsNWidgets(2));
     expect(find.textContaining('Activity ·'), findsNothing);
     await tester.drag(find.byType(MessageView).last, const Offset(-250, 0));
     await tester.pumpAndSettle();
     expect(find.textContaining('Activity · Response received'), findsOneWidget);
-    await tester.longPress(find.text('Hello'));
+    await tester.longPress(find.descendant(
+        of: find.byType(MessageView), matching: find.text('Hello')));
     await tester.pumpAndSettle();
     expect(find.text('Copied'), findsOneWidget);
     expect(copied, 'Hello');
@@ -99,12 +103,18 @@ void main() {
     await tester.pumpAndSettle();
     await tester.pageBack();
     await tester.pumpAndSettle();
-    expect(find.text('Hello'), findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byType(MessageView), matching: find.text('Hello')),
+        findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     await tester.pumpWidget(
         SaathiApp(store: store, coreFactory: () => SaathiCore(client: client)));
     await tester.pumpAndSettle();
-    expect(find.text('Hello'), findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byType(MessageView), matching: find.text('Hello')),
+        findsOneWidget);
     expect(find.byType(MessageView), findsNWidgets(2));
     await tester.longPress(find.byType(MessageView).last);
     await tester.pumpAndSettle();
@@ -114,13 +124,19 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Keep'));
     await tester.pumpAndSettle();
-    expect(find.text('Hello'), findsOneWidget);
+    expect(
+        find.descendant(
+            of: find.byType(MessageView), matching: find.text('Hello')),
+        findsOneWidget);
     await tester.tap(find.byTooltip('Delete conversation'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Delete'));
     await tester.pumpAndSettle();
     expect((await store.load()).chats, isEmpty);
-    expect(find.text('Hello'), findsNothing);
+    expect(
+        find.descendant(
+            of: find.byType(MessageView), matching: find.text('Hello')),
+        findsNothing);
   });
 
   testWidgets(

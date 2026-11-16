@@ -350,9 +350,14 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
               title: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Saathi',
-                        style: TextStyle(
-                            fontSize: 20, fontWeight: FontWeight.w700)),
+                    Text(
+                        session == null || session.title.trim().isEmpty
+                            ? 'New conversation'
+                            : session.title,
+                        style: const TextStyle(
+                            fontSize: 20, fontWeight: FontWeight.w700),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
                     Text(subtitle,
                         style: const TextStyle(fontSize: 12, color: muted),
                         maxLines: 1,
