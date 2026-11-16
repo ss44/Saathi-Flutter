@@ -100,16 +100,18 @@ Future<void> _render(
                   'pagination': {'has_more': false},
                 }),
                 200))));
+    final connection = <String, dynamic>{
+      'id': 'h',
+      'name': 'Hermes',
+      'url': 'https://hermes.example',
+      'type': 'hermes'
+    };
+    controller.connections.add(connection);
     addTearDown(controller.dispose);
     await tester.pumpWidget(MaterialApp(
         home: RemoteHistoryPage(
             controller: controller,
-            connection: const {
-              'id': 'h',
-              'name': 'Hermes',
-              'url': 'https://hermes.example',
-              'type': 'hermes'
-            },
+            connection: connection,
             session: RemoteSession({'id': 'remote', 'title': 'Remote'}))));
   }
   await tester.runAsync(() async {
