@@ -1,8 +1,15 @@
 # Quality checks
 
-Run from the repository root with the pinned CI Flutter SDK and Python 3.10+:
+Run from the repository root with the pinned CI Flutter SDK and Python 3.13.
+Both verification jobs use an immutable `actions/setup-python` pin and install
+`tool/requirements-test.txt` before branding tests. Pillow is required by their
+real image assertions; do not rely on runner-global packages. Locally, use a venv
+rather than modifying the system Python (including externally managed installs):
 
 ```sh
+python3.13 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -r tool/requirements-test.txt
 flutter pub get
 dart format --output=none --set-exit-if-changed lib test
 flutter analyze --fatal-infos --fatal-warnings
