@@ -4,6 +4,7 @@ import 'local_history_search.dart';
 import '../update_host.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import '../agent_runs/run_client.dart';
 import 'chat_controller.dart';
 import 'busy_thinking.dart';
 import 'connections.dart';
@@ -28,6 +29,8 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     c.addListener(syncServers);
+    c.pauseRuns(
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed);
     syncServers();
   }
 
@@ -48,6 +51,37 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     c.setQueueBackground(state != AppLifecycleState.resumed);
+    c.pauseRuns(state != AppLifecycleState.resumed);
+  }
+
+  Future<void> acknowledgeUnknown() async {
+    final owner = c;
+    final session = owner.current;
+    final operation = owner.currentRun;
+    if (session == null || operation == null) return;
+    final accepted = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+                title: const Text('Acknowledge unknown outcome?'),
+                content: const Text(
+                    'Prior work may already have had side effects. This marks the lost execution interrupted; it does not undo or repeat its work.'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('Keep checking')),
+                  TextButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('Acknowledge'))
+                ]));
+    if (accepted == true &&
+        mounted &&
+        identical(c, owner) &&
+        identical(owner.current, session) &&
+        owner.sessions.contains(session) &&
+        identical(owner.runs[session.id], operation)) {
+      await owner.checkRunStatus(
+          sessionId: session.id, acknowledgeUnknown: true);
+    }
   }
 
   final composer = TextEditingController();
@@ -80,6 +114,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
         'Queue paused because the chat screen closed. Choose Resume when you return.',
         allSources: true);
 
+    c.pauseRuns(true);
     composer.dispose();
     scroll.dispose();
     super.dispose();
@@ -150,6 +185,12 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
       listenable: c,
       builder: (context, _) {
         final session = c.current;
+        final run = c.currentRun;
+        final thinking = run == null
+            ? c.busy
+            : c.runPending &&
+                (run.snapshot.state == RunState.queued ||
+                    run.snapshot.state == RunState.running);
         final localMatches =
             searchLocalHistory(c.sessions.reversed, historyQuery);
         final names = c.connections
@@ -303,7 +344,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                   const UpdateAvailabilityBanner(),
                   Expanded(
                       child: session == null ||
-                              session.messages.isEmpty && !c.busy
+                              session.messages.isEmpty &&
+                                  c.pendingText == null &&
+                                  !thinking &&
+                                  !c.busy
                           ? Center(
                               child: SingleChildScrollView(
                                   padding: const EdgeInsets.all(32),
@@ -351,7 +395,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                   if (c.pendingText != null)
                                     MessageView(
                                         text: c.pendingText!, user: true),
-                                  if (c.busy)
+                                  if (thinking)
                                     const Padding(
                                         padding:
                                             EdgeInsets.symmetric(vertical: 18),
@@ -449,6 +493,27 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                   label: const Text('Try saving again')),
                           ]),
                     ),
+                  if (c.currentRun != null && c.runPending)
+                    Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Wrap(
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              Text('Run: ${c.currentRun!.snapshot.status}'),
+                              TextButton(
+                                  onPressed:
+                                      c.busy ? null : () => c.checkRunStatus(),
+                                  child: Text(c.currentRun!.runId == null
+                                      ? 'Reconnect'
+                                      : 'Check status')),
+                              if (c.currentRun!.snapshot.status == 'unknown' &&
+                                  c.currentRun!.runId != null)
+                                TextButton(
+                                    onPressed:
+                                        c.busy ? null : acknowledgeUnknown,
+                                    child: const Text(
+                                        'Acknowledge unknown outcome')),
+                            ])),
                   SafeArea(
                       top: false,
                       child: Padding(

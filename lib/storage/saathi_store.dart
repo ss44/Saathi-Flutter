@@ -93,6 +93,7 @@ class SaathiStore {
             'type',
             'model',
             'systemPrompt',
+            'authorityEpoch',
             'allowInsecureHttp'
           ])
             if (connection.containsKey(key)) key: connection[key]
@@ -137,6 +138,7 @@ class SaathiStore {
                   'type',
                   'model',
                   'systemPrompt',
+                  'authorityEpoch',
                   'allowInsecureHttp'
                 ])
                   if (replacement.containsKey(key) ||
