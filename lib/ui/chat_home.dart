@@ -244,6 +244,11 @@ class _ChatHomeState extends State<ChatHome> {
                                               style: TextStyle(color: muted))
                                         ]))
                                 ])),
+                  if (c.readOnly)
+                    const Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Text(
+                            'Read-only · This connection was removed or changed. Start a new conversation to send messages.')),
                   if (c.error != null)
                     Container(
                         width: double.infinity,
@@ -280,8 +285,10 @@ class _ChatHomeState extends State<ChatHome> {
                                           child: TextField(
                                               key: const Key('composer'),
                                               controller: composer,
-                                              enabled:
-                                                  session != null && !c.busy,
+                                              enabled: session != null &&
+                                                  !c.busy &&
+                                                  !c.readOnly &&
+                                                  !c.changingConnection,
                                               minLines: 1,
                                               maxLines: 6,
                                               textCapitalization:
@@ -292,7 +299,9 @@ class _ChatHomeState extends State<ChatHome> {
                                                   border: InputBorder.none))),
                                       IconButton.filled(
                                           tooltip: 'Send',
-                                          onPressed: session == null ||
+                                          onPressed: c.readOnly ||
+                                                  c.changingConnection ||
+                                                  session == null ||
                                                   c.busy ||
                                                   composer.text.trim().isEmpty
                                               ? null

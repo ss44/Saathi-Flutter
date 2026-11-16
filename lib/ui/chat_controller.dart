@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import '../core/saathi_core.dart';
 import '../notifications/reply_notifications.dart';
@@ -88,9 +89,96 @@ class ChatController extends ChangeNotifier {
   }
 
   Future<void> addConnection(Map<String, dynamic> c, String key) async {
-    await store.saveConnection(c, apiKey: key);
-    connections.add(c);
+    if (!canChangeConnections) {
+      throw StateError('Connection unavailable or work in progress');
+    }
+    changingConnection = true;
     notifyListeners();
+    try {
+      await store.saveConnection(c, apiKey: key);
+      if (!_disposed) connections.add(c);
+    } on StorageRecoveryException {
+      _failClosed();
+      rethrow;
+    } finally {
+      changingConnection = false;
+      notifyListeners();
+    }
+  }
+
+  bool changingConnection = false;
+  bool get canChangeConnections =>
+      !_disposed && !loading && !busy && !changingConnection && !_loadFailed;
+  void _failClosed() {
+    _loadFailed = true;
+    error =
+        'Secure storage recovery could not be confirmed. Connections are read-only; restart after checking storage.';
+  }
+
+  bool get readOnly =>
+      _loadFailed ||
+      current != null &&
+          !connections.any((c) => c['id'] == current!.connectionId);
+
+  void _checkMutation(String id) {
+    if (_disposed ||
+        loading ||
+        busy ||
+        changingConnection ||
+        _loadFailed ||
+        !connections.any((c) => c['id'] == id)) {
+      throw StateError('Connection unavailable or work in progress');
+    }
+  }
+
+  Future<void> updateConnection(String id, Map<String, dynamic> values,
+      {String? apiKey}) async {
+    _checkMutation(id);
+    final old = connections.singleWhere((c) => c['id'] == id);
+    final revised =
+        old['type'] != values['type'] || old['url'] != values['url'];
+    final next = <String, dynamic>{
+      ...old,
+      ...values,
+      'id': revised
+          ? List.generate(
+              24,
+              (_) => Random.secure()
+                  .nextInt(256)
+                  .toRadixString(16)
+                  .padLeft(2, '0')).join()
+          : id
+    };
+    changingConnection = true;
+    notifyListeners();
+    try {
+      await store.changeConnection(id, replacement: next, apiKey: apiKey);
+      if (_disposed) return;
+      connections[connections.indexOf(old)] = next;
+    } on StorageRecoveryException {
+      _failClosed();
+      rethrow;
+    } finally {
+      changingConnection = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> deleteConnection(String id) async {
+    _checkMutation(id);
+    changingConnection = true;
+    notifyListeners();
+    try {
+      await store.changeConnection(id);
+      if (_disposed) return;
+      connections.removeWhere((c) => c['id'] == id);
+    } on StorageRecoveryException {
+      _failClosed();
+      rethrow;
+    } finally {
+      changingConnection = false;
+      notifyListeners();
+    }
   }
 
   Future<List<ModelInfo>> discover(Map<String, dynamic> c) async {
@@ -104,6 +192,7 @@ class ChatController extends ChangeNotifier {
 
   Future<void> newSession(
       Map<String, dynamic> c, String model, String prompt) async {
+    _checkMutation(c['id'] as String);
     final session = ChatSession(
         id: DateTime.now().microsecondsSinceEpoch.toString(),
         connectionId: c['id'],
@@ -133,7 +222,7 @@ class ChatController extends ChangeNotifier {
 
   void select(ChatSession session) {
     current = session;
-    error = null;
+    if (!_loadFailed) error = null;
     notifyListeners();
   }
 
@@ -175,7 +264,15 @@ class ChatController extends ChangeNotifier {
 
   Future<bool> send(String text) async {
     final session = current;
-    if (busy || session == null || text.trim().isEmpty) return false;
+    if (_disposed ||
+        _loadFailed ||
+        loading ||
+        changingConnection ||
+        busy ||
+        session == null ||
+        text.trim().isEmpty) {
+      return false;
+    }
     final found = connections.where((c) => c['id'] == session.connectionId);
     if (found.isEmpty) {
       error =
