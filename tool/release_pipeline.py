@@ -86,17 +86,87 @@ def validate_draft(release, tag, commit, run_id):
         raise ValueError('REST release ID must be numeric')
 
 
-def release_body(run_id):
-    """Human notes are separate from technical distribution instructions."""
-    changelog = json.loads(Path('assets/changelog.json').read_text())
-    notes = changelog.get('unreleased')
-    if changelog.get('schema') != 1 or not isinstance(notes, list) or not all(
+CHANGES_START = '<!-- saathi-changes:start -->'
+CHANGES_END = '<!-- saathi-changes:end -->'
+
+
+def validate_notes(notes):
+    if not isinstance(notes, list) or not all(
             isinstance(note, str) and note.strip() and '\n' not in note
             and '\r' not in note and '<!--' not in note for note in notes):
         raise ValueError('Invalid unreleased change notes')
-    human = "## What's new\n<!-- saathi-changes:start -->\n"
-    human += ''.join('- ' + note + '\n' for note in notes)
-    human += '<!-- saathi-changes:end -->\n\n'
+    return notes
+
+
+def source_notes(commit, *, historical=False):
+    """Read a committed blob; only an absent historical path means no notes.
+
+    Missing objects, invalid JSON/schema and Git failures always propagate.
+    """
+    entry = command('git', 'ls-tree', commit, '--', 'assets/changelog.json')
+    if not entry:
+        if historical:
+            return []
+        raise ValueError('Selected source has no assets/changelog.json')
+    changelog = json.loads(command('git', 'show', commit + ':assets/changelog.json'))
+    if not isinstance(changelog, dict) or changelog.get('schema') != 1:
+        raise ValueError('Invalid source changelog schema')
+    return validate_notes(changelog.get('unreleased'))
+
+
+def select_release_notes(commit, releases):
+    """Subtract all published canonical sources, not just the latest source.
+
+    Only tagged published sources establish the ledger: neither release bodies,
+    mutable target_commitish nor unshipped commits/archived entries do. Every
+    eligible tag must resolve to a commit ancestral to the selected source.
+    """
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise ValueError('Source must be an exact full commit SHA')
+    current = source_notes(commit)
+    old = set()
+    sources = {commit: current}
+    for release in releases:
+        if release['draft']:
+            continue
+        try:
+            tag_parts(release['tag_name'])
+        except ValueError:
+            continue
+        baseline = command('git', 'rev-parse', '--verify',
+                           'refs/tags/' + release['tag_name'] + '^{commit}')
+        try:
+            command('git', 'merge-base', '--is-ancestor', baseline, commit)
+        except subprocess.CalledProcessError as error:
+            if error.returncode == 1:
+                raise ValueError('Previous published source is not an ancestor') from error
+            raise
+        if baseline not in sources:
+            sources[baseline] = source_notes(baseline, historical=True)
+        old.update(sources[baseline])
+    return [note for note in current if note not in old]
+
+
+def human_block(notes):
+    notes = validate_notes(notes)
+    displayed = notes or ['No additional change notes for this version.']
+    return '\n' + ''.join('- ' + note + '\n' for note in displayed)
+
+
+def replace_human_block(body, notes):
+    """Pure metadata repair: preserve every byte outside one marked block."""
+    if body.count(CHANGES_START) != 1 or body.count(CHANGES_END) != 1:
+        raise ValueError('Expected exactly one start and end change marker')
+    start = body.index(CHANGES_START) + len(CHANGES_START)
+    end = body.index(CHANGES_END)
+    if end < start:
+        raise ValueError('Reversed change markers')
+    return body[:start] + human_block(notes) + body[end:]
+
+
+def release_body(run_id, notes):
+    """Explicit selected human notes, separate from distribution instructions."""
+    human = "## What's new\n" + CHANGES_START + human_block(notes) + CHANGES_END + '\n\n'
     return human + Path('docs/DESKTOP_RELEASE_NOTES.md').read_text() + '\n' + marker(run_id)
 
 
@@ -110,7 +180,7 @@ def prepare(repository, commit, run_number, run_id):
     result = plan(releases, tags, commit, run_number, run_id, tree)
     if result['release_required'] == 'true':
         if not result['release_id']:
-            body = release_body(run_id)
+            body = release_body(run_id, select_release_notes(commit, releases))
             created = api(f'repos/{repository}/releases', 'POST', dict(
                 tag_name=result['tag'], target_commitish=commit,
                 name='Saathi ' + result['version'], body=body, draft=True, prerelease=True))
