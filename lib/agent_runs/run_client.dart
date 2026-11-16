@@ -374,6 +374,11 @@ class RunClient {
     return e is Map && e['method'] == method && e['path'] == path;
   }
 
+  bool get eventsSupported =>
+      capabilities['features'] is Map &&
+      (capabilities['features'] as Map)['run_events_sse'] == true &&
+      _endpoint('run_events', 'GET', '/v1/runs/{run_id}/events');
+
   Future<bool> discover() async {
     final (code, data, _) =
         await _request('GET', '/v1/capabilities', discovery: true);

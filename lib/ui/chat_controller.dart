@@ -63,15 +63,23 @@ class ScopedRunSnapshot {
       required this.operationKey,
       required Map<String, String?> originalAuthority,
       required this.snapshot,
-      required bool Function() isCurrent})
+      required bool Function() isCurrent,
+      bool Function()? isObservable,
+      this.eventsSupported = false,
+      this.originalConnection})
       : originalAuthority = Map.unmodifiable(originalAuthority),
-        _isCurrent = isCurrent;
+        _isCurrent = isCurrent,
+        _isObservable = isObservable ?? isCurrent;
+  final bool eventsSupported;
+  final Map<String, dynamic>? originalConnection;
   final String localChatId, connectionId, operationKey;
   final Object connectionRevision;
   final Map<String, String?> originalAuthority;
   final RunSnapshot snapshot;
   final bool Function() _isCurrent;
+  final bool Function() _isObservable;
   bool isCurrent() => _isCurrent();
+  bool isObservable() => _isObservable();
 }
 
 class ChatController extends ChangeNotifier {
@@ -291,6 +299,7 @@ class ChatController extends ChangeNotifier {
   Stream<RunSnapshot> get runSnapshots => _runUpdates.stream;
   final _scopedRunUpdates = StreamController<ScopedRunSnapshot>.broadcast();
   final _connectionRevisions = Expando<Object>();
+  final _activityEvents = Expando<bool>();
   Stream<ScopedRunSnapshot> get scopedRunSnapshots => _scopedRunUpdates.stream;
   RunOperation? get currentRun => runs[current?.id];
   bool get runPending =>
@@ -463,6 +472,8 @@ class ChatController extends ChangeNotifier {
     if (!_runUpdates.isClosed) _runUpdates.add(snapshot);
     if (!_scopedRunUpdates.isClosed) {
       final revision = _connectionRevisions[connection] ??= Object();
+      final epoch = op.data['authorityEpoch'];
+      final root = connection['url'];
       _scopedRunUpdates.add(ScopedRunSnapshot(
           localChatId: session.id,
           connectionId: session.connectionId,
@@ -474,7 +485,14 @@ class ChatController extends ChangeNotifier {
             'credentialScope': op.data['scope'] as String?,
           },
           snapshot: snapshot,
-          isCurrent: isCurrent));
+          originalConnection: connection,
+          eventsSupported: _activityEvents[connection] == true,
+          // Read-only telemetry survives operation replacement, never controls.
+          isCurrent: isCurrent,
+          isObservable: () =>
+              _active(session, connection) &&
+              epoch == connection['authorityEpoch'] &&
+              root == connection['url']));
     }
     if (snapshot.terminal && !op.committed) op.data['journalDirty'] = true;
     if (snapshot.state == RunState.completed) {
@@ -560,6 +578,7 @@ class ChatController extends ChangeNotifier {
       }
       if (!await client.discover()) throw StateError('Runs unavailable');
       if (!isCurrent()) return;
+      _activityEvents[c] = client.eventsSupported;
       if (op.runId == null) {
         // Explicit reconnect only: identical key/body, within the replay window.
         await client.submit(op, _ledger, isCurrent: isCurrent);
@@ -607,6 +626,7 @@ class ChatController extends ChangeNotifier {
     try {
       if (!isCurrent()) throw StateError('Stale run');
       final supported = await client.discover();
+      _activityEvents[connection] = client.eventsSupported;
       if (!isCurrent()) throw StateError('Stale run');
       if (!supported) {
         if (previous != null) {

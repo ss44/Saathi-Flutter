@@ -134,10 +134,12 @@ class RemoteHistoryPage extends StatefulWidget {
       {super.key,
       required this.controller,
       required this.connection,
-      required this.session});
+      required this.session,
+      this.isReadAuthorityCurrent});
   final ChatController controller;
   final Map<String, dynamic> connection;
   final RemoteSession session;
+  final bool Function()? isReadAuthorityCurrent;
   @override
   State<RemoteHistoryPage> createState() => _RemoteHistoryPageState();
 }
@@ -150,7 +152,9 @@ class _RemoteHistoryPageState extends State<RemoteHistoryPage> {
   SaathiCore? active;
   bool inFlight = false;
   bool get current =>
-      mounted && widget.controller.isCurrentConnection(widget.connection);
+      mounted &&
+      widget.controller.isCurrentConnection(widget.connection) &&
+      (widget.isReadAuthorityCurrent?.call() ?? true);
   void connectionChanged() {
     if (!current && mounted) {
       active?.close();
