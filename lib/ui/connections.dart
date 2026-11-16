@@ -13,9 +13,53 @@ const providerLabels = {
   'openclaw': 'OpenClaw'
 };
 
-class ConnectionsPage extends StatelessWidget {
+class ConnectionsPage extends StatefulWidget {
   const ConnectionsPage({super.key, required this.controller});
   final ChatController controller;
+  @override
+  State<ConnectionsPage> createState() => _ConnectionsPageState();
+}
+
+class _ConnectionsPageState extends State<ConnectionsPage> {
+  ChatController get controller => widget.controller;
+  String? opened;
+  Future<void> action(Map<String, dynamic> c, String action) async {
+    setState(() => opened = null);
+    if (action == 'Edit') {
+      await Navigator.push(
+          context,
+          MaterialPageRoute<void>(
+              builder: (_) =>
+                  AddConnectionPage(controller: controller, connection: c)));
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+                title: Text('Delete “${c['name']}”?'),
+                content: const Text(
+                    'Remove this connection and its secure key? Local conversations are kept read-only. Nothing on your server is deleted.'),
+                actions: [
+                  TextButton(
+                      autofocus: true,
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('Cancel')),
+                  TextButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('Delete'))
+                ]));
+    if (confirmed != true || !mounted) return;
+    try {
+      await controller.deleteConnection(c['id']);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text(
+                'Could not remove connection. Storage may need recovery; nothing was removed from this screen.')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
       appBar: AppBar(title: const Text('Connections'), actions: [
@@ -35,52 +79,168 @@ class ConnectionsPage extends StatelessWidget {
                     'Keys are held in platform secure storage. Chat history is stored on this device. Existing conversations stay bound to their original connection.'),
                 const SizedBox(height: 20),
                 for (final c in controller.connections)
-                  ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.dns_outlined),
-                      title: Text(c['name']),
-                      trailing: c['type'] == 'hermes'
-                          ? IconButton(
-                              tooltip: 'Browse remote sessions',
-                              icon: const Icon(Icons.cloud_outlined),
-                              onPressed: () => Navigator.push(
-                                  context,
-                                  MaterialPageRoute<void>(
-                                      builder: (_) => RemoteSessionsPage(
-                                          controller: controller,
-                                          connection: c))))
-                          : null,
-                      subtitle:
-                          Text('${providerLabels[c['type']]} · ${c['url']}')),
+                  GestureDetector(
+                      onHorizontalDragUpdate: (d) {
+                        if (d.delta.dx < -2) setState(() => opened = c['id']);
+                        if (d.delta.dx > 2) setState(() => opened = null);
+                      },
+                      child: ClipRect(
+                          child: Stack(
+                              alignment: Alignment.centerRight,
+                              children: [
+                            if (opened == c['id'])
+                              SizedBox(
+                                  width: 160,
+                                  child: Row(children: [
+                                    for (final a in ['Edit', 'Delete'])
+                                      Expanded(
+                                          child: TextButton(
+                                              onPressed: controller
+                                                      .canChangeConnections
+                                                  ? () => action(c, a)
+                                                  : null,
+                                              child: Text(a)))
+                                  ])),
+                            TweenAnimationBuilder<double>(
+                                key: ValueKey('slide-${c['id']}'),
+                                duration: const Duration(milliseconds: 180),
+                                tween: Tween(
+                                    begin: 0,
+                                    end: opened == c['id'] ? -160 : 0),
+                                builder: (_, x, child) => Transform.translate(
+                                    offset: Offset(x, 0), child: child),
+                                child: Material(
+                                    color: Theme.of(context)
+                                        .scaffoldBackgroundColor,
+                                    child: ListTile(
+                                        contentPadding: EdgeInsets.zero,
+                                        leading: const Icon(Icons.dns_outlined),
+                                        title: Text(c['name']),
+                                        trailing: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              if (c['type'] == 'hermes')
+                                                IconButton(
+                                                    tooltip:
+                                                        'Browse remote sessions',
+                                                    icon: const Icon(
+                                                        Icons.cloud_outlined),
+                                                    onPressed: () => Navigator.push(
+                                                        context,
+                                                        MaterialPageRoute<void>(
+                                                            builder: (_) =>
+                                                                RemoteSessionsPage(
+                                                                    controller:
+                                                                        controller,
+                                                                    connection:
+                                                                        c)))),
+                                              PopupMenuButton<String>(
+                                                  tooltip: 'Connection actions',
+                                                  enabled: controller
+                                                      .canChangeConnections,
+                                                  onSelected: (a) =>
+                                                      action(c, a),
+                                                  itemBuilder: (_) => [
+                                                        for (final a in [
+                                                          'Edit',
+                                                          'Delete'
+                                                        ])
+                                                          PopupMenuItem(
+                                                              value: a,
+                                                              child: Text(a))
+                                                      ]),
+                                            ]),
+                                        subtitle: Text(
+                                            '${providerLabels[c['type']]} · ${c['url']}')))),
+                          ]))),
                 const SizedBox(height: 16),
                 FilledButton.icon(
-                    onPressed: () => Navigator.push(
-                        context,
-                        MaterialPageRoute<void>(
-                            builder: (_) =>
-                                AddConnectionPage(controller: controller))),
+                    onPressed: !controller.canChangeConnections
+                        ? null
+                        : () => Navigator.push(
+                            context,
+                            MaterialPageRoute<void>(
+                                builder: (_) =>
+                                    AddConnectionPage(controller: controller))),
                     icon: const Icon(Icons.add),
                     label: const Text('Add connection')),
               ])));
 }
 
 class AddConnectionPage extends StatefulWidget {
-  const AddConnectionPage({super.key, required this.controller});
+  const AddConnectionPage(
+      {super.key, required this.controller, this.connection});
   final ChatController controller;
+  final Map<String, dynamic>? connection;
   @override
   State<AddConnectionPage> createState() => _AddConnectionPageState();
 }
 
-class _AddConnectionPageState extends State<AddConnectionPage> {
+class _AddConnectionPageState extends State<AddConnectionPage>
+    with WidgetsBindingObserver {
   final form = GlobalKey<FormState>();
   final name = TextEditingController(),
       url = TextEditingController(),
       keyInput = TextEditingController();
   String type = 'openai';
   String? error;
-  bool saving = false;
+  bool saving = false, showKey = false, keyReady = false, clearKey = false;
+  String? initialKey;
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final c = widget.connection;
+    if (c == null) {
+      keyReady = true;
+      return;
+    }
+    name.text = c['name'];
+    url.text = c['url'];
+    type = c['type'];
+    loadKey();
+  }
+
+  Future<void> loadKey() async {
+    try {
+      final value =
+          await widget.controller.store.secrets.read(widget.connection!['id']);
+      if (!mounted) return;
+      setState(() {
+        initialKey = value ?? '';
+        keyInput.text = initialKey!;
+        keyReady = true;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => error =
+            'Secure key could not be read. Editing is disabled; cancel and try again.');
+      }
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed && mounted) {
+      setState(() => showKey = false);
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (ModalRoute.isCurrentOf(context) != true) showKey = false;
+  }
+
+  @override
+  void deactivate() {
+    showKey = false;
+    super.deactivate();
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     name.dispose();
     url.dispose();
     keyInput.dispose();
@@ -94,12 +254,24 @@ class _AddConnectionPageState extends State<AddConnectionPage> {
       error = null;
     });
     try {
-      await widget.controller.addConnection({
+      final values = <String, dynamic>{
         'id': DateTime.now().microsecondsSinceEpoch.toString(),
         'name': name.text.trim(),
         'url': url.text.trim(),
         'type': type,
-      }, keyInput.text.trim());
+      };
+      if (widget.connection == null) {
+        await widget.controller.addConnection(values, keyInput.text.trim());
+      } else {
+        final normalizedKey = keyInput.text.trim();
+        await widget.controller.updateConnection(
+            widget.connection!['id'], values,
+            apiKey: clearKey
+                ? ''
+                : normalizedKey.isEmpty || normalizedKey == initialKey?.trim()
+                    ? null
+                    : normalizedKey);
+      }
       if (mounted) Navigator.pop(context);
     } catch (_) {
       if (mounted) {
@@ -113,7 +285,10 @@ class _AddConnectionPageState extends State<AddConnectionPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-      appBar: AppBar(title: const Text('Add connection')),
+      appBar: AppBar(
+          title: Text(widget.connection == null
+              ? 'Add connection'
+              : 'Edit connection')),
       body: Form(
           key: form,
           child: ListView(padding: const EdgeInsets.all(20), children: [
@@ -124,6 +299,7 @@ class _AddConnectionPageState extends State<AddConnectionPage> {
             const SizedBox(height: 18),
             DropdownButtonFormField<String>(
                 initialValue: type,
+                isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Provider type'),
                 items: providerLabels.entries
                     .map((e) =>
@@ -156,15 +332,43 @@ class _AddConnectionPageState extends State<AddConnectionPage> {
                   return null;
                 }),
             const SizedBox(height: 18),
+            if (widget.connection != null)
+              const Padding(
+                  padding: EdgeInsets.only(bottom: 18),
+                  child: Text(
+                      'Changing provider or API URL creates a new connection. Existing conversations remain read-only on the old destination and are never uploaded to the new destination.')),
             TextFormField(
+                key: const Key('connection-key'),
                 controller: keyInput,
-                obscureText: true,
+                enabled: keyReady && !saving,
+                obscureText: !showKey,
+                enableIMEPersonalizedLearning: false,
                 autocorrect: false,
                 enableSuggestions: false,
-                decoration: const InputDecoration(
+                onChanged: (_) => clearKey = false,
+                decoration: InputDecoration(
+                    suffixIcon: IconButton(
+                        tooltip: showKey ? 'Hide API key' : 'Show API key',
+                        onPressed: keyReady
+                            ? () => setState(() => showKey = !showKey)
+                            : null,
+                        icon: Icon(
+                            showKey ? Icons.visibility_off : Icons.visibility)),
                     labelText: 'API key / token',
                     helperText:
                         'Optional for a local server. Never saved in chat history.')),
+            if (widget.connection != null)
+              TextButton(
+                  onPressed: keyReady && !saving
+                      ? () => setState(() {
+                            clearKey = true;
+                            keyInput.clear();
+                            showKey = false;
+                          })
+                      : null,
+                  child: Text(clearKey
+                      ? 'Key will be removed on Save'
+                      : 'Clear stored key')),
             const SizedBox(height: 20),
             const Text(
                 'Use HTTPS for remote servers. HTTP sends messages and credentials without encryption. Hermes and OpenClaw support depends on the server protocol; unsupported operations are reported, not simulated.'),
@@ -176,8 +380,16 @@ class _AddConnectionPageState extends State<AddConnectionPage> {
                           color: Theme.of(context).colorScheme.error))),
             const SizedBox(height: 24),
             FilledButton(
-                onPressed: saving ? null : save,
+                onPressed: saving || !keyReady ? null : save,
                 child: Text(saving ? 'Saving securely…' : 'Save connection')),
+            TextButton(
+                onPressed: saving
+                    ? null
+                    : () {
+                        setState(() => showKey = false);
+                        Navigator.pop(context);
+                      },
+                child: const Text('Cancel')),
           ])));
 }
 
