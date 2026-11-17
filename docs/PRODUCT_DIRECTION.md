@@ -52,3 +52,4 @@ Update this document in the same PR as an approved change to product direction. 
 ### Decisions
 
 - 2026-11-16: Confirm Hermes as the primary native-agent target and Sathi's multi-agent feel as the broader direction. Separate direct models from native agent clients, with behavior driven by each configured connection's verified features.
+- 2026-11-17: Run native releases daily at 09:00 UTC rather than weekly, so approved changes reach users sooner. Keep the unchanged-source skip, ISO year.week.increment versioning, signing and publication gates; do not build on every merge.

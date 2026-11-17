@@ -54,4 +54,4 @@ Keep each unrelated issue on its own branch and PR. Read the issue and discussio
 
 Describe the behavior, tests actually run and remaining limitations in the PR. Bind review and CI to the exact head revision. Under the user's standing authorization, squash-merge only after applicable checks and review pass, then verify the merge and issue state. Never force-push, bypass protections or directly push a fix to main without explicit permission.
 
-Native releases remain weekly or explicitly requested. Merging a PR does not authorize an extra release. Report clearly whether a published binary includes the change.
+Native releases run daily at 09:00 UTC or when explicitly requested, skipping unchanged source. Merging a PR does not authorize an extra release. Report clearly whether a published binary includes the change.

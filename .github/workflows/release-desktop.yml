@@ -3,8 +3,8 @@ name: Desktop and Android binary releases
 on:
   workflow_dispatch:
   schedule:
-    # Weekly on Monday, 09:00 UTC. Manual builds remain available for testing.
-    - cron: '0 9 * * 1'
+    # Daily at 09:00 UTC. Manual builds remain available for testing.
+    - cron: '0 9 * * *'
 
 permissions:
   contents: read
