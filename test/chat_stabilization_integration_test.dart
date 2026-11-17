@@ -187,7 +187,7 @@ void main() {
       await t.pump();
       expect(c.outbox, isEmpty);
       expect(t.widget<TextField>(composer).controller!.text, draft);
-      expect(find.text('Optimize prompt'), findsNothing);
+      expect(find.byTooltip('Enhance prompt'), findsNothing);
       expect(find.text('Review action').hitTestable(), findsOneWidget);
       expect(find.byTooltip('Stop current work').hitTestable(), findsOneWidget);
       expect(
@@ -250,7 +250,7 @@ void main() {
       expect(streams, hasLength(1));
       await t.longPress(find.byTooltip('Send'));
       await t.pumpAndSettle();
-      await t.tap(find.text('Optimize prompt'));
+      await t.tap(find.byTooltip('Enhance prompt'));
       await network();
       await t.tap(find.text('Improve'));
       await network();

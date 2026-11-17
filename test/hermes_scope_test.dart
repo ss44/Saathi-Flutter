@@ -26,7 +26,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Attach image'), findsNothing);
     expect(find.text('Generate image'), findsNothing);
-    expect(find.text('Optimize prompt'), findsOneWidget);
+    expect(find.byTooltip('Enhance prompt'), findsOneWidget);
     expect(
         tester
             .widget<TextField>(find.byKey(const Key('composer')))
