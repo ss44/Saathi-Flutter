@@ -1396,7 +1396,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                       : {
                                                           CustomSemanticsAction(
                                                             label:
-                                                                'Optimize prompt',
+                                                                'Enhance prompt',
                                                           ): openMenu,
                                                         },
                                               child: GestureDetector(

@@ -26,7 +26,29 @@ Saathi is an independent Flutter app, not a QML port or DMS frontend. The origin
 - Attachments/share-sheet intake, conversation organization/personas, and production desktop installation/tray behavior. Independently tested components are not enabled app features.
 
 ## Prompt optimization entry
-Hold Send to open a compact **Optimize prompt** menu; releasing or dismissing it never sends or changes the draft. Shift+F10, the context-menu key, secondary click and Send's accessible long-press/custom action open the same menu. There is no separate default optimizer icon. The optimizer stays mounted across keyboard changes and owns preview, explicit Apply/Keep original and Undo. Global and per-chat destinations are separate from the response model. Only bounded direct-text rewrites are eligible; native work, including approval-waiting Runs, disables optimization without turning a hold into a queued tap. See [the optimizer contract](PROMPT_OPTIMIZER.md).
+
+Holding Send expands its control upward into a compact, anchored vertical group:
+Enhance prompt above Close send actions (in Send's original position). Both icon
+buttons have 48px touch targets and accessible tooltips; the default composer
+has no always-visible optimizer. A fresh action tap is required: releasing or
+sliding the opening hold cannot select an action or send. Outside tap, Back,
+Escape and Close dismiss without changing the draft. Ordinary Send taps remain
+unchanged. Shift+F10, the context-menu key, secondary click and Send's custom
+screen-reader action open the same group; Enter/Space and Tab operate its buttons.
+Removing the Send owner also removes its modal surface.
+
+Enhance reuses the existing explicit review request, Original/Improved preview,
+Apply, Keep original and revision/source-bound Undo; it never sends automatically.
+The optimizer stays mounted across keyboard changes. Global and per-chat rewrite
+destinations remain separate from the response model. Only bounded direct-text
+rewrites are eligible; native work, including approval-waiting Runs, disables
+optimization without turning a hold into a queued tap. See [the optimizer
+contract](PROMPT_OPTIMIZER.md).
+`test/send_action_group_test.dart` verifies the real ChatHome at 360px/390px,
+2× text, keyboard open/closed and long drafts, including hold movement, dismissal,
+keyboard activation and semantics actions. Existing optimizer tests retain the
+source/lifecycle revocation and Apply/Keep/Undo coverage. These are widget tests,
+not physical-device or TalkBack verification.
 
 ## Layout verification
 The composer stays outside the scrolling transcript and queue/recovery feedback, at the bottom safe area (above the keyboard when open). The transcript fills the space left by the composer and native-run controls; short feedback uses only its content height, while long feedback scrolls within a bounded share of that remaining space. Agent activity stays directly above the input.

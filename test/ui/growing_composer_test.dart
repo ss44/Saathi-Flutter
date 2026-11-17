@@ -76,7 +76,7 @@ void main() {
           final scrollBeforeMenu = draftScroll.position.pixels;
           await tester.longPress(find.byTooltip('Send'));
           await tester.pumpAndSettle();
-          expect(find.text('Optimize prompt'), findsOneWidget);
+          expect(find.byTooltip('Enhance prompt'), findsOneWidget);
           await tester.tapAt(const Offset(4, 200));
           await tester.pumpAndSettle();
           expect(field.controller!.value, menuValue);

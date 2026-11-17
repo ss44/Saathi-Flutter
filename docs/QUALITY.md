@@ -25,7 +25,7 @@ actionlint
 Resolve dependencies before formatting: package language versions affect Dart
 formatting. Normal verification and the release verification job run the same
 coverage, analysis, formatting, tooling and branding checks. Release triggers
-remain weekly Monday 09:00 UTC and manual only; PR-title edits do not build
+remain daily 09:00 UTC and manual only, skipping unchanged source; PR-title edits do not build
 native binaries or publish releases.
 
 ## Coverage is a floor, not proof of safety

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'chat_controller.dart';
 import 'optimizer_review.dart';
 import 'optimizer_settings.dart';
+import 'send_action_group.dart';
 import '../core/saathi_core.dart';
 
 bool directPromptConnection(String? type) =>
@@ -90,6 +91,11 @@ class _PromptOptimizerState extends State<PromptOptimizer> {
 
   @override
   void dispose() {
+    final route = menuRoute;
+    // Navigator mutations are deferred while the owning subtree is unmounting.
+    scheduleMicrotask(() {
+      if (route != null) route.navigator?.removeRoute(route);
+    });
     for (final review in reviews) {
       review.value = false;
     }
@@ -108,6 +114,8 @@ class _PromptOptimizerState extends State<PromptOptimizer> {
       widget.controller.canDiscoverModels &&
       widget.composer.text.trim().isNotEmpty;
 
+  final actionAnchor = LayerLink();
+  Route<bool>? menuRoute;
   bool menuOpen = false;
   Future<void> menu() async {
     if (!enabled || menuOpen) return;
@@ -130,18 +138,11 @@ class _PromptOptimizerState extends State<PromptOptimizer> {
     }
 
     c.addListener(checkMenu);
-    final box = context.findRenderObject()! as RenderBox;
-    final overlay =
-        Navigator.of(context).overlay!.context.findRenderObject()! as RenderBox;
     menuOpen = true;
-    final selected = await showMenu<bool>(
-        context: context,
-        position: RelativeRect.fromRect(
-            box.localToGlobal(Offset.zero, ancestor: overlay) & box.size,
-            Offset.zero & overlay.size),
-        items: const [
-          PopupMenuItem(value: true, child: Text('Optimize prompt'))
-        ]);
+    final route = sendActionGroupRoute(context, actionAnchor);
+    menuRoute = route;
+    final selected = await Navigator.of(context).push(route);
+    menuRoute = null;
     c.removeListener(checkMenu);
     menuOpen = false;
     if (selected != true || revoked || !current()) return;
@@ -208,7 +209,9 @@ class _PromptOptimizerState extends State<PromptOptimizer> {
   Widget build(BuildContext context) =>
       Column(mainAxisSize: MainAxisSize.min, children: [
         if (widget.triggerBuilder != null)
-          widget.triggerBuilder!(context, enabled ? menu : null)
+          CompositedTransformTarget(
+              link: actionAnchor,
+              child: widget.triggerBuilder!(context, enabled ? menu : null))
         else
           IconButton(
               tooltip: 'Improve prompt',
