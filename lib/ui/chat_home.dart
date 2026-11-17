@@ -32,6 +32,7 @@ import 'connections.dart';
 import 'safe_markdown.dart';
 import 'conversation_servers.dart';
 import 'prompt_optimizer.dart';
+import 'growing_message_input.dart';
 import 'optimizer_settings.dart';
 
 const muted = Color(0xFF6A7470);
@@ -1353,28 +1354,14 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                     crossAxisAlignment: CrossAxisAlignment.end,
                                     children: [
                                       Expanded(
-                                        child: TextField(
-                                          key: const Key('composer'),
+                                        child: GrowingMessageInput(
                                           controller: composer,
                                           enabled: session != null &&
                                               !c.unsavedChanges &&
                                               !c.organizationBlocked &&
                                               !c.readOnly &&
                                               !c.changingConnection,
-                                          minLines: 1,
-                                          maxLines:
-                                              MediaQuery.viewInsetsOf(context)
-                                                          .bottom >
-                                                      0
-                                                  ? 2
-                                                  : 6,
-                                          textCapitalization:
-                                              TextCapitalization.sentences,
                                           onChanged: (_) => setState(() {}),
-                                          decoration: const InputDecoration(
-                                            hintText: 'Message Saathi',
-                                            border: InputBorder.none,
-                                          ),
                                         ),
                                       ),
                                       PromptOptimizer(
