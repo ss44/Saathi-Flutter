@@ -10,22 +10,26 @@ class LocalHistoryMatch {
 /// Display content only: no connection secrets, prompts or provider metadata.
 /// Input order is retained; callers supply newest-first local conversations.
 List<LocalHistoryMatch> searchLocalHistory(
-    Iterable<ChatSession> sessions, String query) {
+    Iterable<ChatSession> sessions, String query,
+    {String Function(ChatSession)? displayTitle}) {
   final needle = query.trim().toLowerCase();
   return [
     for (final session in sessions)
       if (needle.isEmpty)
         LocalHistoryMatch(session, null)
-      else if (_matchingText(session, needle) case final String text)
+      else if (_matchingText(session, needle, displayTitle?.call(session))
+          case final String text)
         LocalHistoryMatch(session, _snippet(text, needle))
   ];
 }
 
-String? _matchingText(ChatSession session, String needle) {
+String? _matchingText(
+    ChatSession session, String needle, String? displayTitle) {
   for (final message in session.messages) {
     if (message.content.toLowerCase().contains(needle)) return message.content;
   }
-  return session.title.toLowerCase().contains(needle) ? session.title : null;
+  final title = displayTitle ?? session.title;
+  return title.toLowerCase().contains(needle) ? title : null;
 }
 
 String _snippet(String text, String needle) {

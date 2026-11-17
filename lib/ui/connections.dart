@@ -1,15 +1,18 @@
 import 'package:flutter/material.dart';
+import 'canonical_connection.dart';
 import '../update_host.dart';
 import '../notifications/settings.dart';
 import '../core/saathi_core.dart';
 import 'chat_controller.dart';
 import 'remote_sessions.dart';
+import 'optimizer_settings.dart';
 
 const providerLabels = {
   'openai': 'OpenAI-compatible',
   'anthropic': 'Anthropic',
   'gemini': 'Gemini',
   'hermes': 'Hermes',
+  'hermesGateway': 'Hermes Desktop / CLI',
   'openclaw': 'OpenClaw'
 };
 
@@ -25,6 +28,14 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
   String? opened;
   Future<void> action(Map<String, dynamic> c, String action) async {
     setState(() => opened = null);
+    if (action == 'Edit' && c['type'] == 'hermesGateway') {
+      await Navigator.push(
+          context,
+          MaterialPageRoute<void>(
+              builder: (_) => CanonicalConnectionPage(
+                  controller: controller, connection: c)));
+      return;
+    }
     if (action == 'Edit') {
       await Navigator.push(
           context,
@@ -63,6 +74,7 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
       appBar: AppBar(title: const Text('Connections'), actions: [
+        OptimizerSettingsButton(controller: controller),
         if (controller.notifications != null)
           NotificationSettingsButton(notifications: controller.notifications!),
         const UpdateSettingsButton()
@@ -309,6 +321,7 @@ class _AddConnectionPageState extends State<AddConnectionPage>
                 isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Provider type'),
                 items: providerLabels.entries
+                    .where((entry) => entry.key != 'hermesGateway')
                     .map((e) =>
                         DropdownMenuItem(value: e.key, child: Text(e.value)))
                     .toList(),
@@ -458,9 +471,9 @@ class _NewChatPageState extends State<NewChatPage> {
   @override
   void initState() {
     super.initState();
-    if (widget.controller.connections.isNotEmpty) {
-      connection = widget.controller.connections.first;
-    }
+    connection = widget.controller.connections
+        .where((c) => c['type'] != 'hermesGateway')
+        .firstOrNull;
     catalogGeneration = widget.controller.catalogGeneration;
     widget.controller.addListener(syncController);
   }
@@ -555,6 +568,7 @@ class _NewChatPageState extends State<NewChatPage> {
             isExpanded: true,
             decoration: const InputDecoration(labelText: 'Connection'),
             items: widget.controller.connections
+                .where((c) => c['type'] != 'hermesGateway')
                 .map((c) => DropdownMenuItem<String>(
                     value: c['id'], child: Text(c['name'])))
                 .toList(),

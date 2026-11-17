@@ -7,6 +7,55 @@ import 'package:http/testing.dart';
 import 'package:saathi/agent_activity/activity_transport.dart';
 
 void main() {
+  test('localhost valid activity outlives deadline then idle disconnects',
+      () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final client = http.Client();
+    final timers = <Timer>[];
+    HttpResponse? response;
+    server.listen((r) async {
+      response = r.response;
+      r.response.bufferOutput = false;
+      r.response.headers.contentType = ContentType('text', 'event-stream');
+      var sequence = 0;
+      timers.add(Timer.periodic(const Duration(milliseconds: 300), (timer) {
+        r.response.write('id: $sequence\ndata: ${jsonEncode({
+              'event': 'message.delta',
+              'run_id': 'run_actual',
+              'delta': 'visible',
+              'reasoning': 'PRIVATE',
+              'seq': sequence++
+            })}\n\n');
+        unawaited(r.response.flush());
+        if (sequence == 8) timer.cancel();
+      }));
+    });
+    final transport = ActivityTransport(
+        origin: Uri.parse('http://127.0.0.1:${server.port}'),
+        bearerKey: 'private',
+        isCurrent: () => true,
+        eventsSupported: true,
+        idleTimeout: const Duration(seconds: 2),
+        client: client);
+    final events = <ActivityTransportEvent>[];
+    final done = Completer<void>();
+    final errors = <Object>[];
+    transport
+        .connect('run_actual')
+        .listen(events.add, onError: errors.add, onDone: done.complete);
+    await done.future.timeout(const Duration(seconds: 8));
+    expect(events, hasLength(8));
+    expect(events.first.data['delta'], 'visible');
+    expect(events.first.data.containsKey('reasoning'), isFalse);
+    expect(errors, hasLength(1));
+    await transport.close();
+    for (final timer in timers) {
+      timer.cancel();
+    }
+    await response?.close();
+    client.close();
+    await server.close(force: true);
+  });
   test('abort before listening releases attachment without reviving old stream',
       () async {
     var calls = 0;

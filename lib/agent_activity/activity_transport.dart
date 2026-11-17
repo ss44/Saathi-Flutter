@@ -19,6 +19,7 @@ class ActivityTransport {
       required this.isCurrent,
       required this.eventsSupported,
       required this.client,
+      this.idleTimeout = const Duration(seconds: 60),
       this.maxLine = 16384,
       this.maxFrame = 65536})
       : _key = bearerKey {
@@ -35,6 +36,7 @@ class ActivityTransport {
             !RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(profile!)) ||
         bearerKey.isEmpty ||
         RegExp(r'[\x00-\x20\x7f]').hasMatch(bearerKey) ||
+        idleTimeout <= Duration.zero ||
         maxLine < 1 ||
         maxFrame < maxLine) {
       throw ArgumentError('Unsafe activity configuration');
@@ -46,6 +48,7 @@ class ActivityTransport {
   final bool eventsSupported;
   final http.Client client;
   final int maxLine, maxFrame;
+  final Duration idleTimeout;
   String _key;
   String? _cursor;
   String? get cursor => _cursor;
@@ -126,7 +129,7 @@ class ActivityTransport {
           rethrow;
         }
         return response;
-      }));
+      }).timeout(idleTimeout));
       if (response.statusCode != 200 ||
           response.headers['content-type']
                   ?.split(';')
@@ -137,7 +140,8 @@ class ActivityTransport {
         await response.stream.listen((_) {}).cancel();
         throw StateError('Activity response rejected');
       }
-      input = StreamIterator(response.stream.transform(utf8.decoder));
+      input = StreamIterator(
+          response.stream.timeout(idleTimeout).transform(utf8.decoder));
       var line = StringBuffer(), data = <String>[];
       var size = 0;
       String? id;
@@ -189,6 +193,10 @@ class ActivityTransport {
                             e.value is String ||
                             e.value is num ||
                             e.value is bool))
+                      e.key: e.value
+                    else if (decoded['event'] == 'message.delta' &&
+                        e.key == 'delta' &&
+                        e.value is String)
                       e.key: e.value
                 }),
                 _cursor));
@@ -242,6 +250,7 @@ class ActivityTransport {
             StateError('Activity stream unavailable; reconcile run status'));
       }
     } finally {
+      if (!cancellation.isCompleted) cancellation.complete();
       if (input != null) unawaited(input.cancel());
       unawaited(out.close());
     }

@@ -166,7 +166,7 @@ void main() {
     await f.close(t);
   });
   testWidgets(
-      'thinking persists between native polls only for queued or running work',
+      'truthful waiting persists between native polls without decorative thinking',
       (t) async {
     final f = Fixture();
     await f.init();
@@ -187,11 +187,12 @@ void main() {
         f.c.notifyListeners();
         await t.pump();
         expect(
-            find.byType(BusyThinking),
+            find.byKey(const Key('native-waiting')),
             status == 'queued' || status == 'running'
                 ? findsOneWidget
                 : findsNothing,
             reason: '$status busy=$busy');
+        expect(find.byType(BusyThinking), findsNothing);
         await t.pump(const Duration(milliseconds: 100));
       }
     }

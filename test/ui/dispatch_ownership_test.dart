@@ -79,7 +79,7 @@ void main() {
       expect(c.queueStatus, isNotNull);
       expect(original.messages, isEmpty);
       expect(c.canResumeQueue, isTrue);
-      c.cancelQueued(c.outbox.single);
+      await c.cancelQueued(c.outbox.single);
       expect(c.outbox, isEmpty);
       expect(c.queueStatus, isNull);
     });

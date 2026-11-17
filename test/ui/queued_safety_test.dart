@@ -44,7 +44,7 @@ void main() {
       final active = c.send('Unknown legacy');
       if (cancelFollower) {
         expect(c.submit('Cancel follower'), isTrue);
-        c.cancelQueued(c.outbox.single);
+        await c.cancelQueued(c.outbox.single);
       }
       await tick();
       complete(0, fail: true);
@@ -56,7 +56,7 @@ void main() {
       c.resumeQueue();
       await tick();
       expect(replies.length, 1);
-      c.abandonHeldOutbox(source);
+      await c.abandonHeldOutbox(source);
       expect(c.uncertainInput, isNull);
       expect(c.queueStatus, isNull);
     });
@@ -128,7 +128,7 @@ void main() {
     c.submit('First');
     c.submit('Cancel me');
     c.submit('Third');
-    c.cancelQueued(c.outbox.first);
+    await c.cancelQueued(c.outbox.first);
     // This case covers an already dispatched active request. Preparation-time
     // revocation is covered separately with delayed credentials.
     await tick();
@@ -285,7 +285,7 @@ void main() {
     await tick();
     complete(0, fail: true);
     await tick();
-    c.cancelQueued(c.outbox.first);
+    await c.cancelQueued(c.outbox.first);
     expect(c.outbox.single.text, 'Keep');
     expect(c.uncertainInput?.text, 'Unknown');
     expect(c.queueStatus, isNotNull);

@@ -9,7 +9,7 @@ Saathi is an independent Flutter app, not a QML port or DMS frontend. The origin
 | Providers | Multiple named instances; OpenAI-compatible, Anthropic, Gemini; model discovery/manual IDs | Separate Dart adapters; no QML global state or false claim that all backends expose the same capabilities |
 | Context | System prompt and bounded direct-model context | Conversation keeps its original connection/model/prompt; no silent rerouting of a transcript |
 | Local sessions | Persistent conversations, new/delete/switch | Connection-bound sessions rather than one shared global history; credentials never stored in session JSON |
-| Remote sessions | Native backend can retain authoritative history and accept only new input | Read-only REST browsing is labeled read-only; live attach is a separate gateway path, not imported history |
+| Remote sessions | Continue API-owned Hermes sessions on their original connection with only new input | Desktop/CLI attachment still needs authenticated canonical gateway bootstrap; never transplant foreign history through REST |
 | Chat display | Readable messages, markdown, minimal chrome | Empty genuine startup instead of a permanent demo transcript |
 | Activity | Observable status while running; inspect after completion | Swipe a completed response to show/hide status; never expose private hidden reasoning or invent tool output |
 | Copy | Easy access to the original markdown text | Long-press copies immediately and confirms with a snackbar. Markdown selection is off on this touch surface so it cannot steal swipe/long-press gestures |
@@ -22,8 +22,11 @@ Saathi is an independent Flutter app, not a QML port or DMS frontend. The origin
 - Smart context bucket negotiation/fast-model summarization. It adds complexity and potentially paid extra calls; it must be opt-in and should not run on top of a server-owned session.
 - Hardcoded historical token prices. Raw usage can be preserved by the core, but cost estimates need maintained pricing rather than false precision.
 - Native OpenClaw gateway pairing and session control. The old adapter's guessed endpoints are not a verified integration.
-- Streaming in the UI (the core has tested OpenAI/Hermes SSE support); cancellation/reconnect UX needs a dedicated end-to-end pass.
-- Connection editing/removal (the first UI supports adding connections), attachments/share-sheet intake, and production desktop installation/tray behavior.
+- Direct-model UI streaming and canonical gateway attachment; native Runs visible-text streaming is integrated with the existing activity attachment and journal.
+- Attachments/share-sheet intake, conversation organization/personas, and production desktop installation/tray behavior. Independently tested components are not enabled app features.
+
+## Prompt optimization entry
+Hold Send to open a compact **Optimize prompt** menu; releasing or dismissing it never sends or changes the draft. Shift+F10, the context-menu key, secondary click and Send's accessible long-press/custom action open the same menu. There is no separate default optimizer icon. The optimizer stays mounted across keyboard changes and owns preview, explicit Apply/Keep original and Undo. Global and per-chat destinations are separate from the response model. Only bounded direct-text rewrites are eligible; native work, including approval-waiting Runs, disables optimization without turning a hold into a queued tap. See [the optimizer contract](PROMPT_OPTIMIZER.md).
 
 ## Layout verification
 The composer stays outside the scrolling transcript and queue/recovery feedback, at the bottom safe area (above the keyboard when open). The transcript fills the space left by the composer and native-run controls; short feedback uses only its content height, while long feedback scrolls within a bounded share of that remaining space. Agent activity stays directly above the input.
