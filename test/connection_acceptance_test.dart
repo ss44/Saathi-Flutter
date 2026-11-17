@@ -126,7 +126,7 @@ void main() {
           mode == 'cancel' ? 'Original' : 'Renamed');
       expect(c.connections.single['url'], original['url']);
       expect(
-          await secrets.read('acceptance'),
+          await c.store.readConnectionSecret('acceptance'),
           mode == 'clear'
               ? null
               : mode == 'rotation'
@@ -218,7 +218,7 @@ void main() {
     expect(c.current!.messages.single.content, 'Existing local reply');
     expect(jsonEncode((await c.store.load()).chats), before);
     expect(await secrets.read('acceptance'), isNull);
-    expect(await secrets.read(newId), oldKey);
+    expect(await c.store.readConnectionSecret(newId), oldKey);
     await noLeakedKeys(c);
   });
 

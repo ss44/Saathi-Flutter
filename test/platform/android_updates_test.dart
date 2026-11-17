@@ -15,6 +15,12 @@ void main() {
     expect(source, contains('canonicalFile'));
     expect(source, contains('getPackageArchiveInfo'));
     expect(source, contains('signaturesMatch'));
+    expect(source, contains('call.argument<Number>("expectedBuild")'));
+    expect(source, contains('call.argument<String>("expectedVersion")'));
+    expect(
+        source, contains('require(versionCode(candidate) == expectedBuild)'));
+    expect(
+        source, contains('require(candidate.versionName == expectedVersion)'));
     expect(source, contains('canRequestPackageInstalls'));
     expect(source, contains('FileProvider.getUriForFile'));
     expect(source, contains('ACTION_VIEW'));

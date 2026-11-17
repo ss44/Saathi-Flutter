@@ -46,6 +46,7 @@ class ReplyNotifications extends ChangeNotifier with WidgetsBindingObserver {
   AppLifecycleState? _state;
   bool _enabled;
   bool _disposed = false, _consuming = false, _consumeAgain = false;
+  bool _settingEnabled = false;
   bool get supported => adapter.supported;
   static const preferenceKey = 'saathi.notifications.enabled.v1';
   bool get enabled => _enabled;
@@ -56,18 +57,35 @@ class ReplyNotifications extends ChangeNotifier with WidgetsBindingObserver {
     if (!_disposed && state == AppLifecycleState.resumed) onResume?.call();
   }
 
+  /// Returns false without changing state when another setting operation is active.
+  /// Permission, persistence and failed-write compensation share one operation.
   Future<bool> setEnabled(bool value) async {
+    if (_disposed || _settingEnabled) return false;
+    _settingEnabled = true;
     try {
       if (value && (!supported || !await adapter.requestPermission())) {
         return false;
       }
       if (_disposed) return false;
-      final saved = await preferences.setBool(preferenceKey, value);
-      if (saved) _enabled = value;
+      final before = _enabled;
+      try {
+        if (!await preferences.setBool(preferenceKey, value)) {
+          throw StateError('Notification preference was not saved');
+        }
+      } catch (_) {
+        // The plugin changes its cache before acknowledging durable storage.
+        try {
+          await preferences.setBool(preferenceKey, before);
+        } catch (_) {}
+        return false;
+      }
+      _enabled = value;
       if (!_disposed) notifyListeners();
-      return saved;
+      return true;
     } catch (_) {
       return false;
+    } finally {
+      _settingEnabled = false;
     }
   }
 

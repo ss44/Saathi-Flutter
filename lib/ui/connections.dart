@@ -222,8 +222,8 @@ class _AddConnectionPageState extends State<AddConnectionPage>
 
   Future<void> loadKey() async {
     try {
-      final value =
-          await widget.controller.store.secrets.read(widget.connection!['id']);
+      final value = await widget.controller.store
+          .readConnectionSecret(widget.connection!['id']);
       if (!mounted) return;
       setState(() {
         initialKey = value ?? '';

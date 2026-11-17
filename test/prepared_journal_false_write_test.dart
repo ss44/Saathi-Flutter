@@ -155,16 +155,67 @@ void main() {
       () async {
     final c = await f.start();
     addTearDown(c.dispose);
+    final original = c.current!;
+    await c.addConnection({
+      'id': 'b',
+      'name': 'B',
+      'type': 'openai',
+      'url': 'https://independent.test'
+    }, 'other');
+    await c.newSession(c.connections.last, 'model', '');
+    final independent = c.current!;
+    c.select(original);
     await c.send('uncertain');
     final prior = f.cache;
     f.fail = (_) => true;
     await c.abandonHeldOutbox(c.current!);
-    await c.updateConnection('a', c.connections.single,
+    await c.updateConnection('a', c.connections.first,
         apiKey: 'rotated-fixture');
-    final restored = await f.restore();
-    expect(restored.readOnly, isTrue);
     expect(f.cache, prior);
+    // Storage recovers before recreation; the failed discard never removed
+    // evidence, and loading may now durably quarantine the changed source.
+    f.fail = (_) => false;
+    final restored = await f.restore();
+    restored.select(restored.sessions.singleWhere((s) => s.id == original.id));
+    expect(restored.readOnly, isTrue);
+    expect((jsonDecode(f.cache!) as List).single['text'],
+        (jsonDecode(prior!) as List).single['text']);
     expect(await restored.send('do not redirect'), isFalse);
+    expect(f.posts, 1);
+    restored
+        .select(restored.sessions.singleWhere((s) => s.id == independent.id));
+    expect(restored.readOnly, isFalse);
+    expect(restored.canChangeConnections, isTrue);
+  });
+
+  test('quarantine publication and explicit discard failures retain evidence',
+      () async {
+    final c = await f.start();
+    addTearDown(c.dispose);
+    await c.send('retained across quarantine failures');
+    await c.updateConnection('a', c.connections.single, apiKey: 'replacement');
+    final prior = f.durable;
+    f.fail = (_) => true;
+    final blocked = await f.restore();
+    expect(blocked.readOnly, isTrue);
+    expect(blocked.canChangeConnections, isFalse);
+    expect(f.durable, prior);
+    expect(f.cache, prior);
+    expect(f.posts, 1);
+    f.fail = (_) => false;
+    final quarantined = await f.restore();
+    expect(quarantined.readOnly, isTrue);
+    expect(quarantined.canChangeConnections, isTrue);
+    final held = f.durable;
+    expect((jsonDecode(held!) as List).single['quarantined'], isTrue);
+    f.fail = (_) => true;
+    await quarantined.abandonHeldOutbox(quarantined.current!);
+    expect(quarantined.error, contains('could not be removed from storage'));
+    expect(quarantined.uncertainInput!.text,
+        'retained across quarantine failures');
+    expect(quarantined.readOnly, isTrue);
+    expect(f.cache, held);
+    expect(f.durable, held);
     expect(f.posts, 1);
   });
 }

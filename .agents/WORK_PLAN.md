@@ -17,3 +17,22 @@ Finish a dependency's correctness review before treating it as a ready foundatio
 Run formatting, static analysis, the complete automated suite and configured quality checks. Exercise failure, storage, lifecycle and small-screen behavior where relevant. Obtain independent code review of the exact patch, require applicable CI, squash-merge and read back the result.
 
 Record actual evidence and remaining gaps. Controlled HTTP tests do not certify a deployed backend; Flutter tests do not prove native secure-storage behavior, installation or phone acceptance. Keep source merges distinct from published releases. Do not dispatch a native build merely because a merge completed.
+
+## Audit-to-fix handoff
+
+Record an immutable source SHA, exact model/provider, reviewed-path manifest and
+explicit exclusions for a full-codebase audit. Split large sections with named
+ownership, then reconcile their cross-module contracts. A separate review context
+must challenge high-risk findings; record rejected hypotheses and narrow claims
+when evidence does not support the original interpretation.
+
+When the user explicitly expands an audit to fixes, preserve the baseline report
+and add fix/test disposition rather than pretending the baseline was already safe.
+Implement independently testable slices, capture meaningful failing regressions,
+and recheck shared contracts after integration. One owner commits and opens the PR.
+Review the exact final patch, require applicable CI on that head, squash-merge only
+with authorization, and verify the remote merge SHA and linked issue state.
+
+Keep unresolved native/device/deployed-host checks and deliberate deferrals
+visible. A green unit suite or successful source merge neither closes unrelated
+acceptance tickets nor grants permission for a manual release.

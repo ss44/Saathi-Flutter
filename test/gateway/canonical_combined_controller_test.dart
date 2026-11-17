@@ -203,7 +203,7 @@ void main() {
       final (c, host, secrets) = await setup();
       final owner = c.canonical!;
       secrets.gate = Completer<void>();
-      secrets.gatePrefix = 'native';
+      secrets.gatePrefix = 'credential.v1.';
       secrets.fail = fail;
       final change = c.updateConnection('native', {...c.connections.single},
           apiKey: 'replacement');

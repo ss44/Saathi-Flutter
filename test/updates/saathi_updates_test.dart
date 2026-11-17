@@ -27,6 +27,8 @@ void main() {
         final path = (call.arguments as Map)['path'] as String;
         expect(File(path).parent.path, cache.path);
         expect(await File(path).readAsBytes(), fixture.apk);
+        expect((call.arguments as Map)['expectedBuild'], fixture.build);
+        expect((call.arguments as Map)['expectedVersion'], fixture.version);
         return null;
       }
       throw MissingPluginException();

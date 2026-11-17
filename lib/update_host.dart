@@ -72,14 +72,17 @@ class UpdateSettingsButton extends StatelessWidget {
   const UpdateSettingsButton({super.key});
   @override
   Widget build(BuildContext context) {
-    final scope = context.dependOnInheritedWidgetOfExactType<_UpdateScope>();
     return IconButton(
         tooltip: 'App updates',
         icon: const Icon(Icons.system_update_alt),
-        onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
-            builder: (_) => SaathiUpdatesPage(
-                controller: scope?.controller,
-                initializationError: scope?.error))));
+        onPressed: () => Navigator.of(context)
+                .push(MaterialPageRoute<void>(builder: (context) {
+              final scope =
+                  context.dependOnInheritedWidgetOfExactType<_UpdateScope>();
+              return SaathiUpdatesPage(
+                  controller: scope?.controller,
+                  initializationError: scope?.error);
+            })));
   }
 }
 

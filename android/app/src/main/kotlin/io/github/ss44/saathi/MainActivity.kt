@@ -44,7 +44,11 @@ class MainActivity : FlutterActivity() {
                         "installApk" -> {
                             val path = call.argument<String>("path")
                                 ?: throw IllegalArgumentException("Missing APK path")
-                            installApk(path)
+                            val expectedBuild = call.argument<Number>("expectedBuild")?.toLong()
+                                ?: throw IllegalArgumentException("Missing expected build")
+                            val expectedVersion = call.argument<String>("expectedVersion")
+                                ?: throw IllegalArgumentException("Missing expected version")
+                            installApk(path, expectedBuild, expectedVersion)
                             result.success(null)
                         }
                         else -> result.notImplemented()
@@ -59,7 +63,7 @@ class MainActivity : FlutterActivity() {
     }
 
     @Suppress("DEPRECATION")
-    private fun installApk(path: String) {
+    private fun installApk(path: String, expectedBuild: Long, expectedVersion: String) {
         val directory = File(cacheDir, "updates").canonicalFile
         val apk = File(path).canonicalFile
         require(apk.parentFile == directory && apk.isFile && apk.extension == "apk")
@@ -70,6 +74,8 @@ class MainActivity : FlutterActivity() {
         val current = packageManager.getPackageInfo(packageName, flags)
         require(candidate.packageName == packageName)
         require(versionCode(candidate) > versionCode(current))
+        require(versionCode(candidate) == expectedBuild)
+        require(candidate.versionName == expectedVersion)
         require(signaturesMatch(candidate, current))
         if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
             startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))

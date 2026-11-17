@@ -86,7 +86,8 @@ class ActivityOwner {
     final generation = ++a.generation;
     try {
       final key =
-          await controller.store.secrets.read(a.scope.connectionId) ?? '';
+          await controller.store.readConnectionSecret(a.scope.connectionId) ??
+              '';
 
       if (!_valid(a) || generation != a.generation) return;
       final root = a.scope.originalConnection!['url'] as String;

@@ -85,10 +85,10 @@ void main() {
     await c.addConnection(original, 'synthetic-secret');
     await c.newSession(original, 'fixture-model', '');
     await c.updateConnection('fixture', {...original, 'name': 'Renamed'});
-    expect(await secrets.read('fixture'), 'synthetic-secret');
+    expect(await store.readConnectionSecret('fixture'), 'synthetic-secret');
     await c.updateConnection('fixture', {...original, 'name': 'Renamed'},
         apiKey: '');
-    expect(await secrets.read('fixture'), isNull);
+    expect(await store.readConnectionSecret('fixture'), isNull);
     await c.updateConnection(
         'fixture', {...original, 'url': 'https://other.test'});
     expect(c.connections.single['id'], isNot('fixture'));

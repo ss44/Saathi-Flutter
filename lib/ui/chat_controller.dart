@@ -142,9 +142,12 @@ class ChatController extends ChangeNotifier {
   ChatSession? _dispatchingSession;
   bool _recordingOrganization = false;
   final _completionBacklog = <(ConversationIdentity, String)>{};
+  final _capacityBacklog = <(ConversationIdentity, String)>{};
   final _seenBacklog = <(ConversationIdentity, String)>{};
   final _preparedInputs = <String, Map<String, dynamic>>{};
+  final _quarantinedInputs = <ChatSession>{};
   static const preparedInputsKey = 'saathi.prepared-inputs.v1';
+  static const maxInputLength = 256 * 1024;
 
   ConversationIdentity identityOf(ChatSession session) =>
       ConversationIdentity(session.connectionId, session.id);
@@ -154,7 +157,13 @@ class ChatController extends ChangeNotifier {
       !organization.loaded ||
       organization.saving ||
       organization.hasUnsavedChanges ||
-      _completionBacklog.isNotEmpty;
+      _completionBacklog.isNotEmpty ||
+      _capacityBacklog
+          .any((item) => current != null && item.$1 == identityOf(current!));
+  String? get organizationProblem => _capacityBacklog
+          .any((item) => current != null && item.$1 == identityOf(current!))
+      ? 'This conversation reached its saved reply-details limit. Its answer is retained and will not be resent. Other conversations remain available.'
+      : organization.error;
 
   PersonaEditPolicy personaPolicy(ConversationIdentity identity) {
     final session =
@@ -256,7 +265,15 @@ class ChatController extends ChangeNotifier {
     try {
       while (_completionBacklog.isNotEmpty) {
         final item = _completionBacklog.first;
-        await organization.recordCompletion(item.$1, item.$2);
+        try {
+          await organization.recordCompletion(item.$1, item.$2);
+          _capacityBacklog.remove(item);
+        } on OrganizationCapacityException catch (e) {
+          if (e.identity != item.$1) rethrow;
+          // Capacity is not a failed storage transaction. Keep exact evidence
+          // for this chat without stranding unrelated conversations behind it.
+          _capacityBacklog.add(item);
+        }
         _completionBacklog.remove(item);
       }
       while (_seenBacklog.isNotEmpty) {
@@ -291,6 +308,7 @@ class ChatController extends ChangeNotifier {
   Future<void> retryOrganizationSave() async {
     try {
       await organization.retrySave();
+      _completionBacklog.addAll(_capacityBacklog);
       await _flushOrganization();
     } catch (_) {
       /* The original metadata candidate remains visible. */
@@ -339,11 +357,12 @@ class ChatController extends ChangeNotifier {
   }
 
   Future<void> _recordCompletion(ChatSession session, String replyId) async {
+    if (_capacityBacklog.contains((identityOf(session), replyId))) return;
     _completionBacklog.add((identityOf(session), replyId));
     await _flushOrganization();
   }
 
-  void _restorePrepared() {
+  Future<void> _restorePrepared() async {
     final raw = store.preferences.getString(preparedInputsKey);
     if (raw == null) return;
     if (raw.length > 2 * 1024 * 1024) {
@@ -353,6 +372,7 @@ class ChatController extends ChangeNotifier {
     if (decoded is! List || decoded.length > 1000) {
       throw const FormatException('Invalid prepared inputs');
     }
+    var changed = false;
     for (final row in decoded) {
       if (row is! Map ||
           [
@@ -369,44 +389,56 @@ class ChatController extends ChangeNotifier {
           (row['replyId'] as String).length > 256 ||
           row['personaRevision'] is! int ||
           (row['personaRevision'] as int) < 0 ||
+          (row['quarantined'] != null && row['quarantined'] is! bool) ||
           (row['personaId'] != null &&
               (row['personaId'] is! String ||
                   (row['personaId'] as String).length > 256)) ||
           !['prepared', 'dispatched'].contains(row['state'])) {
         throw const FormatException('Invalid prepared input');
       }
-      final session = sessions
+      var session = sessions
           .where(
             (s) =>
                 s.id == row['chatId'] && s.connectionId == row['connectionId'],
           )
           .firstOrNull;
+      final missingSession = session == null;
+      // Retain orphaned recovery evidence under its original identity. It is
+      // never a new conversation or permission to replay the retained input.
       if (session == null) {
-        throw const FormatException(
-          'Original prepared conversation unavailable',
+        session = ChatSession(
+          id: row['chatId'] as String,
+          connectionId: row['connectionId'] as String,
+          model: row['model'] is String ? row['model'] as String : '',
+          upstreamProvider: row['upstreamProvider'] as String?,
+          remoteTitle: 'Held recovery input',
         );
+        sessions.add(session);
       }
       final connection =
-          connections.where((c) => c['id'] == session.connectionId).firstOrNull;
-      if (connection == null) {
-        throw const FormatException('Original prepared connection unavailable');
-      }
+          connections.where((c) => c['id'] == row['connectionId']).firstOrNull;
       if (_preparedInputs.containsKey(session.id)) {
         throw const FormatException('Duplicate prepared input');
       }
-      if (row['connectionRevision'] != connection['authorityEpoch'] ||
+      final quarantined = row['quarantined'] == true ||
+          missingSession ||
+          connection == null ||
+          row['connectionRevision'] != connection['authorityEpoch'] ||
           row['connectionType'] != connection['type'] ||
           row['connectionUrl'] != connection['url'] ||
           row['model'] != session.model ||
-          row['upstreamProvider'] != session.upstreamProvider) {
-        throw const FormatException(
-          'Original prepared source changed; input remains held',
-        );
-      }
+          row['upstreamProvider'] != session.upstreamProvider;
       final item = QueuedFollowup(
         row['text'] as String,
         session,
-        connection,
+        quarantined
+            ? <String, dynamic>{
+                'id': row['connectionId'],
+                'authorityEpoch': row['connectionRevision'],
+                'type': row['connectionType'],
+                'url': row['connectionUrl'],
+              }
+            : connection,
         replyId: row['replyId'] as String,
         captured: CapturedInstructions(
           row['personaId'] as String?,
@@ -414,9 +446,16 @@ class ChatController extends ChangeNotifier {
           row['instructions'] as String,
         ),
       );
-      _preparedInputs[session.id] = item.preparedJson(row['state'] as String);
+      _preparedInputs[session.id] = Map<String, dynamic>.from(row);
       if (session.messages.any((m) => m.id == item.replyId)) continue;
-      if (row['state'] == 'prepared') {
+      if (quarantined) {
+        changed = changed || row['quarantined'] != true;
+        _preparedInputs[session.id]!['quarantined'] = true;
+        _quarantinedInputs.add(session);
+        _uncertain[session] = item;
+        _paused[session] =
+            'Original conversation or connection changed. This recovery input is held separately and will never be resent. Review it before explicitly discarding it.';
+      } else if (row['state'] == 'prepared') {
         _outbox.add(item);
         _paused[session] =
             'Prepared input restored without sending. Review it, then choose Resume.';
@@ -426,6 +465,9 @@ class ChatController extends ChangeNotifier {
             'Outcome unknown after restart. This input will not be sent again.';
       }
     }
+    // Persist revocation before a recovered orphan can appear in any later chat
+    // snapshot. Recreating its local row must never restore send authority.
+    if (changed) await _changePrepared((_) {});
   }
 
   Future<void>? _preparedTail;
@@ -528,6 +570,7 @@ class ChatController extends ChangeNotifier {
 
   bool submit(String text) {
     final session = current;
+    if (!_validInput(text, session)) return false;
     if (_disposed ||
         loading ||
         readOnly ||
@@ -577,7 +620,9 @@ class ChatController extends ChangeNotifier {
     final session = item.session;
     _canonicalHeldOwners[item] = owner;
     _canonicalQueueSaving.add(session);
-    final write = owner.queueInput(item.replyId, item.text);
+    // Future.sync also captures a synchronous adapter admission rejection.
+    final write =
+        Future<void>.sync(() => owner.queueInput(item.replyId, item.text));
     _canonicalQueueWrites[session] = write;
     unawaited(() async {
       try {
@@ -653,6 +698,7 @@ class ChatController extends ChangeNotifier {
     if (!await _discardPrepared(_uncertain[session]!)) return;
     _outbox.removeWhere((item) => identical(item.session, session));
     _uncertain.remove(session);
+    _quarantinedInputs.remove(session);
     _paused.remove(session);
     notifyListeners();
   }
@@ -761,6 +807,7 @@ class ChatController extends ChangeNotifier {
           );
           break;
         }
+        _canonicalHeldOwners.remove(item);
         if (result == _DispatchResult.dispatchedUnknown) {
           _uncertain[item.session] = item;
           _paused[item.session] =
@@ -843,7 +890,7 @@ class ChatController extends ChangeNotifier {
         !current!.messages.any((m) => m.id == 'input-${op.key}')) {
       return op.input;
     }
-    return _pendingText;
+    return identical(current, _dispatchingSession) ? _pendingText : null;
   }
 
   set pendingText(String? value) => _pendingText = value;
@@ -1496,7 +1543,8 @@ class ChatController extends ChangeNotifier {
     Map<String, dynamic> connection, {
     required bool Function() isCurrent,
   }) async {
-    final key = await store.secrets.read(connection['id'] as String) ?? '';
+    final key =
+        await store.readConnectionSecret(connection['id'] as String) ?? '';
     if (!isCurrent()) {
       throw StateError('Connection changed');
     }
@@ -1828,7 +1876,8 @@ class ChatController extends ChangeNotifier {
         if (op != null) runs[session.id] = op;
       }
       if (sessions.isNotEmpty) current = sessions.last;
-      _restorePrepared();
+      await _restorePrepared();
+      if (current == null && sessions.isNotEmpty) current = sessions.last;
       for (final session in sessions) {
         for (final message in session.messages) {
           if (message.metadata['authoritativeCompletion'] == true &&
@@ -1860,7 +1909,8 @@ class ChatController extends ChangeNotifier {
   Future<SaathiCore> coreFor(Map<String, dynamic> c) async {
     final core = coreFactory();
     try {
-      core.addProvider(config(c, await store.secrets.read(c['id']) ?? ''));
+      core.addProvider(
+          config(c, await store.readConnectionSecret(c['id']) ?? ''));
       return core;
     } catch (_) {
       core.close();
@@ -1902,6 +1952,7 @@ class ChatController extends ChangeNotifier {
 
   bool get readOnly =>
       _loadFailed ||
+      _quarantinedInputs.contains(current) ||
       (connections.any(
             (c) =>
                 c['id'] == current?.connectionId &&
@@ -2000,7 +2051,7 @@ class ChatController extends ChangeNotifier {
     if (!valid()) throw StateError('Stale catalog');
     final core = coreFactory();
     try {
-      final key = await store.secrets.read(c['id']) ?? '';
+      final key = await store.readConnectionSecret(c['id']) ?? '';
       if (!valid()) throw StateError('Stale catalog');
       core.addProvider(config(c, key));
       final result = await core.discoverModels(c['id'], isCurrent: valid);
@@ -2141,6 +2192,10 @@ class ChatController extends ChangeNotifier {
     if (busy || current == null) return;
     // A fresh ID also clears any backend-owned state; never re-use a cleared thread.
     final old = current!;
+    if (_preparedInputs.containsKey(old.id)) {
+      throw StateError(
+          'Resolve or explicitly discard held input before deleting this conversation');
+    }
     if (identical(old, _canonicalSession)) _canonical?.revokeInput();
     final index = sessions.indexOf(old);
     sessions.remove(old);
@@ -2156,6 +2211,7 @@ class ChatController extends ChangeNotifier {
   }
 
   Future<bool> send(String text) async {
+    if (!_validInput(text, current)) return false;
     if (_draining ||
         organizationBlocked ||
         unsavedChanges ||
@@ -2169,6 +2225,26 @@ class ChatController extends ChangeNotifier {
         result == _DispatchResult.admitted;
   }
 
+  bool _validInput(String text, ChatSession? session) {
+    if (_disposed) return false;
+    if (text.length > maxInputLength ||
+        (session != null &&
+            organization
+                    .captureInstructions(
+                      identityOf(session),
+                      fallback: session.systemPrompt,
+                    )
+                    .instructions
+                    .length >
+                16000)) {
+      error =
+          'Input is too large. Use at most 262,144 characters and 16,000 instruction characters. Your draft was not sent.';
+      notifyListeners();
+      return false;
+    }
+    return true;
+  }
+
   // Only the drain may bypass public FIFO admission for its captured head.
   Future<_DispatchResult> _dispatch(
     String text, {
@@ -2177,6 +2253,7 @@ class ChatController extends ChangeNotifier {
     final session = source?.session ?? current;
     if (_disposed ||
         _loadFailed ||
+        _quarantinedInputs.contains(session) ||
         loading ||
         changingConnection ||
         busy ||

@@ -61,6 +61,7 @@ void main() {
                 {
                   'kind': 'approval',
                   'prompt_id': 'approve',
+                  'command': 'echo reviewable fixture',
                   'execution_generation': 4,
                   'question':
                       'Review this explicitly requested action before allowing it. ' *

@@ -180,8 +180,8 @@ class _PromptReviewState extends State<PromptReview> {
     });
     SaathiCore? request;
     try {
-      final key = await c.store.secrets
-          .read(source['id'])
+      final key = await c.store
+          .readConnectionSecret(source['id'])
           .timeout(const Duration(seconds: 30));
       if (!current()) return;
       request = c.coreFactory();

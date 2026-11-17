@@ -29,7 +29,10 @@ void main() {
   for (final action in ['dispose', 'replace']) {
     testWidgets('history does not request after delayed key and $action',
         (tester) async {
-      SharedPreferences.setMockInitialValues({});
+      SharedPreferences.setMockInitialValues({
+        'saathi.connections.v1':
+            '[{"id":"h","name":"Home","type":"hermes","url":"https://example.test"}]',
+      });
       final secrets = DelayedSecrets();
       var requests = 0;
       final client = MockClient((r) async {
@@ -105,7 +108,10 @@ void main() {
     c.dispose();
   });
   test('core closes on secret read failure', () async {
-    SharedPreferences.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({
+      'saathi.connections.v1':
+          '[{"id":"h","name":"Home","type":"hermes","url":"https://example.test"}]',
+    });
     final secrets = DelayedSecrets();
     final client = MockClient((r) async => http.Response('{}', 200));
     final core = TrackedCore(client);

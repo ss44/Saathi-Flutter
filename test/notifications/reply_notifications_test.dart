@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -28,12 +29,14 @@ class Adapter implements NotificationAdapter {
 
 class FailingPreferences implements SharedPreferences {
   final _values = <String, Object>{};
+  bool throwOnWrite = false;
   @override
   Object? get(String key) => _values[key];
   @override
   Future<bool> setBool(String key, bool value) async {
     // The plugin can update its local cache before a failed durable write.
     _values[key] = value;
+    if (throwOnWrite) throw StateError('Controlled write failure');
     return false;
   }
 
@@ -41,14 +44,135 @@ class FailingPreferences implements SharedPreferences {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class InterleavedPreferences implements SharedPreferences {
+  bool value = true;
+  int writes = 0;
+  final firstWrite = Completer<bool>();
+  final compensationStarted = Completer<void>();
+  final compensation = Completer<bool>();
+  @override
+  Object? get(String key) => value;
+  @override
+  Future<bool> setBool(String key, bool next) async {
+    value = next;
+    writes++;
+    if (writes == 1) return firstWrite.future;
+    if (next) {
+      compensationStarted.complete();
+      return compensation.future;
+    }
+    return true;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class DelayedPermissionAdapter extends Adapter {
+  final permission = Completer<bool>();
+  int requests = 0;
+  @override
+  Future<bool> requestPermission() {
+    requests++;
+    return permission.future;
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('overlapping opt-outs cannot race a failed write and its compensation',
+      () async {
+    final preferences = InterleavedPreferences();
+    final notifications = ReplyNotifications(preferences, adapter: Adapter());
+    addTearDown(notifications.dispose);
+    final first = notifications.setEnabled(false);
+    try {
+      expect(await notifications.setEnabled(false), isFalse);
+      expect(preferences.writes, 1);
+      preferences.firstWrite.complete(false);
+      await preferences.compensationStarted.future;
+      expect(await notifications.setEnabled(false), isFalse);
+      expect(preferences.writes, 2);
+      preferences.compensation.complete(true);
+      expect(await first, isFalse);
+      expect(notifications.enabled, isTrue);
+      final afterFailure = ReplyNotifications(preferences, adapter: Adapter());
+      expect(afterFailure.enabled, isTrue);
+      afterFailure.dispose();
+      expect(await notifications.setEnabled(false), isTrue);
+      expect(notifications.enabled, isFalse);
+      final afterSuccess = ReplyNotifications(preferences, adapter: Adapter());
+      expect(afterSuccess.enabled, isFalse);
+      afterSuccess.dispose();
+    } finally {
+      if (!preferences.firstWrite.isCompleted) {
+        preferences.firstWrite.complete(false);
+      }
+      if (!preferences.compensation.isCompleted) {
+        preferences.compensation.complete(true);
+      }
+      await first;
+    }
+  });
+  for (final granted in [false, true]) {
+    test(
+        'permission wait rejects opposite changes and releases, granted=$granted',
+        () async {
+      SharedPreferences.setMockInitialValues({});
+      final preferences = await SharedPreferences.getInstance();
+      final adapter = DelayedPermissionAdapter();
+      final notifications = ReplyNotifications(preferences, adapter: adapter);
+      addTearDown(notifications.dispose);
+      final enabling = notifications.setEnabled(true);
+      try {
+        expect(await notifications.setEnabled(false), isFalse);
+        expect(adapter.requests, 1);
+        adapter.permission.complete(granted);
+        expect(await enabling, granted);
+        expect(notifications.enabled, granted);
+        final afterPermission =
+            ReplyNotifications(preferences, adapter: Adapter());
+        expect(afterPermission.enabled, granted);
+        afterPermission.dispose();
+        expect(await notifications.setEnabled(false), isTrue);
+        final recreated = ReplyNotifications(preferences, adapter: Adapter());
+        expect(recreated.enabled, isFalse);
+        recreated.dispose();
+      } finally {
+        if (!adapter.permission.isCompleted) adapter.permission.complete(false);
+        await enabling;
+      }
+    });
+  }
   test('failed preference storage does not enable notifications', () async {
     final n = ReplyNotifications(FailingPreferences(), adapter: Adapter());
     expect(await n.setEnabled(true), isFalse);
     expect(n.enabled, isFalse);
     n.dispose();
   });
+  test('failed opt-in does not leak through the preference cache on recreation',
+      () async {
+    final preferences = FailingPreferences();
+    final first = ReplyNotifications(preferences, adapter: Adapter());
+    expect(await first.setEnabled(true), isFalse);
+    first.dispose();
+    final recreated = ReplyNotifications(preferences, adapter: Adapter());
+    expect(recreated.enabled, isFalse);
+    recreated.dispose();
+  });
+  for (final throws in [false, true]) {
+    test('failed opt-out restores cache on recreation, throws=$throws',
+        () async {
+      final preferences = FailingPreferences()..throwOnWrite = throws;
+      preferences._values[ReplyNotifications.preferenceKey] = true;
+      final first = ReplyNotifications(preferences, adapter: Adapter());
+      expect(await first.setEnabled(false), isFalse);
+      first.dispose();
+      final recreated = ReplyNotifications(preferences, adapter: Adapter());
+      expect(recreated.enabled, isTrue);
+      recreated.dispose();
+    });
+  }
   test('only paused or hidden responses notify; resume and disposal suppress',
       () async {
     SharedPreferences.setMockInitialValues({});

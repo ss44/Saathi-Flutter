@@ -21,6 +21,32 @@ class ControlledStorage extends OrganizationStorage {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const id = ConversationIdentity('original', 'chat');
+  test('normal completion capacity has a typed original-conversation failure',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      OrganizationStorage.key: jsonEncode({
+        'schema': 1,
+        'chats': {
+          id.storageKey: {
+            'displayName': '',
+            'archived': false,
+            'completions': {for (var i = 0; i < 512; i++) '$i': true},
+          }
+        },
+      }),
+    });
+    final organization = ChatOrganization(
+        OrganizationStorage(await SharedPreferences.getInstance()));
+    await organization.load();
+    await expectLater(
+        organization.recordCompletion(id, 'next'),
+        throwsA(
+            predicate((dynamic e) => e is! StateError && e.identity == id)));
+    expect(organization.entry(id).completions.length, 512);
+    expect(organization.hasUnsavedChanges, isFalse);
+    await organization.recordCompletion(
+        const ConversationIdentity('original', 'other'), 'healthy');
+  });
   testWidgets('an editor cannot adopt or cancel another failed reply write',
       (tester) async {
     SharedPreferences.setMockInitialValues({});

@@ -11,6 +11,80 @@ import release_pipeline as rp
 SHA = 'a' * 40
 
 
+class TagProvenanceTests(unittest.TestCase):
+    tag = 'v2026.47.1'
+
+    def ref(self, sha=SHA, kind='commit'):
+        return {'ref': 'refs/tags/' + self.tag,
+                'object': {'type': kind, 'sha': sha}}
+
+    def test_lightweight_and_nested_annotated_tags(self):
+        for replies in ([[self.ref()]],
+                        [[self.ref('b' * 40, 'tag')],
+                         {'object': {'type': 'tag', 'sha': 'c' * 40}},
+                         {'object': {'type': 'commit', 'sha': SHA}}]):
+            with self.subTest(replies=replies), patch.object(rp, 'api', side_effect=replies) as api:
+                rp.require_source_tag('o/r', self.tag, SHA)
+                self.assertEqual(api.call_args_list[0].args,
+                                 ('repos/o/r/git/matching-refs/tags/' + self.tag,))
+                self.assertTrue(all(call.args[1:] == () for call in api.call_args_list))
+                if api.call_count > 1:
+                    self.assertEqual(api.call_args_list[1].args,
+                                     ('repos/o/r/git/tags/' + 'b' * 40,))
+
+    def test_missing_tag_created_once_then_read_back(self):
+        with patch.object(rp, 'api', side_effect=[[], self.ref(), [self.ref()]]) as api:
+            rp.require_source_tag('o/r', self.tag, SHA, create=True)
+        self.assertEqual(api.call_args_list[1].args,
+                         ('repos/o/r/git/refs', 'POST',
+                          {'ref': 'refs/tags/' + self.tag, 'sha': SHA}))
+        self.assertEqual(api.call_count, 3)
+
+    def test_missing_tag_without_creation_and_ambiguous_inventory_fail(self):
+        for rows in ([], [self.ref(), self.ref()], {}, [dict(self.ref(), object={})]):
+            with self.subTest(rows=rows), patch.object(rp, 'api', return_value=rows) as api:
+                with self.assertRaises(ValueError):
+                    rp.require_source_tag('o/r', self.tag, SHA)
+                self.assertEqual(api.call_count, 1)
+
+    def test_prefix_match_is_not_the_exact_tag(self):
+        row = self.ref()
+        row['ref'] += '0'
+        with patch.object(rp, 'api', return_value=[row]):
+            with self.assertRaises(ValueError):
+                rp.require_source_tag('o/r', self.tag, SHA)
+
+    def test_wrong_commit_wrong_type_and_annotation_cycle_fail_closed(self):
+        for replies in ([[self.ref('b' * 40)]], [[self.ref(SHA, 'tree')]],
+                        [[self.ref('b' * 40, 'tag')],
+                         {'object': {'type': 'tag', 'sha': 'b' * 40}}]):
+            with self.subTest(replies=replies), patch.object(rp, 'api', side_effect=replies):
+                with self.assertRaises(ValueError):
+                    rp.require_source_tag('o/r', self.tag, SHA)
+
+    def test_lookup_creation_failure_and_changed_creation_readback_propagate(self):
+        for replies in ([RuntimeError('lookup failed')],
+                        [[], RuntimeError('concurrent tag creation')],
+                        [[], self.ref(), [self.ref('b' * 40)]]):
+            with self.subTest(replies=replies), patch.object(rp, 'api', side_effect=replies):
+                with self.assertRaises((RuntimeError, ValueError)):
+                    rp.require_source_tag('o/r', self.tag, SHA, create=True)
+
+    def test_malformed_annotations_and_excessive_depth_fail_closed(self):
+        for value in (None, [], {}, {'object': {'type': 'commit', 'sha': '../bad'}}):
+            with self.subTest(value=value), patch.object(rp, 'api', side_effect=[
+                    [self.ref('b' * 40, 'tag')], value]):
+                with self.assertRaises(ValueError):
+                    rp.require_source_tag('o/r', self.tag, SHA)
+        replies = [[self.ref('b' * 40, 'tag')]] + [
+            {'object': {'type': 'tag', 'sha': f'{number:040x}'}}
+            for number in range(16)]
+        with patch.object(rp, 'api', side_effect=replies) as api:
+            with self.assertRaisesRegex(ValueError, 'depth'):
+                rp.require_source_tag('o/r', self.tag, SHA)
+            self.assertEqual(api.call_count, 17)
+
+
 class PlanningTests(unittest.TestCase):
     def plan(self, releases=(), tags=(), tree=lambda ref: ref):
         return rp.plan(list(releases), list(tags), SHA, 7, '123', tree,
@@ -131,7 +205,12 @@ class PlanningTests(unittest.TestCase):
     def test_bad_uploaded_digest_never_publishes(self):
         self.exercise_publication(bad_digest=True)
 
-    def exercise_publication(self, bad_digest=False):
+    def test_tag_mismatch_stops_upload_promotion_or_success_readback(self):
+        for stage in (1, 2, 3):
+            with self.subTest(stage=stage):
+                self.exercise_publication(tag_failure=stage)
+
+    def exercise_publication(self, bad_digest=False, tag_failure=None):
         tag = 'v2026.46.1'
         events = []
         assets = []
@@ -152,17 +231,32 @@ class PlanningTests(unittest.TestCase):
             assets.append(dict(name=path.name, size=path.stat().st_size,
                                digest='sha256:' + ('bad' if bad_digest else digest)))
             return '{}'
+        def check_tag(*args, **kwargs):
+            events.append('TAG')
+            if events.count('TAG') == tag_failure:
+                raise ValueError('Remote release tag does not match built source')
         with tempfile.TemporaryDirectory() as temporary:
             for name in rp.expected_assets(tag) + ['SHA256SUMS']:
                 (Path(temporary) / name).write_bytes(b'synthetic fixture')
-            with patch.object(rp, 'api', api), patch.object(rp, 'command', upload):
-                if bad_digest:
+            with patch.object(rp, 'api', api), patch.object(rp, 'command', upload), \
+                    patch.object(rp, 'require_source_tag', side_effect=check_tag) as source_tag:
+                if tag_failure:
+                    with self.assertRaisesRegex(ValueError, 'tag'):
+                        rp.publish('o/r', 12, tag, SHA, '123', temporary)
+                    if tag_failure == 1:
+                        self.assertNotIn('UPLOAD', events)
+                    if tag_failure < 3:
+                        self.assertNotIn('PATCH', events)
+                elif bad_digest:
                     with self.assertRaisesRegex(ValueError, 'digest'):
                         rp.publish('o/r', 12, tag, SHA, '123', temporary)
                     self.assertNotIn('PATCH', events)
                 else:
                     rp.publish('o/r', 12, tag, SHA, '123', temporary)
-                    self.assertEqual(events, ['GET'] + ['UPLOAD'] * 6 + ['GET', 'PATCH', 'GET'])
+                    self.assertEqual(events, ['GET', 'TAG'] + ['UPLOAD'] * 6 +
+                                     ['GET', 'TAG', 'PATCH', 'GET', 'TAG'])
+                    self.assertEqual(source_tag.call_count, 3)
+                    self.assertEqual(source_tag.call_args_list[0].kwargs, {'create': True})
 
 
 if __name__ == '__main__':

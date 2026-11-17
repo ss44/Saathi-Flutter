@@ -21,6 +21,13 @@ static void first_frame_cb(MyApplication* self, FlView* view) {
 
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
+  // All activations share one storage owner and one Flutter controller.
+  GtkWindow* existing_window =
+      gtk_application_get_active_window(GTK_APPLICATION(application));
+  if (existing_window != nullptr) {
+    gtk_window_present(existing_window);
+    return;
+  }
   MyApplication* self = MY_APPLICATION(application);
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
@@ -144,5 +151,5 @@ MyApplication* my_application_new() {
 
   return MY_APPLICATION(g_object_new(my_application_get_type(),
                                      "application-id", APPLICATION_ID, "flags",
-                                     G_APPLICATION_NON_UNIQUE, nullptr));
+                                     GApplicationFlags(0), nullptr));
 }

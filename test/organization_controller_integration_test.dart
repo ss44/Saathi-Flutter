@@ -170,6 +170,11 @@ void main() {
     await c
         .addConnection({'id': 'a', 'name': 'A', 'type': 'openai'}, 'fixture');
     await c.newSession(c.connections.single, 'model', 'role');
+    final original = c.current!;
+    await c.addConnection({'id': 'b', 'name': 'B', 'type': 'openai'}, 'other');
+    await c.newSession(c.connections.last, 'model', '');
+    final independent = c.current!;
+    c.select(original);
     secrets.gate = Completer<void>();
     final sending = c.send('held');
     await Future<void>.delayed(const Duration(milliseconds: 20));
@@ -177,16 +182,24 @@ void main() {
     secrets.gate!.complete();
     await sending;
     secrets.gate = null;
-    await c.updateConnection('a', {...c.connections.single},
+    await c.updateConnection('a', {...c.connections.first},
         apiKey: 'replacement');
     c.dispose();
     final restarted = ChatController(
         SaathiStore(preferences: prefs, secrets: secrets),
         coreFactory: core);
     await restarted.load();
+    restarted
+        .select(restarted.sessions.singleWhere((s) => s.id == original.id));
     expect(restarted.readOnly, isTrue);
+    expect(restarted.uncertainInput?.text, 'held');
     expect(restarted.canResumeQueue, isFalse);
     expect(requests, 0);
+    restarted
+        .select(restarted.sessions.singleWhere((s) => s.id == independent.id));
+    expect(restarted.readOnly, isFalse);
+    expect(await restarted.send('independent input'), isTrue);
+    expect(requests, 1);
     restarted.dispose();
   });
 

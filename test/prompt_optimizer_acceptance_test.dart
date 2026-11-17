@@ -55,6 +55,7 @@ Future<ChatController> controller(
     'url': 'http://localhost:9999',
     'model': 'test'
   });
+  await c.store.saveConnection(c.connections.single, apiKey: 'fixture');
   c.current = ChatSession(
       id: 's',
       connectionId: 'direct',
@@ -330,9 +331,11 @@ void main() {
                     : jsonDecode(response('Improved'))),
             200);
       }));
-      core.restoreHistory(
-          [ChatMessage(role: 'user', content: 'PRIVATE HISTORY')]);
       core.setSystemPrompt('PRIVATE SYSTEM');
+      final history = [ChatMessage(role: 'user', content: 'PRIVATE HISTORY')];
+      core.restoreHistory(history);
+      expect(
+          core.history.map((message) => message.content), ['PRIVATE HISTORY']);
       expect(
           await rewritePrompt(
               core,
@@ -372,7 +375,7 @@ void main() {
         expect(body['system_instruction']['parts'][0]['text'],
             contains('Rewrite the user draft'));
       }
-      expect(core.history, isEmpty);
+      expect(core.history, history);
       core.close();
     });
   }

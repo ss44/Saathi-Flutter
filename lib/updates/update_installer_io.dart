@@ -33,7 +33,11 @@ Future<bool> installVerifiedAndroidUpdate(VerifiedUpdate update) async {
     }
     await partial.rename(file.path);
     // The OS installer may still need the file after this method returns.
-    await channel.invokeMethod<void>('installApk', {'path': file.path});
+    await channel.invokeMethod<void>('installApk', {
+      'path': file.path,
+      'expectedBuild': update.offer.version.build,
+      'expectedVersion': update.offer.version.name,
+    });
     handedOff = true;
     return true;
   } finally {

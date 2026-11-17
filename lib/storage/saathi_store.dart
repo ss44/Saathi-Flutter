@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import '../chat_organization/reported_usage.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -80,8 +81,40 @@ class SaathiStore {
         .toList();
   }
 
-  Future<StoredState> load() async =>
-      StoredState(_read('saathi.connections.v1'), _read('saathi.chats.v1'));
+  Future<StoredState> load() async => StoredState([
+        for (final connection in _read('saathi.connections.v1'))
+          {
+            for (final entry in connection.entries)
+              if (entry.key != 'secretSlot') entry.key: entry.value,
+          },
+      ], _read('saathi.chats.v1'));
+
+  /// Reads the credential generation published with the connection metadata.
+  /// Shipped records without a slot keep their original secure-storage key.
+  /// A missing generation fails closed; it never falls back to an older key.
+  Future<String?> readConnectionSecret(String id) async {
+    final connection = _read('saathi.connections.v1')
+        .where((connection) => connection['id'] == id)
+        .firstOrNull;
+    if (connection == null) return null;
+    final slot = _secretSlot(connection);
+    final value = await secrets.read(slot);
+    if (connection.containsKey('secretSlot') && value == null) {
+      throw const StorageRecoveryException();
+    }
+    return value == '' ? null : value;
+  }
+
+  String _secretSlot(Map<String, dynamic> connection) {
+    final slot = connection['secretSlot'];
+    if (slot == null) return connection['id'] as String;
+    if (slot is! String ||
+        !RegExp(r'^credential\.v1\.[a-f0-9]{48}$').hasMatch(slot)) {
+      throw const StorageRecoveryException();
+    }
+    return slot;
+  }
+
   Future<void> saveConnection(Map<String, dynamic> connection,
           {required String apiKey}) =>
       _exclusive(() async {
@@ -101,6 +134,9 @@ class SaathiStore {
         };
         final id = safe['id'] as String;
         final before = _read('saathi.connections.v1');
+        if (before.any((connection) => connection['id'] == id)) {
+          throw StateError('Connection already exists');
+        }
         final oldKey = await secrets.read(id);
         try {
           await secrets.write(id, apiKey);
@@ -127,8 +163,19 @@ class SaathiStore {
         if (!before.any((c) => c['id'] == id)) {
           throw StateError('Connection no longer exists');
         }
-        final oldKey = await secrets.read(id);
+        final original = before.singleWhere((c) => c['id'] == id);
+        final oldSlot = _secretSlot(original);
+        final oldKey = await secrets.read(oldSlot);
+        if (original.containsKey('secretSlot') &&
+            oldKey == null &&
+            apiKey == null &&
+            replacement != null) {
+          throw const StorageRecoveryException();
+        }
         final newId = replacement?['id'] as String? ?? id;
+        if (newId != id && before.any((c) => c['id'] == newId)) {
+          throw StateError('Replacement connection already exists');
+        }
         final safe = replacement == null
             ? null
             : <String, dynamic>{
@@ -148,6 +195,14 @@ class SaathiStore {
                         ? replacement[key]
                         : before.singleWhere((c) => c['id'] == id)[key],
               };
+        // Never overwrite a credential still referenced by durable metadata.
+        // A crash before publication leaves only an unreachable secure orphan;
+        // a crash after publication sees the new slot and epoch together.
+        final random = Random.secure();
+        final newSlot = safe == null
+            ? oldSlot
+            : 'credential.v1.${List.generate(24, (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0')).join()}';
+        if (safe != null) safe['secretSlot'] = newSlot;
         final after = [
           for (final c in before)
             if (c['id'] != id) c,
@@ -155,21 +210,22 @@ class SaathiStore {
         ];
         try {
           if (safe != null) {
-            final nextKey = apiKey ?? oldKey;
-            if (nextKey == null || nextKey.isEmpty) {
-              await secrets.delete(newId);
-            } else {
-              await secrets.write(newId, nextKey);
-            }
+            await secrets.write(newSlot, apiKey ?? oldKey ?? '');
           }
-          if (safe == null || newId != id) await secrets.delete(id);
+          if (safe == null) await secrets.delete(oldSlot);
           if (!await preferences.setString(pref, jsonEncode(after))) {
             throw StateError('Connection metadata write failed');
           }
         } catch (_) {
-          await _restore(before, id, newId, oldKey);
+          await _restore(before, oldSlot, newSlot, oldKey);
           throw StateError(
               'Connection could not be saved; previous data restored');
+        }
+        if (safe != null) {
+          // Publication already committed. Cleanup cannot roll back authority.
+          try {
+            await secrets.delete(oldSlot);
+          } catch (_) {}
         }
       });
 
@@ -246,8 +302,22 @@ class SaathiStore {
           ],
         }
     ];
-    if (!await preferences.setString('saathi.chats.v1', jsonEncode(safe))) {
-      throw StateError('Could not save chats');
+    const key = 'saathi.chats.v1';
+    final before = preferences.getString(key);
+    try {
+      if (!await preferences.setString(key, jsonEncode(safe))) {
+        throw StateError('Could not save chats');
+      }
+    } catch (_) {
+      // Restore the plugin cache even when the compensating disk write fails.
+      try {
+        if (before == null) {
+          await preferences.remove(key);
+        } else {
+          await preferences.setString(key, before);
+        }
+      } catch (_) {}
+      rethrow;
     }
   }
 }

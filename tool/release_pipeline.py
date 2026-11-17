@@ -86,6 +86,47 @@ def validate_draft(release, tag, commit, run_id):
         raise ValueError('REST release ID must be numeric')
 
 
+def require_source_tag(repository, tag, commit, *, create=False):
+    """Verify the remote peeled tag, optionally creating an absent ref once.
+
+    Lookup/creation errors propagate: never overwrite a ref or retry a write.
+    Recheck before promotion and afterward; tag protection is still required to
+    prevent another authorized writer moving a tag between these checks.
+    """
+    tag_parts(tag)
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise ValueError('Source must be an exact full commit SHA')
+    endpoint = f'repos/{repository}/git/matching-refs/tags/{tag}'
+    rows = api(endpoint)
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise ValueError('Invalid remote tag inventory')
+    refs = [row for row in rows if row.get('ref') == 'refs/tags/' + tag]
+    if not refs and create:
+        api(f'repos/{repository}/git/refs', 'POST',
+            {'ref': 'refs/tags/' + tag, 'sha': commit})
+        return require_source_tag(repository, tag, commit)
+    if len(refs) != 1:
+        raise ValueError('Missing or ambiguous remote source tag')
+    obj = refs[0].get('object')
+    seen = set()
+    for _ in range(16):
+        if not isinstance(obj, dict) or not isinstance(obj.get('sha'), str):
+            raise ValueError('Invalid remote tag object')
+        sha = obj['sha']
+        if not re.fullmatch(r'[0-9a-f]{40}', sha) or sha in seen:
+            raise ValueError('Invalid or cyclic remote tag object')
+        seen.add(sha)
+        if obj.get('type') == 'commit':
+            if sha != commit:
+                raise ValueError('Remote release tag does not match built source')
+            return
+        if obj.get('type') != 'tag':
+            raise ValueError('Remote release tag must resolve to a commit')
+        annotated = api(f'repos/{repository}/git/tags/{sha}')
+        obj = annotated.get('object') if isinstance(annotated, dict) else None
+    raise ValueError('Remote tag annotation depth exceeded')
+
+
 CHANGES_START = '<!-- saathi-changes:start -->'
 CHANGES_END = '<!-- saathi-changes:end -->'
 
@@ -203,6 +244,7 @@ def publish(repository, release_id, tag, commit, run_id, directory):
     files = {p.name: p for p in directory.iterdir() if p.is_file()}
     if set(files) != names or len(list(directory.iterdir())) != 6:
         raise ValueError('Expected exactly six release files')
+    require_source_tag(repository, tag, commit, create=True)
     for name in sorted(names):
         # Numeric ID upload avoids tag lookup for a not-yet-published draft.
         upload = f'https://uploads.github.com/repos/{repository}/releases/{int(release_id)}/assets?name={name}'
@@ -217,10 +259,12 @@ def publish(repository, release_id, tag, commit, run_id, directory):
         file = files[asset['name']]
         if asset['size'] != file.stat().st_size or asset.get('digest') != 'sha256:' + file_digest(file):
             raise ValueError('Uploaded asset size/digest mismatch or absent digest; draft retained')
+    require_source_tag(repository, tag, commit)
     api(endpoint, 'PATCH', {'draft': False})
     published = api(endpoint)
     if published['draft'] or published['tag_name'] != tag or len(published['assets']) != 6:
         raise ValueError('Published release readback failed')
+    require_source_tag(repository, tag, commit)
     print(f'Published {tag} from {commit}: all six assets verified.')
 
 
