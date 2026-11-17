@@ -71,8 +71,12 @@ class ConversationServerCache extends ChangeNotifier {
 }
 
 class ConversationServer extends StatelessWidget {
-  const ConversationServer({super.key, required this.cache});
+  const ConversationServer(
+      {super.key, required this.cache, this.closeDrawerOnOpen = true});
   final ConversationServerCache cache;
+
+  /// Persistent sidebars must not pop the app route when opening history.
+  final bool closeDrawerOnOpen;
   @override
   Widget build(BuildContext context) => ListenableBuilder(
       listenable: cache,
@@ -94,7 +98,7 @@ class ConversationServer extends StatelessWidget {
                     onTap: () {
                       if (!cache.current) return;
                       final navigator = Navigator.of(context);
-                      navigator.pop();
+                      if (closeDrawerOnOpen) navigator.pop();
                       navigator.push(MaterialPageRoute<void>(
                           builder: (_) => RemoteHistoryPage(
                               controller: cache.controller,

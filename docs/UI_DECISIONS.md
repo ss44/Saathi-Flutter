@@ -5,7 +5,7 @@ Saathi is an independent Flutter app, not a QML port or DMS frontend. The origin
 | Decision | Keep/build on | Change or leave behind |
 |---|---|---|
 | Identity | A familiar personal companion | Saathi spelling, independent launcher/package, no Hermes-only identity |
-| Navigation | Conversation first, provider choice nearby | Mobile routes and a secondary conversation drawer instead of a shell panel |
+| Navigation | Conversation first, provider choice nearby | Narrow windows use mobile routes and a conversation drawer; wide windows use a far-left Chats/Settings rail, persistent chat list and active conversation pane |
 | Providers | Multiple named instances; OpenAI-compatible, Anthropic, Gemini; model discovery/manual IDs | Separate Dart adapters; no QML global state or false claim that all backends expose the same capabilities |
 | Context | System prompt and bounded direct-model context | Conversation keeps its original connection/model/prompt; no silent rerouting of a transcript |
 | Local sessions | Persistent conversations, new/delete/switch | Connection-bound sessions rather than one shared global history; credentials never stored in session JSON |
@@ -16,7 +16,7 @@ Saathi is an independent Flutter app, not a QML port or DMS frontend. The origin
 | Secrets | User-supplied connection credentials | Platform secure storage; no plain-preference keys, debug logging or screenshots of credentials |
 | Errors | Recoverable settings/network messages | Successful replies are retained if saving fails; retry saving without another model request |
 | Updates | Automatic checks and clear update availability | Verified standalone Android APK download + OS consent. Desktop currently opens releases manually; publication does not prove device installation or upgrade acceptance |
-| Desktop future | Shared Dart network/state/storage code, existing Linux/macOS runners | Leave DMS pinning, shell shortcuts, resizing/theme bindings and plugin service APIs behind |
+| Desktop workspace | Shared Dart network/state/storage code and adaptive Flutter shell, Linux-first native preview | Keep settings in the left navigation and cap the conversation content width; leave DMS pinning, shell shortcuts, resizing/theme bindings and plugin service APIs behind |
 
 ## Deliberately not carried over yet
 - Smart context bucket negotiation/fast-model summarization. It adds complexity and potentially paid extra calls; it must be opt-in and should not run on top of a server-owned session.
@@ -53,6 +53,10 @@ source/lifecycle revocation and Apply/Keep/Undo coverage. These are widget tests
 not physical-device or TalkBack verification.
 
 ## Layout verification
+Wide windows at least 1,000 logical pixels use the persistent workspace when there is also room for the current text scale (at least 720 times the scaled unit size). The chat list stays 300px wide beside the navigation rail; conversation content is capped at 960px. Settings opens inside the workspace without replacing the conversation or its draft. Resizing back to compact navigation preserves the composer. Remote history continues to open as a separate read-only route, not as a local conversation or replayed input.
+
+`test/ui/desktop_shell_test.dart` exercises desktop and landscape layouts, conversation selection/draft ownership, embedded settings, resizing and large-text fallback. Native compilation and interactive Linux, Windows and macOS acceptance are separate from these widget tests.
+
 The composer stays outside the scrolling transcript and queue/recovery feedback, at the bottom safe area (above the keyboard when open). The transcript fills the space left by the composer and native-run controls; short feedback uses only its content height, while long feedback scrolls within a bounded share of that remaining space. Agent activity stays directly above the input.
 
 `test/ui/pinned_composer_test.dart` covers empty, short and long history at 360px/390px, 2× text, multiline drafts, bottom safe-area padding and keyboard open/closed. Queue recovery and the joint pending-approval/live-child-activity tests also exercise reachable controls without sending another inference request.

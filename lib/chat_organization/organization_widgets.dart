@@ -180,7 +180,9 @@ class ConversationActionRow extends StatefulWidget {
       required this.presentation,
       required this.onSelect,
       required this.onArchive,
-      required this.onEdit});
+      required this.onEdit,
+      this.selected = false});
+  final bool selected;
   final ConversationRowData row;
   final ConversationPresentation presentation;
   final VoidCallback onSelect;
@@ -264,6 +266,9 @@ class _ConversationActionRowState extends State<ConversationActionRow> {
               child: Material(
                   color: Theme.of(context).colorScheme.surface,
                   child: ListTile(
+                    selected: widget.selected,
+                    selectedTileColor:
+                        Theme.of(context).colorScheme.secondaryContainer,
                     onTap: widget.onSelect,
                     title: Text(widget.presentation.title(widget.row.title),
                         maxLines: 2, overflow: TextOverflow.ellipsis),
