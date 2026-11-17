@@ -1,5 +1,11 @@
 # Chat stabilization integration — umbrella 59
 
+> Historical component snapshot, not the current implementation verdict. The
+> [Hermes delivery acceptance](HERMES_DELIVERY_ACCEPTANCE.md) supersedes the
+> unfinished canonical/organization rows and gate totals below. Preserve these
+> original results as provenance; they do not establish current CI, release or
+> device acceptance.
+
 ## Delivery state
 
 Uncommitted working artifact on `stabilize/integration`, base `22569571de45139055b8a0f4a5852b3f677bb3f8`. This is a **partial umbrella implementation**, not completion of all nine issues, a stable-release claim, a published app, or a PR/merge. No component worktree was modified. Shared runtime and optimizer files were merged by their feature deltas against the immutable base, not snapshot overwrite.

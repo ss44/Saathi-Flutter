@@ -8,6 +8,70 @@ import 'package:saathi/ui/canonical_controls.dart';
 import 'hermes_gateway_test.dart' show Fixture, snapshot;
 
 void main() {
+  testWidgets('native approval shows command and fails closed without preview',
+      (tester) async {
+    HttpOverrides.global = null;
+    final fixture = Fixture();
+    late CanonicalChat chat;
+    Object? command;
+    await tester.runAsync(() async {
+      await fixture.start();
+      fixture.respond = (_) => {
+            ...snapshot(),
+            'prompts': [
+              {
+                'kind': 'approval',
+                'prompt_id': 'p',
+                'execution_generation': 4,
+                'description': 'Harmless description',
+                if (command != null) 'command': command,
+                'choices': ['once', 'deny'],
+              }
+            ],
+          };
+      chat = CanonicalChat(
+          HermesGatewayClient(grantProvider: () async => fixture.grant()),
+          MemorySecrets(),
+          source: 'source',
+          isCurrent: () => true);
+      await chat.connect();
+    });
+    final composer = TextEditingController();
+    for (final value in [null, '{"tool":"private"}', 'echo actual-action']) {
+      command = value;
+      await tester.runAsync(() => chat.attach('chat'));
+      await tester.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: CanonicalComposerControls(
+                  chat: chat, composer: composer, queue: (_) => true))));
+      await tester.tap(find.text('Review action'));
+      await tester.pumpAndSettle();
+      expect(
+          tester
+              .widget<TextButton>(find.widgetWithText(TextButton, 'once'))
+              .onPressed,
+          value == 'echo actual-action' ? isNotNull : isNull);
+      expect(
+          tester
+              .widget<TextButton>(find.widgetWithText(TextButton, 'deny'))
+              .onPressed,
+          isNotNull);
+      expect(find.text('Harmless description'),
+          value == 'echo actual-action' ? findsOneWidget : findsNothing);
+      if (value == 'echo actual-action') {
+        expect(find.text('echo actual-action'), findsOneWidget);
+      }
+      expect(find.textContaining('private'), findsNothing);
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+    }
+    await tester.pumpWidget(const SizedBox());
+    composer.dispose();
+    await tester.runAsync(() async {
+      await chat.close();
+      await fixture.close();
+    });
+  });
   testWidgets(
       'native busy choices preserve next-turn FIFO and pending Stop at 360px 2x',
       (tester) async {
@@ -47,6 +111,7 @@ void main() {
     });
     final composer = TextEditingController(text: 'A long draft ' * 30);
     final queued = <String>[];
+    var stops = 0;
     await tester.pumpWidget(MaterialApp(
         home: MediaQuery(
             data: const MediaQueryData(
@@ -56,6 +121,7 @@ void main() {
                 body: CanonicalComposerControls(
                     chat: chat,
                     composer: composer,
+                    onInterruptRequested: () => stops++,
                     queue: (text) {
                       queued.add(text);
                       return true;
@@ -82,6 +148,10 @@ void main() {
     });
     await tester.pumpAndSettle();
     expect(queued, ['Next after interrupt']);
+    expect(stops, 0,
+        reason: 'Explicit interrupt-then-queue is not ordinary Stop');
+    await tester.tap(find.byTooltip('Stop current Hermes work'));
+    expect(stops, 1, reason: 'Pause followers synchronously before Stop');
     expect(chat.pending, isTrue);
     expect(fixture.requests.where((r) => r['method'] == 'prompt.submit'),
         hasLength(1));
@@ -96,7 +166,8 @@ void main() {
                   'prompt_id': 'review',
                   'execution_generation': 4,
                   'choices': ['once', 'deny'],
-                  'description': 'A long request to review ' * 20
+                  'description': 'A long request to review ' * 20,
+                  'command': 'echo reviewable fixture'
                 },
               ]
             }

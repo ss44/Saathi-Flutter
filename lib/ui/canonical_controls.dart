@@ -8,10 +8,15 @@ class CanonicalComposerControls extends StatelessWidget {
       {super.key,
       required this.chat,
       required this.composer,
-      required this.queue});
+      required this.queue,
+      this.onInterruptRequested});
   final CanonicalChat chat;
   final TextEditingController composer;
   final bool Function(String) queue;
+
+  /// Pause the original conversation's followers before an ordinary Stop.
+  /// The explicit interrupt-then-queue action retains its separate semantics.
+  final VoidCallback? onInterruptRequested;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -65,8 +70,12 @@ class CanonicalComposerControls extends StatelessWidget {
           ),
           IconButton(
               tooltip: 'Stop current Hermes work',
-              onPressed:
-                  chat.canControl ? () => chat.control('interrupt') : null,
+              onPressed: chat.canControl
+                  ? () {
+                      onInterruptRequested?.call();
+                      chat.control('interrupt');
+                    }
+                  : null,
               icon: const Icon(Icons.stop_circle_outlined)),
         ]),
       );
@@ -117,14 +126,25 @@ class _NativeDecisionState extends State<_NativeDecision> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(prompt.question),
+                if (prompt.kind == 'approval' &&
+                    prompt.approvalPreview != null &&
+                    prompt.descriptionPreview != null)
+                  Text(prompt.descriptionPreview!),
+                Text(prompt.kind == 'approval'
+                    ? prompt.approvalPreview ??
+                        'Action preview unavailable. Approval is disabled.'
+                    : prompt.question),
                 if (!enabled && !submitting)
                   const Text(
                       'This request changed. Close and resync the session.'),
                 if (prompt.kind == 'approval')
                   for (final choice in prompt.choices)
                     TextButton(
-                        onPressed: enabled ? () => decide(choice) : null,
+                        onPressed: enabled &&
+                                (choice == 'deny' ||
+                                    prompt.approvalPreview != null)
+                            ? () => decide(choice)
+                            : null,
                         child: Text(choice))
                 else ...[
                   for (final choice in prompt.choices)

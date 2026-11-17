@@ -126,7 +126,7 @@ class SaathiCore {
       throw StateError('Cannot select a model during an active conversation');
     }
     if (!_models.containsKey(compoundId)) throw StateError('Model not loaded');
-    _selected = compoundId;
+    _setSelection(compoundId);
   }
 
   void registerModel(ModelInfo model) {
@@ -137,7 +137,20 @@ class SaathiCore {
   }
 
   void _ensureSelection() {
-    if (!_models.containsKey(_selected)) _selected = _models.keys.firstOrNull;
+    if (!_models.containsKey(_selected)) {
+      _setSelection(_models.keys.firstOrNull);
+    }
+  }
+
+  void _setSelection(String? id) {
+    // Provider IDs cannot contain pipes. Preserve ownership even after the old
+    // selected model has been removed from the catalog.
+    final previousProvider = _selected?.split('|').first;
+    _selected = id;
+    if (previousProvider != null &&
+        previousProvider != currentModel?.providerId) {
+      clearHistory();
+    }
   }
 
   ProviderConfig _provider(String id) =>

@@ -3,9 +3,42 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:saathi/core/saathi_core.dart';
 
 void main() {
+  for (final remove in [false, true]) {
+    test('cross-provider ${remove ? 'removal' : 'selection'} clears history',
+        () async {
+      Map<String, dynamic>? sent;
+      final core = SaathiCore(client: MockClient((request) async {
+        sent = jsonDecode(request.body) as Map<String, dynamic>;
+        return http.Response(
+            '{"choices":[{"message":{"content":"reply B"}}]}', 200);
+      }));
+      addTearDown(core.close);
+      for (final id in ['a', 'b']) {
+        core.addProvider(
+            ProviderConfig(id: id, name: id, type: ProviderType.openai));
+        core.registerModel(ModelInfo(providerId: id, name: 'model'));
+      }
+      core.restoreHistory([ChatMessage(role: 'user', content: 'private A')]);
+      core.registerModel(const ModelInfo(providerId: 'a', name: 'other'));
+      core.selectModel('a|other');
+      expect(core.history.single.content, 'private A');
+      if (remove) {
+        core.removeProvider('a');
+      } else {
+        core.selectModel('b|model');
+      }
+      expect(core.currentModel!.providerId, 'b');
+      expect(core.history, isEmpty);
+      await core.sendMessage('public B');
+      expect(sent!['messages'], [
+        {'role': 'user', 'content': 'public B'}
+      ]);
+    });
+  }
   test(
       'changing instance endpoint or identity clears old history and discovered models',
       () {

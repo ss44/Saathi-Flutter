@@ -50,6 +50,7 @@ class TlsFixture {
                 {
                   'kind': 'approval',
                   'prompt_id': 'approve',
+                  'command': 'echo reviewable fixture',
                   'execution_generation': 4,
                   'choices': ['once', 'deny']
                 }

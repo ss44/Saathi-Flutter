@@ -4,16 +4,17 @@ A lightweight, conversation-first Flutter client for AI models and agents. Herme
 
 ## What works in this implementation
 
-- Multiple named connections, including separate instances of the same provider.
+- Multiple named connections, including separate instances of the same provider, with editing and explicit deletion.
 - OpenAI-compatible, Anthropic and Gemini model discovery/chat adapters; manual model IDs when discovery is unavailable.
 - Conversation-specific model/system prompt, local history, new/switch/delete conversations, Markdown responses.
 - API keys in platform secure storage, separate from ordinary conversation/settings data.
 - Running status, swipe-to-reveal completed activity, immediate long-press copy, safe recoverable errors.
 - Native Hermes capability discovery and paginated **read-only** remote session/history browsing.
-- Shared-session gateway transport in a separate module; see its authentication/attachment limitations below.
+- Explicit trusted-host invitation import and canonical Hermes Desktop/CLI attachment, separate from REST history browsing; see deployment limitations below.
+- Local conversation rename/archive, shared personas where supported, visibility-based unread replies and reported usage.
 - Startup/resume update checks, visible update availability, manual update settings, verified Android APK download and native installer handoff after consent. No repository or release is assumed.
 
-The Dart core also supports OpenAI/Hermes SSE and usage/grounding metadata. The current mobile chat UI uses completed responses, not streaming. Automated tests use explicit synthetic HTTP/WebSocket/display fixtures; no production provider or user's live session has been used to certify interoperability.
+The Dart core also supports OpenAI/Hermes SSE and usage/grounding metadata. Native Hermes Runs and canonical conversations show streamed visible text and reconcile authoritative completion; direct-model chat UI still uses completed responses. Automated tests use explicit synthetic HTTP/WebSocket/display fixtures. Separate opt-in probes exercise official Hermes machinery with non-inferencing execution stubs, not a production provider or user's live session. See [Hermes acceptance evidence](docs/HERMES_DELIVERY_ACCEPTANCE.md) for its scope and remaining deployment/device gates.
 
 ## Session ownership
 
@@ -44,7 +45,7 @@ The source repository is `ss44/Saathi-Flutter`. Uploading the included workflows
 
 For standalone Android distribution, supply the five Actions secrets in [signing setup](docs/ANDROID_SIGNING.md), or use ignored local `android/key.properties` (`storeFile`, `storeType=PKCS12`, `storePassword`, `keyAlias`, `keyPassword`). No keys or passwords are included in source; CI fails rather than using unsigned/debug fallback. Keep the signing identity stable across updates. Generate release metadata only after verifying actual APK signing. Android uses the deterministic `YYYYWWIIII` internal versionCode, e.g. `2026460001`, while the visible version remains `2026.46.1`.
 
-Saathi validates release identity, version/build/channel, URLs, artifact size and SHA-256 before handing a private-cache APK to Android. Native code checks package/version/signers; Android still requires installation consent. **Installer opened does not mean update installed.** This flow still needs a signed first release and physical-device upgrade testing.
+Saathi validates release identity, version/build/channel, URLs, artifact size and SHA-256 before handing a private-cache APK to Android. Native code checks package/version/signers; Android still requires installation consent. **Installer opened does not mean update installed.** Publishing a signed binary does not establish physical-device upgrade acceptance.
 
 Desktop currently offers a manual release-page action, not Hermes-style automatic replacement/relaunch. Play builds require a separate permission-free manifest and Play update integration; setting a Dart flag alone is insufficient. Full format, trust model, commands and limits: [Updates](docs/UPDATES.md).
 
@@ -52,6 +53,6 @@ Desktop currently offers a manual release-page action, not Hermes-style automati
 
 [Design decisions](docs/UI_DECISIONS.md) explains what carries over and what does not. [Port audit](docs/PORT_AUDIT.md) records source provenance and coverage. [Product specification](docs/SPEC.md) defines the independent-app direction.
 
-Not complete: connection editing/removal, Android share/image intake, smart-context bucket negotiation, UI streaming/cancel UX, native OpenClaw, mobile gateway sign-in/bootstrap, desktop tray/installer packaging, iOS runner. App IDs currently use `io.github.ss44.saathi`; choose the final stable identifiers before publishing.
+Not complete: Android share/image intake, smart-context bucket negotiation, direct-model UI streaming/cancel UX, native OpenClaw, mobile gateway sign-in/tunnel provisioning, desktop tray/installer packaging, iOS runner. App IDs use `io.github.ss44.saathi`; preserve application and signing identity for compatible upgrades.
 
 `docs/previews/saathi-*.png` are Flutter test renders, including explicitly synthetic conversation previews—not device screenshots or real model answers. Older Iris demo renders remain as historical design artifacts.

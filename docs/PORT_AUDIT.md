@@ -1,5 +1,10 @@
 # Sathi → standalone Saathi core port audit
 
+> Historical initial-port evidence. The current [core contract](CORE_API.md) and
+> [Hermes acceptance evidence](HERMES_DELIVERY_ACCEPTANCE.md) supersede the old
+> integration limitations and test totals below. Historical commands are not
+> current verification or device/deployed-server proof.
+
 ## Provenance and inspection
 
 Sathi source: `/opt/data/cache/scratch/sathi-source`, commit `e6dfc2491628b3f6497895a89ca4f08edefd4717`.
@@ -28,7 +33,7 @@ Loopback test fixtures mirror these source envelopes and pagination fields. This
 | --- | --- | --- |
 | Public integration API | `lib/core/saathi_core.dart`; early-written `CORE_API.md` | Imported by core tests; analyzer clean |
 | Provider instances/config | Stable IDs, independent credentials/endpoints/type/grounding/filter, secret-free JSON by default, manual model registration | Serialization, multi-instance discovery, refresh, rename and reconfiguration tests |
-| Model discovery | OpenAI/Hermes `/v1/models`; Anthropic `/v1/models`; Gemini `/v1beta/models`, generation-method filtering; comma-separated case-insensitive display filter; instance-scoped refresh removes stale models | Real HTTP loopback request/response tests |
+| Model discovery | OpenAI and Anthropic `/v1/models`; Hermes capability-verified `/api/model/options?include_unconfigured=false` (superseding the initial `/v1/models` route); Gemini `/v1beta/models`, generation-method filtering; comma-separated case-insensitive display filter; instance-scoped refresh removes stale models | Controlled HTTP tests; see `CORE_API.md` for the current Hermes tuple contract |
 | OpenAI-compatible chat | `/v1/chat/completions`, model→assistant conversion, dedicated system messages, normalized token usage and raw usage/runtime/Hermes terminal metadata | Payload assertions, bounded context, 401, 409, metadata tests |
 | Anthropic chat | `/v1/messages`, system field, consecutive role merge, max_tokens=4096, all text blocks combined (not thinking blocks), usage | Loopback payload/response tests |
 | Gemini chat | `models/{model}:generateContent`, model/user roles and same-role merge, system_instruction parts, per-instance googleSearch, all non-thought text parts combined, grounding/usage metadata | Loopback discovery/payload/response tests |

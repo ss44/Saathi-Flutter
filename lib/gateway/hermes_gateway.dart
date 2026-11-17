@@ -64,15 +64,40 @@ class GatewayRequest {
         id = row['prompt_id'] as String,
         generation = row['execution_generation'] as int,
         choices = List<String>.unmodifiable(row['choices'] as List),
+        command = row['command'] is String ? row['command'] as String : null,
         question = (row['question'] ??
             row['description'] ??
             row['command'] ??
             'Review this action') as String,
         multiSelect = row['multi_select'] == true;
   final String kind, id, question;
+  final String? command;
   final int generation;
   final List<String> choices;
   final bool multiSelect;
+
+  /// Exact public command preview, or null when affirmative consent is unsafe.
+  /// Description/question text never substitutes for the action being approved.
+  String? get approvalPreview => _reviewable(command);
+
+  /// Optional descriptive context, never sufficient by itself for approval.
+  String? get descriptionPreview =>
+      question == command ? null : _reviewable(question);
+
+  static String? _reviewable(String? value) {
+    if (value == null ||
+        value.trim().isEmpty ||
+        value.length > 2000 ||
+        RegExp(r'^\s*[\[{]').hasMatch(value) ||
+        RegExp(r'[\p{Cf}\p{Cc}]', unicode: true)
+            .hasMatch(value.replaceAll(RegExp(r'[\n\r\t]'), '')) ||
+        RegExp(r'-----BEGIN|\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|AKIA[A-Z0-9]{16})\b|\b(?:authorization|bearer|api[_-]?key|token|password|secret|access[_-]?key)\s*[:= ]',
+                caseSensitive: false)
+            .hasMatch(value)) {
+      return null;
+    }
+    return value;
+  }
 }
 
 class GatewaySnapshot {
@@ -579,6 +604,9 @@ class HermesGatewayClient {
         !snapshot.requests.contains(prompt) ||
         prompt.generation != snapshot.executionGeneration ||
         (prompt.kind == 'approval' && !prompt.choices.contains(answer)) ||
+        (prompt.kind == 'approval' &&
+            answer != 'deny' &&
+            prompt.approvalPreview == null) ||
         answer.trim().isEmpty) {
       return false;
     }

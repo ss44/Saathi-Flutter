@@ -21,11 +21,11 @@ class RotationSecrets extends MemorySecrets {
   final writeEntered = Completer<void>(), writeRelease = Completer<void>();
   @override
   Future<void> write(String id, String value) async {
-    if (holdWrite && id == 'h') {
+    if (holdWrite && id.startsWith('credential.v1.')) {
       if (!writeEntered.isCompleted) writeEntered.complete();
       await writeRelease.future;
     }
-    if (failWrite && id == 'h') {
+    if (failWrite && id.startsWith('credential.v1.')) {
       failWrite = false;
       throw StateError('Controlled replacement failure');
     }

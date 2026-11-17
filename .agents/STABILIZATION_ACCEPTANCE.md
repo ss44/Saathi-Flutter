@@ -46,3 +46,22 @@ parent-owned CI/merge/beta gates still apply.
 Controlled fixtures, a listening official backend, a native build, a phone and the user's deployed server prove different things. Record each separately. No production credentials or paid calls are used by automated work. Backend bootstrap/pairing/device blockers remain explicit rather than being hidden behind unsupported controls.
 
 Current v2026.47.4 remains beta. The user's later authorization permits one manual run of the existing signed weekly beta workflow (`.github/workflows/release-desktop.yml`) only after the final combined PR60 scope is ready, exact-complete-diff independent review and applicable CI pass, and its squash merge is verified by remote readback. The parent integration owner alone may dispatch from the verified final merge SHA on `main`, record the run ID, and confirm an actual native build job has started; queued/preparing/verification states are not yet building. Do not dispatch from a partial/draft head, repeat an uncertain dispatch, alter the permanent signing identity, or label this release stable. This supersedes the earlier no-extra-manual-build restriction, not the remaining integration and review gates.
+
+## Audit regression gates
+
+The paragraph above records PR #60's historical, single-use release permission,
+not standing authorization. Current releases follow the daily 09:00 UTC schedule
+in `PRODUCT_DIRECTION.md`; audit/fix/merge work does not authorize an extra build.
+See [issue 68 evidence and disposition](../docs/audits/2026-11-17-codebase-audit.md).
+
+- [ ] Uncertain-input deletion/source replacement and metadata capacity preserve healthy conversations and exact recovery evidence across restart, without replay.
+- [ ] Credential updates are crash-consistent; failed preference writes cannot become successful state through cached reconstruction.
+- [ ] Activity/notification navigation preserves dispatch and draft ownership; pending text and waiting states never appear as another chat's work.
+- [ ] Native approvals show the actual action; Stop holds followers; input and cumulative preview limits fail safely without wedging recovery.
+- [ ] Core provider changes do not transfer private history, and privacy/exact-byte tests establish their intended preconditions.
+- [ ] Desktop second-launch behavior, real secure storage, Android offer-to-package validation and permission/install lifecycle receive native/device checks separately from source-contract tests.
+- [ ] Release publication resolves its actual tag to the built commit; repository tag protections and published binary provenance remain operational acceptance checks.
+
+These are reusable acceptance gates, not a claim that native/device validation has
+run. Record per-change execution in the report/PR; preserve #59/#37/#38 device and
+deployed-host requirements and #66's sequencing rather than closing them by proxy.

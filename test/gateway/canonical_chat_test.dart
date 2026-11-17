@@ -16,6 +16,99 @@ class DelayedSecrets extends MemorySecrets {
 }
 
 void main() {
+  test('canonical preview is bounded and terminal receipt still reconciles',
+      () async {
+    final fixture = Fixture();
+    await fixture.start();
+    var terminal = false;
+    fixture.respond = (r) => r['method'] == 'session.resume'
+        ? snapshot()
+        : {
+            'admission_id': 'run',
+            'ref': {'session_id': 'chat', 'profile_id': 'profile'},
+            'authority_epoch': 3,
+            'execution_generation': 4,
+            'status': terminal ? 'terminal' : 'started',
+            if (terminal) 'outcome': 'completed',
+          };
+    final chat = CanonicalChat(
+        HermesGatewayClient(grantProvider: () async => fixture.grant()),
+        MemorySecrets(),
+        source: 'source',
+        isCurrent: () => true);
+    addTearDown(() async {
+      await chat.close();
+      await fixture.close();
+    });
+    await chat.connect();
+    await chat.attach('chat');
+    await chat.send('work');
+    for (var i = 1; i <= 6; i++) {
+      fixture.event('message.delta', {'text': 'x' * 65536}, sequence: i);
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(chat.streamText!.length, lessThanOrEqualTo(256 * 1024));
+    expect(chat.problem, contains('preview'));
+    await chat.control('steer', text: 'finish carefully');
+    expect(chat.problem, contains('preview'),
+        reason: 'Control feedback must not conceal omitted live text');
+    expect(chat.pending, isTrue);
+    terminal = true;
+    expect(await chat.refresh(), isTrue);
+    await chat.markSnapshotSaved();
+    expect(chat.pending, isFalse);
+    expect(chat.streamText, isNull);
+    expect(fixture.requests.where((r) => r['method'] == 'prompt.submit'),
+        hasLength(1));
+  });
+  test(
+      'native approval requires a reviewable command, not descriptive fallback',
+      () async {
+    final fixture = Fixture();
+    await fixture.start();
+    Object? command;
+    fixture.respond = (r) => r['method'] == 'session.resume'
+        ? {
+            ...snapshot(),
+            'prompts': [
+              {
+                'kind': 'approval',
+                'prompt_id': 'p',
+                'execution_generation': 4,
+                'description': 'A harmless description',
+                if (command != null) 'command': command,
+                'choices': ['once', 'deny', 'always'],
+              }
+            ],
+          }
+        : {'status': 'resolved', 'prompt_id': 'p'};
+    final client =
+        HermesGatewayClient(grantProvider: () async => fixture.grant());
+    addTearDown(() async {
+      await client.dispose();
+      await fixture.close();
+    });
+    await client.connect();
+    for (final value in [
+      null,
+      '',
+      '  ',
+      '{"tool":"raw"}',
+      '\u202e\u200b',
+      'sk-abcdefghijk'
+    ]) {
+      command = value;
+      final prompt = (await client.attach('chat')).requests.single;
+      expect(await client.decide(prompt, 'once'), isFalse, reason: '$value');
+      expect(await client.decide(prompt, 'always'), isFalse, reason: '$value');
+      expect(await client.decide(prompt, 'deny'), isTrue);
+    }
+    command = 'echo inspectable';
+    final prompt = (await client.attach('chat')).requests.single;
+    expect(await client.decide(prompt, 'once'), isTrue);
+    expect(await client.decide(prompt, 'always'), isTrue,
+        reason: 'The native advertised choice vocabulary is preserved');
+  });
   test(
       'selection revokes writes permanently but original-source observation can reconcile',
       () async {
@@ -162,7 +255,8 @@ void main() {
                 'prompt_id': 'approve',
                 'execution_generation': 4,
                 'choices': ['once', 'deny'],
-                'description': 'Review this action'
+                'description': 'Review this action',
+                'command': 'echo reviewable fixture'
               },
               {
                 'kind': 'clarify',

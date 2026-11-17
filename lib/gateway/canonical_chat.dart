@@ -55,7 +55,12 @@ class CanonicalChat extends ChangeNotifier {
   int _epoch = 0;
   Map<String, dynamic>? _journal;
   GatewaySnapshot? snapshot;
-  String? streamText, problem;
+  String? streamText, _problem;
+  bool _previewTruncated = false;
+  String? get problem => _previewTruncated
+      ? 'Live preview limit reached. Further preview text is omitted; resync for the authoritative result.${_problem == null ? '' : '\n$_problem'}'
+      : _problem;
+  set problem(String? value) => _problem = value;
   bool pending = false;
   bool awaitingSnapshotSave = false;
   String? get heldInput =>
@@ -478,6 +483,7 @@ class CanonicalChat extends ChangeNotifier {
     _authority(sessionId).journal = journal;
     pending = true;
     streamText = null;
+    _previewTruncated = false;
     problem = null;
     try {
       try {
@@ -592,6 +598,7 @@ class CanonicalChat extends ChangeNotifier {
       }
       if (_journal == null || _journal?['state'] == 'terminal') {
         streamText = null;
+        _previewTruncated = false;
       }
       awaitingSnapshotSave = true;
       notifyListeners();
@@ -646,7 +653,14 @@ class CanonicalChat extends ChangeNotifier {
   void _event(GatewayEvent event) {
     if (!observable || event.sessionId != snapshot?.sessionId) return;
     if (event.type == 'message.delta') {
-      streamText = '${streamText ?? ''}${event.text}';
+      if (!_previewTruncated) {
+        final previous = streamText ?? '';
+        if (event.text.length > 256 * 1024 - previous.length) {
+          _previewTruncated = true;
+        } else {
+          streamText = '$previous${event.text}';
+        }
+      }
     } else if (event.type == 'message.complete') {
       onResyncRequired?.call();
     } else if (event.type == 'approval.request' ||

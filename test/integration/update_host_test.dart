@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:saathi/update_host.dart';
 import 'package:saathi/updates/saathi_updates.dart';
@@ -9,6 +11,30 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../updates/saathi_updates_test.dart' show ReleaseFixture;
 
 void main() {
+  testWidgets('open update settings observes delayed package initialization',
+      (tester) async {
+    final package = Completer<Map<String, String>>();
+    const channel = MethodChannel('dev.fluttercommunity.plus/package_info');
+    tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (_) => package.future);
+    addTearDown(() => tester.binding.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, null));
+    await tester.pumpWidget(const SaathiUpdateHost(
+        child: MaterialApp(home: Scaffold(body: UpdateSettingsButton()))));
+    await tester.tap(find.byTooltip('App updates'));
+    await tester.pumpAndSettle();
+    expect(find.text('Reading the installed app version…'), findsOneWidget);
+    package.complete({
+      'appName': 'Saathi',
+      'packageName': 'io.github.ss44.saathi',
+      'version': '0.1.0',
+      'buildNumber': '1',
+      'buildSignature': '',
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('Current version: 0.1.0'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
   testWidgets(
       'real Saathi app wires installed package metadata into update settings',
       (tester) async {

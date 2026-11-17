@@ -87,6 +87,13 @@ class OrganizationStorage {
 
 enum PersonaEditPolicy { localInstructions, serverOwned, importedReadOnly }
 
+/// A full per-conversation deduplication ledger, not a retryable disk failure.
+/// Keep its reply IDs and isolate this conversation while other chats proceed.
+class OrganizationCapacityException implements Exception {
+  const OrganizationCapacityException(this.identity);
+  final ConversationIdentity identity;
+}
+
 /// A reusable assistant role, not a backend workspace, provider or credential.
 @immutable
 class SharedPersona {
@@ -418,7 +425,7 @@ class ChatOrganization extends ChangeNotifier {
     if (before.completions.containsKey(replyId)) return;
     // Never silently evict a dedupe marker and turn replay into a new reply.
     if (before.completions.length == 512) {
-      throw StateError('Completion identity limit reached');
+      throw OrganizationCapacityException(key);
     }
     await _save({
       ..._entries,

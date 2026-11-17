@@ -17,3 +17,13 @@ Keep chat readable and simple. Preserve original conversation ownership, explici
 - Keep credentials in platform secure storage, never source, ordinary history or logs. Preserve TLS and updater validation.
 - Shared Android text/images must become reviewable drafts, never auto-send; intake remains separate until implemented and device-tested.
 - Keep releases daily at 09:00 UTC or explicitly requested, skipping unchanged source. Merge authorization is not authorization for an extra release.
+
+## Audit continuity
+
+Read the [2026-11-17 audit](docs/audits/2026-11-17-codebase-audit.md) and its
+[coverage manifest](docs/audits/2026-11-17-coverage.md) before changing recovery,
+authority, controls, persistence or release provenance. Findings describe a pinned
+baseline, not a perpetual claim about current code. Preserve the regression
+invariants in `.agents/AGENTS.md`; update evidence and remaining acceptance gaps
+when work changes them. Hermes device/deployed-host acceptance under #59 still
+precedes adapter extraction under #66.

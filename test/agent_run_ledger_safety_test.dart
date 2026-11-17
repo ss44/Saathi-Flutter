@@ -140,16 +140,23 @@ void main() {
       secrets.fail = requests.length == 1;
       return http.Response('{"run_id":"r","status":"started"}', 202);
     }));
-    final op = await prepare(c, l);
-    // The stored body is deliberately not canonical JSON.
-    op.data['payload'] = op.payload; // no synthesis on reconnect
+    final seed = await prepare(c, RunLedger(MemorySecrets()));
+    final payload =
+        const JsonEncoder.withIndent('  ').convert(jsonDecode(seed.payload));
+    // Seed an existing journal fixture, without mutating a ledger-owned identity.
+    await secrets.write(
+        'run.v1.local', jsonEncode({...seed.data, 'payload': payload}));
+    final op = (await l.load('local'))!;
+    expect(op.payload, isNot(jsonEncode(jsonDecode(op.payload))));
     await expectLater(c.submit(op, l), throwsStateError);
     secrets.fail = false;
     final restored = (await RunLedger(secrets).load('local'))!;
+    expect(restored.payload, payload);
     expect(restored.runId, isNull);
     expect(requests.length, 1); // reload does not replay
     await c.submit(restored, l);
     expect(requests[1], requests[0]);
+    expect(requests.map((request) => request.$2), [payload, payload]);
     expect(restored.key, op.key);
   });
   test(

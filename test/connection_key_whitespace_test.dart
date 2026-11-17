@@ -33,7 +33,8 @@ void main() {
     await t.tap(find.text('Save connection'));
     await t.pumpAndSettle();
     expect(t.takeException(), isNull);
-    expect(await controller.store.secrets.read('fixture'), 'fixture-old-key');
+    expect(await controller.store.readConnectionSecret('fixture'),
+        'fixture-old-key');
     await t.pumpWidget(const SizedBox.shrink());
   });
 }

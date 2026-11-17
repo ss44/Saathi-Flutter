@@ -315,6 +315,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
         !identical(shownOwner, c) || shownSelection != c.selectionGeneration;
     preserveTranscriptAnchor(selectionChanged);
     if (selectionChanged) {
+      if (shownOwner != null) composer.clear();
       shownOwner = c;
       shownSelection = c.selectionGeneration;
       followStream = false;
@@ -385,10 +386,9 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
         c.sessions.where((s) => s.id == binding.localChatId).firstOrNull;
     if (session == null) return;
     setState(() {
-      c.current = session;
+      c.select(session);
       composer.clear();
     });
-    c.notifyListeners();
   }
 
   void openActivityChild(ActivityBinding binding, ChildActivity child) {
@@ -558,7 +558,8 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
           final session = c.current;
           final run = c.currentRun;
           final thinking = run == null
-              ? c.busy
+              ? session != null &&
+                  c.workState(session) == ConversationWorkState.working
               : c.runPending &&
                   c.runObservationProblem == null &&
                   (run.snapshot.state == RunState.queued ||
@@ -1028,7 +1029,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                     c.error != null ||
                                     c.runObservationProblem != null ||
                                     c.unsavedChanges ||
-                                    c.organization.error != null ||
+                                    c.organizationProblem != null ||
                                     c.canonical != null)
                                   ConstrainedBox(
                                     // Feedback scrolls within a bounded share of the body;
@@ -1105,10 +1106,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                     AlertDialog(
                                                   scrollable: true,
                                                   title: const Text(
-                                                    'Abandon unknown request?',
+                                                    'Discard held recovery input?',
                                                   ),
                                                   content: const Text(
-                                                    'The last request may have executed. Discarding the held outbox does not stop the server or prove there were no side effects. This removes the unknown input and ALL queued followers for this conversation only. Nothing will be resent, and completion is still unknown. You can instead keep this blocked and start a new conversation.',
+                                                    'This removes the retained input and ALL queued followers for this conversation only. Nothing will be resent. If a request was dispatched, it may have executed: discarding does not stop the server or establish its outcome. You can instead keep this blocked and start a new conversation.',
                                                   ),
                                                   actions: [
                                                     TextButton(
@@ -1164,8 +1165,8 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                           ),
                                         if (c.runObservationProblem != null)
                                           Text(c.runObservationProblem!),
-                                        if (c.organization.error != null) ...[
-                                          Text(c.organization.error!),
+                                        if (c.organizationProblem != null) ...[
+                                          Text(c.organizationProblem!),
                                           TextButton(
                                             onPressed: c.organization.saving
                                                 ? null
@@ -1303,6 +1304,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                     chat: c.canonical!,
                                     composer: composer,
                                     queue: c.submit,
+                                    onInterruptRequested: () => c.pauseQueue(
+                                      'Stopped work pauses the queue. Review the result before choosing Resume.',
+                                      session: session,
+                                    ),
                                   ),
                                 if (c.canGuideRun || c.canStopRun)
                                   Row(

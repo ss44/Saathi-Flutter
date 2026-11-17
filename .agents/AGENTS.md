@@ -42,6 +42,26 @@ Formatting, static analysis, automated tests and the configured coverage checks 
 
 Keep production credentials and paid requests out of automated tests. Controlled HTTP/widget tests, deployed-server compatibility and native-device acceptance are distinct evidence.
 
+## Regression invariants
+
+The [pinned audit and disposition](../docs/audits/2026-11-17-codebase-audit.md)
+records the evidence behind these requirements. Apply them at the actual UI,
+storage and transport boundaries, not only through isolated helper tests:
+
+- Keep invalid or orphaned uncertain operations bound to their original authority. Retain recovery evidence, never replay automatically, and do not make an unrelated healthy conversation unusable because one operation needs recovery.
+- Exercise persistence limits through normal growth, not only malformed-input parsing. A full metadata ledger must not masquerade as a retryable disk failure or silently evict identities needed for deduplication.
+- Treat preferences caches and durable storage as distinct. Test false returns, thrown writes, reconstruction, and process-death snapshots between credential and metadata writes. Never pair old authority metadata with a replacement secret.
+- All conversation-selection surfaces must revoke stale dispatch consistently. Drafts, pending text, waiting indicators, queue controls and delayed callbacks remain owned by their originating conversation, including notification and activity navigation.
+- Validate accepted input against the same bounds used by persistence and restore. Cleanup must cover synchronous exceptions as well as failed futures. Bound cumulative streaming retention, not only individual frames, and release settled ownership references.
+- Show the actual action separately from approval description. Unreviewable affirmative actions fail closed; denial stays available. Preserve backend-advertised choice semantics rather than assuming native and HTTP contracts are identical. Stop and explicit interrupt-then-queue are distinct interactions.
+- Provider changes must not silently transfer conversation history. Exact-byte replay tests must contain genuinely noncanonical stored bytes; privacy tests must assert their supposedly private history is nonempty before exercising exclusion.
+- Multiple app processes must not independently overwrite whole-state storage. Updater consent binds the reviewed version/build as well as bytes, package and signer. Release provenance binds the actual resolved tag to the built commit, not only mutable release metadata.
+
+Do not delete a documented/exported API or an intentional deferred prototype solely
+because a search finds no app caller. Corroborate usage and compatibility first.
+Keep generated integration wiring distinct from authored code, and preserve
+historical evidence with explicit revision/status labels rather than rewriting it.
+
 ## Pull requests and delivery
 
 Use the exact title shape **`<DOMAIN>: <summary>`**. Use a short uppercase domain for the area changed and a clear summary, for example:

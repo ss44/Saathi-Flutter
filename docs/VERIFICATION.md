@@ -1,5 +1,12 @@
 # Verification handoff
 
+> Historical initial-app handoff, not current repository or feature status.
+> The counts, unconfigured-repository statement and unfinished-feature list below
+> describe that original snapshot. Connection editing/removal and native Hermes
+> streaming/attachment UI are now implemented. See [current quality commands](QUALITY.md)
+> and [Hermes acceptance evidence](HERMES_DELIVERY_ACCEPTANCE.md); neither these old
+> results nor controlled probes establish native-device or deployed-user acceptance.
+
 Project root: `/opt/data/Projects/saathi` (renamed from `iris`, preserving the existing Git repository/history).
 
 ## Final local execution
