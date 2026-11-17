@@ -116,9 +116,9 @@ writes; old prepared input must never use the replacement credential.
 
 `submit:529-565` accepts arbitrary nonblank text. `_saveCanonicalQueue:576-609`
 sets saving state then invokes synchronous `queueInput` outside `try/finally`;
-`canonical_chat.dart:155-166` throws above 256 KiB. Cancel/reconnect then remain
+`canonical_chat.dart:155-166` throws above 262,144 UTF-16 code units. Cancel/reconnect then remain
 blocked. Direct admission can also persist text/instructions which its own restore
-rejects at `chat_controller.dart:366-367` (256 KiB / 16,000 characters).
+rejects at `chat_controller.dart:366-367` (262,144 / 16,000 UTF-16 code units).
 
 Validate before mutation, preserve rejected drafts, and cover synchronous calls
 with cleanup. Use the same bounds at acceptance/write/read. Regression: exact
@@ -382,7 +382,7 @@ in the reviewed support/protocol changes. The final Linux debug build was also
 rerun after integration. Manifest reconciliation, 20 local handoff-document links
 and `git diff --check` passed.
 
-Final local integrated checks on the remediation patch:
+Local integrated checks on the remediation patch before concurrent upstream integration:
 
 ```text
 flutter test --coverage --timeout 60s --reporter failures-only
@@ -404,6 +404,30 @@ deployed-host, paid-inference, manual-release or published-binary acceptance is
 claimed. Merge is conditional on applicable CI for the exact PR head and completed
 independent review, with follow-up issue comments preserving those distinctions.
 
+### Concurrent upstream integration
+
+While preparing the PR, `main` advanced to
+`6c7bb79b9073f9cd1f30f0234c9101421022087a` (#69, Send/Enhance actions). It was
+merged without conflicts, preserving its new action group and accessible controls.
+A separate review of the combined result passed 84 focused tests and found no
+actionable integration issue. These new upstream paths are not retroactively part
+of the 334-path baseline inventory. The final combined local result is **720
+Flutter tests passed**, **7,447 / 7,894 = 94.3374715%** app coverage, clean strict
+analysis, **177 formatted files / 0 changed**, and a successful Linux debug build.
+
+One preceding combined full-suite run had **719 passes and one intermittent
+failure** in the unchanged `bounded_websocket_test.dart` case "fragmented UTF8,
+legal controls, split payload and multiple messages": `Null` was not a subtype
+of `Future<bool>` in SDK `_StreamIterator.moveNext`, through
+`_BoundedSocket._incoming`, including a late error after test completion. A
+separate source/SDK investigation could not establish the root cause: the isolated
+case passed once plus 20 repeated runs, and the complete 57-test bounded-transport
+suite passed five coverage runs (285 tests). The exact full-suite retry then passed
+all 720 tests. No framing/backpressure change or weakened assertion was made on
+speculation. **The intermittent observation is not claimed fixed**; preserve it
+under #59 for full-parallel-load reproduction, including the original failure
+alongside later passing evidence. Applicable PR CI must still pass before merge.
+
 ## Follow-up order
 
 Keep these independently reviewable, with no speculative refactor folded into
@@ -412,6 +436,7 @@ the correctness patch:
 | Order | Follow-up | Type and acceptance | Existing context |
 | --- | --- | --- | --- |
 | 1 | Validate corrected Hermes flows on the user's host/device | Acceptance: real existing session, interruption, approval, lost reply, restart, navigation, no duplicate submission | #59, #37, #38 |
+| 1 | Reproduce intermittent bounded-stream iterator failure | Diagnostic: capture the full-parallel coverage shutdown path; isolated repeated passes do not explain the observed SDK null-future failure | #59; concurrent integration evidence above |
 | 2 | Define total organization/history capacity recovery | Behavior/persistence: whole-ledger entry/byte limits and long authoritative transcripts need an explicit retention/recovery contract, without losing dedupe or private history | #28, #59 |
 | 3 | Verify native credential/update/desktop lifecycle | Native acceptance: secure-storage crash recovery, offer/version/signer rejection, installer permissions, two-launch behavior and focus on Windows/Linux | #59 and this report's A04/A14/A16 |
 | 4 | Configure/verify release-tag immutability | Operational safeguard: protect publication source against later authorized ref movement; no release dispatch implied | A15 |
