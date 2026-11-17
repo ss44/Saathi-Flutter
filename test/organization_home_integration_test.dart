@@ -54,7 +54,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.longPress(find.byTooltip('Send'));
     await tester.pumpAndSettle();
-    expect(find.text('Optimize prompt'), findsNothing);
+    expect(find.byTooltip('Enhance prompt'), findsNothing);
     expect(c.outbox, isEmpty);
     expect(
         tester
