@@ -103,6 +103,7 @@ class _PromptOptimizerState extends State<PromptOptimizer> {
       !widget.controller.runPending &&
       !widget.controller.readOnly &&
       !widget.controller.unsavedChanges &&
+      !widget.controller.organizationBlocked &&
       !widget.controller.changingConnection &&
       widget.controller.canDiscoverModels &&
       widget.composer.text.trim().isNotEmpty;

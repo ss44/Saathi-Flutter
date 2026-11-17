@@ -463,12 +463,13 @@ class SaathiCore {
         throw const ProviderException('Provider returned no text response');
       }
       final usage = json['usage'] as Map? ?? {};
-      final input = usage['input_tokens'] as int? ?? 0;
-      final output = usage['output_tokens'] as int? ?? 0;
+      final input = usage['input_tokens'];
+      final output = usage['output_tokens'];
       return ChatResult(text, metadata: {
-        'promptTokens': input,
-        'completionTokens': output,
-        'totalTokens': input + output,
+        if (input is int && input >= 0 && input <= 1000000000)
+          'promptTokens': input,
+        if (output is int && output >= 0 && output <= 1000000000)
+          'completionTokens': output,
         if (json['stop_reason'] != null) 'finishReason': json['stop_reason']
       });
     }

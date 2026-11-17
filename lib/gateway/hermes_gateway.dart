@@ -4,6 +4,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'bounded_websocket.dart';
 
 enum GatewayConnectionState { disconnected, connecting, connected, disposed }
 
@@ -19,9 +20,13 @@ class GatewayException implements Exception {
 /// Credentials are deliberately never included in toString or error messages.
 class GatewayGrant {
   GatewayGrant(
-      {required this.url, List<String> protocols = const ['hermes-gateway-v1']})
+      {required this.url,
+      this.expectedProfileId,
+      this.expectedInstanceId,
+      List<String> protocols = const ['hermes-gateway-v1']})
       : protocols = List.unmodifiable(protocols);
   final Uri url;
+  final String? expectedProfileId, expectedInstanceId;
   final List<String> protocols;
 }
 
@@ -37,10 +42,37 @@ class GatewaySession {
 
 enum GatewayRunState { queued, running, complete, failed, cancelled, unknown }
 
+enum GatewayMessageKind { message, toolActivity, compaction, publicNotice }
+
 class GatewayMessage {
-  const GatewayMessage(this.role, this.text);
+  const GatewayMessage(this.role, this.text,
+      {this.rowId, this.submissionId, this.kind = GatewayMessageKind.message});
   final String role;
   final String text;
+  final int? rowId;
+  final String? submissionId;
+  final GatewayMessageKind kind;
+  bool get isCompletedAnswer =>
+      kind == GatewayMessageKind.message &&
+      role == 'assistant' &&
+      text.trim().isNotEmpty;
+}
+
+class GatewayRequest {
+  GatewayRequest(Map row)
+      : kind = row['kind'] as String,
+        id = row['prompt_id'] as String,
+        generation = row['execution_generation'] as int,
+        choices = List<String>.unmodifiable(row['choices'] as List),
+        question = (row['question'] ??
+            row['description'] ??
+            row['command'] ??
+            'Review this action') as String,
+        multiSelect = row['multi_select'] == true;
+  final String kind, id, question;
+  final int generation;
+  final List<String> choices;
+  final bool multiSelect;
 }
 
 class GatewaySnapshot {
@@ -52,19 +84,50 @@ class GatewaySnapshot {
         executionGeneration = value['execution_generation'] as int,
         needsUserAction = (value['prompts'] as List? ?? []).isNotEmpty ||
             (value['open_requests'] as List? ?? []).isNotEmpty,
+        requests = List.unmodifiable([
+          for (final row in value['prompts'] as List? ?? const [])
+            if (row is Map &&
+                ['approval', 'clarify'].contains(row['kind']) &&
+                row['prompt_id'] is String &&
+                row['execution_generation'] is int &&
+                row['choices'] is List &&
+                (row['choices'] as List).every((c) => c is String))
+              GatewayRequest(row)
+        ]),
+        pendingInputs = List.unmodifiable([
+          for (final row in value['pending'] as List? ?? const [])
+            if (row is Map) Map<String, dynamic>.unmodifiable(row)
+        ]),
         messages = List.unmodifiable([
           for (final row
               in (value['display_messages'] ?? value['messages']) as List)
             if (row is Map &&
-                ['user', 'assistant'].contains(row['role']) &&
+                ['user', 'assistant', 'tool'].contains(row['role']) &&
                 row['display_kind'] != 'hidden')
-              GatewayMessage(row['role'] as String,
-                  _visibleText(row['text'] ?? row['content']))
+              GatewayMessage(
+                  row['role'] as String,
+                  row['role'] == 'tool'
+                      ? 'Tool activity: ${row['name'] is String ? row['name'] : 'tool'}'
+                      : _visibleText(row['text'] ?? row['content']),
+                  kind: row['row_kind'] == 'compaction'
+                      ? GatewayMessageKind.compaction
+                      : row['role'] == 'tool'
+                          ? GatewayMessageKind.toolActivity
+                          : row['display_kind'] != null
+                              ? GatewayMessageKind.publicNotice
+                              : GatewayMessageKind.message,
+                  rowId: row['row_id'] is int ? row['row_id'] as int : null,
+                  submissionId: row['display_metadata'] is Map &&
+                          row['display_metadata']['submission_id'] is String
+                      ? row['display_metadata']['submission_id'] as String
+                      : null)
         ]);
   final String sessionId;
   final String storedSessionId;
   final bool running;
   final bool needsUserAction;
+  final List<GatewayRequest> requests;
+  final List<Map<String, dynamic>> pendingInputs;
   final int authorityEpoch;
   final int executionGeneration;
   final List<GatewayMessage> messages;
@@ -131,25 +194,6 @@ class GatewayEvent {
   final GatewayRunState? state;
 }
 
-/// WebSocket.connect uses only openUrl on its custom HttpClient. Refuse every
-/// redirect before any ticket-bearing upgrade header can reach another URL.
-class _NoRedirectClient implements HttpClient {
-  final HttpClient _inner = HttpClient();
-  @override
-  Future<HttpClientRequest> openUrl(String method, Uri url) async {
-    final request = await _inner.openUrl(method, url);
-    request.followRedirects = false;
-    return request;
-  }
-
-  @override
-  void close({bool force = false}) => _inner.close(force: force);
-  // Other HttpClient operations are intentionally not supported by this narrow
-  // adapter; WebSocket.connect's SDK implementation only calls openUrl.
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
 class HermesGatewayClient {
   HermesGatewayClient(
       {required this.grantProvider,
@@ -164,7 +208,7 @@ class HermesGatewayClient {
   final _pending = <String, Completer<Map<String, dynamic>>>{};
   int _nextId = 0;
   int _connectionEpoch = 0;
-  HttpClient? _dialingClient;
+  Completer<void>? _dialCancellation;
   void _setState(GatewayConnectionState state) {
     if (_states.isClosed ||
         (_state == GatewayConnectionState.disposed && state != _state)) {
@@ -210,15 +254,16 @@ class HermesGatewayClient {
       if (invalidGrant) {
         throw const GatewayException('Invalid or insecure gateway grant');
       }
-      final httpClient = _NoRedirectClient();
-      _dialingClient = httpClient;
+      final cancellation = Completer<void>();
+      _dialCancellation = cancellation;
       late WebSocket socket;
       try {
-        socket = await WebSocket.connect(grant.url.toString(),
+        socket = await connectBoundedWebSocket(grant.url.toString(),
                 protocols: grant.protocols,
-                maxPayloadLength: 1024 * 1024,
-                compression: CompressionOptions.compressionOff,
-                customClient: httpClient)
+                maxMessageBytes: 3 * 1024 * 1024,
+                maxMessageFragments: 1024,
+                connectTimeout: requestTimeout,
+                cancelSignal: cancellation.future)
             .then((opened) {
           if (attempt != _connectionEpoch ||
               _state == GatewayConnectionState.disposed) {
@@ -226,10 +271,11 @@ class HermesGatewayClient {
             throw const GatewayException('Connection cancelled');
           }
           return opened;
-        }).timeout(requestTimeout);
+        });
       } finally {
-        if (identical(_dialingClient, httpClient)) _dialingClient = null;
-        httpClient.close(force: true);
+        if (identical(_dialCancellation, cancellation)) {
+          _dialCancellation = null;
+        }
       }
       _socket = socket;
       socket.pingInterval = const Duration(seconds: 20);
@@ -250,7 +296,15 @@ class HermesGatewayClient {
           _state == GatewayConnectionState.disposed) {
         throw const GatewayException('Connection cancelled');
       }
+      if ((grant.expectedProfileId != null &&
+              runtime['profile_id'] != grant.expectedProfileId) ||
+          (grant.expectedInstanceId != null &&
+              runtime['instance_id'] != grant.expectedInstanceId)) {
+        throw const GatewayException(
+            'Gateway authority changed; import a fresh host invite');
+      }
       _profileId = runtime['profile_id'] as String;
+      _capabilities = Set<String>.from(runtime['capabilities'] as List);
       _setState(GatewayConnectionState.connected);
     } catch (_) {
       if (attempt == _connectionEpoch) {
@@ -278,11 +332,15 @@ class HermesGatewayClient {
         .map((row) => GatewaySession(Map<String, dynamic>.from(row as Map))));
   }
 
+  Set<String> _capabilities = {};
+  String? _transcriptSession, _transcriptCursor;
+  List<Map<String, dynamic>> _transcriptRows = [];
   GatewaySnapshot? _attached;
   GatewaySnapshot? get attached => _attached;
   GatewayRun? _run;
   GatewayRun? get run => _run;
   String? _profileId;
+  String? get profileId => _profileId;
   bool _submitting = false;
   String? _replayEpoch;
   int _lastSequence = 0;
@@ -337,7 +395,13 @@ class HermesGatewayClient {
       final result = await _request('session.resume', {
         'session_id': sessionId,
         'display_projection': true,
+        if (_capabilities.contains('session-transcript-v1'))
+          'omit_messages': true,
       });
+      if (_capabilities.contains('session-transcript-v1')) {
+        result['display_messages'] =
+            await _readTranscript(result['session_id'] as String);
+      }
       final snapshot = GatewaySnapshot(result);
       _attached = snapshot;
       _replayEpoch = result['replay_epoch'] as String;
@@ -350,6 +414,79 @@ class HermesGatewayClient {
     }
   }
 
+  /// Oldest-order cursors poll additions and reset atomically on lineage rewrites.
+  /// Keep only public display text/identity, never raw tool args or reasoning.
+  Future<List<Map<String, dynamic>>> _readTranscript(String sessionId) async {
+    var cursor = _transcriptSession == sessionId ? _transcriptCursor : null;
+    final rows = _transcriptSession == sessionId
+        ? List<Map<String, dynamic>>.of(_transcriptRows)
+        : <Map<String, dynamic>>[];
+    for (var page = 0; page < 256; page++) {
+      final value = await _request('session.transcript', {
+        'session_id': sessionId,
+        'order': 'oldest',
+        'limit': 100,
+        'inline_images': false,
+        if (cursor != null) 'cursor': cursor,
+      });
+      if (value['session_id'] != sessionId ||
+          value['rows'] is! List ||
+          value['reset'] is! bool ||
+          value['next_cursor'] is! String) {
+        throw const GatewayException('Invalid transcript page');
+      }
+      if (value['reset'] == true) rows.clear();
+      final seen = {
+        for (final row in rows) '${row['row_kind']}:${row['row_id']}'
+      };
+      final incoming = value['rows'] as List;
+      for (final row in incoming.whereType<Map>()) {
+        final id = row['row_id'];
+        final kind = row['row_kind'];
+        if (id is! int || !['message', 'compaction'].contains(kind)) continue;
+        if (!seen.add('$kind:$id')) continue;
+        final role = row['role'];
+        final metadata = row['display_metadata'];
+        if (row['display_kind'] == 'hidden') continue;
+        if (['user', 'assistant'].contains(role) || kind == 'compaction') {
+          rows.add({
+            'row_kind': kind,
+            'row_id': id,
+            'role': kind == 'compaction' ? 'assistant' : role,
+            if (row['display_kind'] is String)
+              'display_kind': row['display_kind'],
+            'text': kind == 'compaction'
+                ? 'Conversation summary: ${_visibleText(row['text'])}'
+                : _visibleText(row['text'] ?? row['content']),
+            if (metadata is Map && metadata['submission_id'] is String)
+              'display_metadata': {'submission_id': metadata['submission_id']},
+          });
+        } else if (role == 'tool' && row['name'] is String) {
+          rows.add({
+            'row_kind': kind,
+            'row_id': id,
+            'role': 'tool',
+            'name': row['name'],
+            'text': 'Tool activity: ${row['name']}'
+          });
+        }
+      }
+      final next = value['next_cursor'] as String;
+      if (incoming.isEmpty) {
+        _transcriptSession = sessionId;
+        _transcriptCursor = next;
+        _transcriptRows = rows;
+        return rows;
+      }
+      if (next == cursor) {
+        throw const GatewayException('Transcript cursor did not advance');
+      }
+      cursor = next;
+    }
+    throw const GatewayException(
+        'History is still changing. Resync again; no input was sent.');
+  }
+
   void _flushEvents() {
     final buffered = List<Map<String, dynamic>>.of(_bufferedEvents);
     _bufferedEvents.clear();
@@ -360,9 +497,17 @@ class HermesGatewayClient {
 
   /// Never sends a transcript, creates a session, or retries an uncertain input.
   /// Retain inputId yourself if you need a durable local submission journal.
-  Future<GatewayRun> submit(String text, {required String inputId}) async {
+  Future<GatewayRun> submit(String text,
+      {required String inputId,
+      String? expectedSessionId,
+      String? expectedProfileId}) async {
     _requireConnected();
     final snapshot = _attached;
+    if ((expectedSessionId != null &&
+            snapshot?.sessionId != expectedSessionId) ||
+        (expectedProfileId != null && _profileId != expectedProfileId)) {
+      throw const GatewayException('Original submission authority changed');
+    }
     if (snapshot == null) {
       throw const GatewayException('Explicitly attach a session first');
     }
@@ -392,6 +537,80 @@ class HermesGatewayClient {
       _submitting = false;
       _flushEvents();
     }
+  }
+
+  /// Generation-fenced control of the acknowledged running execution only.
+  /// No new prompt, fallback inference, automatic retry or approval is sent.
+  Future<bool> control(String action,
+      {required int generation, String? text}) async {
+    _requireConnected();
+    final run = _run;
+    if (!['steer', 'redirect', 'interrupt'].contains(action) ||
+        _needsResync ||
+        _attached?.needsUserAction == true ||
+        run == null ||
+        run.sessionId != _attached?.sessionId ||
+        run.profileId != _profileId ||
+        run.state != GatewayRunState.running ||
+        run.executionGeneration != generation) {
+      throw const GatewayException(
+          'Control authority or execution generation changed');
+    }
+    if (action != 'interrupt' && (text == null || text.trim().isEmpty)) {
+      throw ArgumentError('Control text required');
+    }
+    final response = await _request('session.$action', {
+      'session_id': run.sessionId,
+      'execution_generation': generation,
+      if (action != 'interrupt') 'text': text
+    });
+    return response['authority_epoch'] == run.authorityEpoch &&
+        response['execution_generation'] == generation &&
+        (action == 'interrupt' ||
+            ['queued', 'redirected'].contains(response['status']));
+  }
+
+  /// Respond only to the exact prompt advertised on this attachment. The server
+  /// independently authorizes the actor and rejects stale generation/prompt IDs.
+  Future<bool> decide(GatewayRequest prompt, String answer) async {
+    _requireConnected();
+    final snapshot = _attached;
+    if (snapshot == null ||
+        !snapshot.requests.contains(prompt) ||
+        prompt.generation != snapshot.executionGeneration ||
+        (prompt.kind == 'approval' && !prompt.choices.contains(answer)) ||
+        answer.trim().isEmpty) {
+      return false;
+    }
+    final result = await _request('${prompt.kind}.respond', {
+      'session_id': snapshot.sessionId,
+      'execution_generation': prompt.generation,
+      'prompt_id': prompt.id,
+      prompt.kind == 'approval' ? 'choice' : 'answer': answer,
+    });
+    return result['prompt_id'] == prompt.id &&
+        ['resolved', 'already_resolved'].contains(result['status']);
+  }
+
+  /// Recover a journaled admission using a read only; never resubmit its input.
+  Future<GatewayRun> recoverRun(
+      {required String admissionId, required String inputId}) async {
+    _requireConnected();
+    final snapshot = _attached;
+    if (snapshot == null) {
+      throw const GatewayException('Attach the original session first');
+    }
+    final receipt = await _request('prompt.receipt', {
+      'session_id': snapshot.sessionId,
+      'admission_id': admissionId,
+    });
+    if (receipt['admission_id'] != admissionId ||
+        receipt['ref'] is! Map ||
+        receipt['ref']['session_id'] != snapshot.sessionId ||
+        receipt['ref']['profile_id'] != _profileId) {
+      throw const GatewayException('Unmatched admission receipt');
+    }
+    return _run = GatewayRun._(receipt, inputId);
   }
 
   /// Reconcile an acknowledged admission after reconnect, without sending input.
@@ -495,6 +714,11 @@ class HermesGatewayClient {
     final owned = sameAdmission &&
         event['execution_generation'] == run.executionGeneration;
     GatewayRunState? state;
+    if (owned &&
+        type == 'message.delta' &&
+        run.state == GatewayRunState.queued) {
+      run._state = GatewayRunState.running;
+    }
     if (type == 'message.complete') {
       state = payload['error'] != null ||
               payload['failure_reason'] != null ||
@@ -521,9 +745,13 @@ class HermesGatewayClient {
 
   void _receive(dynamic data) {
     try {
+      // Official transcript pages can contain 2 MiB of JSON plus RPC envelope.
+      final limit = (_capabilities.contains('session-transcript-v1') ? 3 : 1) *
+          1024 *
+          1024;
       if (data is! String ||
-          data.length > 1024 * 1024 ||
-          utf8.encode(data).length > 1024 * 1024) {
+          data.length > limit ||
+          utf8.encode(data).length > limit) {
         unawaited(_socket?.close(WebSocketStatus.messageTooBig));
         _lost();
         return;
@@ -556,8 +784,11 @@ class HermesGatewayClient {
 
   void _lost() {
     ++_connectionEpoch;
-    _dialingClient?.close(force: true);
-    _dialingClient = null;
+    final cancellation = _dialCancellation;
+    _dialCancellation = null;
+    if (cancellation != null && !cancellation.isCompleted) {
+      cancellation.complete();
+    }
     _socket = null;
     _attached = null;
     final run = _run;

@@ -199,6 +199,35 @@ void main() {
       expect(find.text('Inspect combined fixture'), findsOneWidget);
       await t.tap(find.byTooltip('Close activity'));
       await t.pumpAndSettle();
+      // Organization uses the real mixed Drawer without disturbing admitted
+      // work, the live child/stream, controls or this long keyboard draft.
+      await t.tap(find.byTooltip('Open navigation menu'));
+      await t.pumpAndSettle();
+      await t.tap(find.byTooltip('Conversation actions'));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Edit').last);
+      await t.pumpAndSettle();
+      expect(find.textContaining('Persona editing is unavailable'),
+          findsOneWidget);
+      await t.enterText(find.byKey(const ValueKey('conversation-name')),
+          'Combined renamed chat');
+      await t.ensureVisible(find.text('Save').last);
+      await t.tap(find.text('Save').last);
+      await t.pumpAndSettle();
+      await t.tap(find.byTooltip('Conversation actions'));
+      await t.pumpAndSettle();
+      await t.tap(find.text('Archive').last);
+      await t.pumpAndSettle();
+      expect(c.organization.entry(c.identityOf(c.current!)).archived, isTrue);
+      expect(c.runPending, isTrue);
+      Navigator.of(t.element(find.byType(ChatHome))).pop();
+      await t.pumpAndSettle();
+      expect(t.widget<TextField>(composer).controller!.text, draft);
+      expect(
+          find.descendant(
+              of: find.byType(AppBar),
+              matching: find.text('Combined renamed chat')),
+          findsOneWidget);
       await t.tap(find.text('Review action'));
       await network();
       await t.ensureVisible(find.text('Allow once'));

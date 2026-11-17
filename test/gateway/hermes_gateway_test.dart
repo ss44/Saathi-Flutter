@@ -9,6 +9,9 @@ class Fixture {
   late HttpServer server;
   final requests = <Map<String, dynamic>>[];
   final sockets = <WebSocket>[];
+  bool dropSubmitAck = false;
+  String profileId = 'profile';
+  List<String> capabilities = ['durable-admission-v1', 'event-replay-v1'];
   Map<String, dynamic> Function(Map<String, dynamic>)? respond;
   Future<void> start() async {
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -22,12 +25,13 @@ class Fixture {
       socket.listen((frame) {
         final request = jsonDecode(frame as String) as Map<String, dynamic>;
         requests.add(request);
+        if (dropSubmitAck && request['method'] == 'prompt.submit') return;
         final result = request['method'] == 'runtime.describe'
             ? {
-                'profile_id': 'profile',
+                'profile_id': profileId,
                 'instance_id': 'owner',
                 'authority_epoch': 3,
-                'capabilities': ['durable-admission-v1', 'event-replay-v1']
+                'capabilities': capabilities
               }
             : respond?.call(request) ?? {'sessions': <dynamic>[]};
         socket.add(jsonEncode(
@@ -96,6 +100,201 @@ Map<String, dynamic> snapshot() => {
     };
 
 void main() {
+  test(
+      'queued admission becomes controllable only on its owned execution delta',
+      () async {
+    final fixture = Fixture();
+    await fixture.start();
+    fixture.respond = (r) => r['method'] == 'session.resume'
+        ? snapshot()
+        : {
+            'admission_id': 'run',
+            'ref': {'session_id': 'chat', 'profile_id': 'profile'},
+            'authority_epoch': 3,
+            'status': 'queued'
+          };
+    final client =
+        HermesGatewayClient(grantProvider: () async => fixture.grant());
+    addTearDown(() async {
+      await client.dispose();
+      await fixture.close();
+    });
+    await client.connect();
+    await client.attach('chat');
+    await client.submit('text', inputId: 'input');
+    fixture.event('message.delta', {'text': 'owned running'});
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(client.run!.state, GatewayRunState.running);
+    expect(client.run!.executionGeneration, 4);
+  });
+  test(
+      'transcript uses exact cursor, resets lineage, deduplicates and hides reasoning',
+      () async {
+    final fixture = Fixture();
+    await fixture.start();
+    fixture.capabilities.add('session-transcript-v1');
+    var phase = 0;
+    fixture.respond = (r) {
+      if (r['method'] == 'session.resume') {
+        return {...snapshot(), 'messages': [], 'display_messages': []};
+      }
+      final cursor = (r['params'] as Map)['cursor'];
+      if (phase == 0 && cursor == null) {
+        return {
+          'session_id': 'chat',
+          'rows': [
+            {
+              'row_kind': 'message',
+              'row_id': 1,
+              'role': 'user',
+              'text': 'First'
+            },
+            {
+              'row_kind': 'message',
+              'row_id': 2,
+              'role': 'assistant',
+              'text': 'Public',
+              'reasoning': 'PRIVATE'
+            },
+          ],
+          'next_cursor': 'page-two',
+          'reset': true
+        };
+      }
+      if (phase == 0 && cursor == 'page-two') {
+        return {
+          'session_id': 'chat',
+          'rows': [
+            {
+              'row_kind': 'message',
+              'row_id': 2,
+              'role': 'assistant',
+              'text': 'Public'
+            },
+            {
+              'row_kind': 'message',
+              'row_id': 3,
+              'role': 'assistant',
+              'text': 'Third'
+            },
+          ],
+          'next_cursor': 'poll',
+          'reset': false
+        };
+      }
+      if (phase == 1 && cursor == 'poll') {
+        return {
+          'session_id': 'chat',
+          'rows': [
+            {
+              'row_kind': 'message',
+              'row_id': 4,
+              'role': 'assistant',
+              'text': 'After compression'
+            },
+          ],
+          'next_cursor': 'reset-poll',
+          'reset': true
+        };
+      }
+      return {
+        'session_id': 'chat',
+        'rows': [],
+        'next_cursor': phase == 0 ? 'poll' : 'reset-poll',
+        'reset': false
+      };
+    };
+    final client =
+        HermesGatewayClient(grantProvider: () async => fixture.grant());
+    addTearDown(() async {
+      await client.dispose();
+      await fixture.close();
+    });
+    await client.connect();
+    var attached = await client.attach('chat');
+    expect(attached.messages.map((r) => r.text), ['First', 'Public', 'Third']);
+    final reads = fixture.requests
+        .where((r) => r['method'] == 'session.transcript')
+        .toList();
+    expect(reads, hasLength(3));
+    expect(reads.first['params'], {
+      'session_id': 'chat',
+      'order': 'oldest',
+      'limit': 100,
+      'inline_images': false
+    });
+    expect(
+        fixture.requests
+                .firstWhere((r) => r['method'] == 'session.resume')['params']
+            ['omit_messages'],
+        isTrue);
+    phase = 1;
+    attached = await client.attach('chat');
+    expect(attached.messages.map((r) => r.text), ['After compression']);
+  });
+  test(
+      'canonical controls target only the acknowledged current generation without new prompt',
+      () async {
+    final fixture = Fixture();
+    await fixture.start();
+    fixture.respond = (r) => r['method'] == 'session.resume'
+        ? snapshot()
+        : r['method'] == 'prompt.submit'
+            ? {
+                'admission_id': 'run',
+                'ref': {'session_id': 'chat', 'profile_id': 'profile'},
+                'authority_epoch': 3,
+                'execution_generation': 4,
+                'status': 'started',
+              }
+            : {
+                'status': 'queued',
+                'execution_generation': 4,
+                'authority_epoch': 3
+              };
+    final client =
+        HermesGatewayClient(grantProvider: () async => fixture.grant());
+    addTearDown(() async {
+      await client.dispose();
+      await fixture.close();
+    });
+    await client.connect();
+    await client.attach('chat');
+    await client.submit('input', inputId: 'input');
+    await client.control('steer', generation: 4, text: 'guide');
+    await client.control('redirect', generation: 4, text: 'correct');
+    await client.control('interrupt', generation: 4);
+    await expectLater(client.control('steer', generation: 3, text: 'stale'),
+        throwsA(isA<GatewayException>()));
+    final controls = fixture.requests
+        .where((r) => ['session.steer', 'session.redirect', 'session.interrupt']
+            .contains(r['method']))
+        .toList();
+    expect(controls, hasLength(3));
+    expect(controls.first['params'],
+        {'session_id': 'chat', 'execution_generation': 4, 'text': 'guide'});
+    expect(fixture.requests.where((r) => r['method'] == 'prompt.submit'),
+        hasLength(1));
+  });
+  test('host invite profile and instance must match negotiated authority',
+      () async {
+    final fixture = Fixture();
+    await fixture.start();
+    final grant = fixture.grant();
+    final client = HermesGatewayClient(
+        grantProvider: () async => GatewayGrant(
+            url: grant.url,
+            protocols: grant.protocols,
+            expectedProfileId: 'foreign',
+            expectedInstanceId: 'owner'));
+    addTearDown(() async {
+      await client.dispose();
+      await fixture.close();
+    });
+    await expectLater(client.connect(), throwsA(isA<GatewayException>()));
+    expect(client.state, GatewayConnectionState.disconnected);
+    expect(fixture.requests.map((r) => r['method']), ['runtime.describe']);
+  });
   test('rejects insecure or ambiguous grants before dialing', () async {
     final grants = <GatewayGrant>[
       GatewayGrant(url: Uri.parse('ws://example.com/api/ws?token=secret')),

@@ -183,6 +183,19 @@ class RunLedger {
         body['session_id'] != data['session']) {
       invalid();
     }
+    if ((data.containsKey('capturedInstructions') &&
+            (data['capturedInstructions'] is! String ||
+                (data['capturedInstructions'] as String).length > 16000)) ||
+        (data.containsKey('personaId') &&
+            (data['personaId'] is! String ||
+                (data['personaId'] as String).isEmpty ||
+                (data['personaId'] as String).length > 256)) ||
+        (data.containsKey('personaRevision') &&
+            (data['personaRevision'] is! int ||
+                (data['personaRevision'] as int) < 0 ||
+                (data['personaRevision'] as int) > 2147483647))) {
+      invalid();
+    }
     final snapshot = data['snapshot'];
     if (snapshot != null) {
       if (snapshot is! Map<String, dynamic>) invalid();
@@ -264,7 +277,10 @@ class RunLedger {
             'scope',
             'origin',
             'created',
-            'authorityEpoch'
+            'authorityEpoch',
+            'capturedInstructions',
+            'personaId',
+            'personaRevision',
           ]) {
             if (current.data[field] != op.data[field]) {
               throw StateError('Run identity is immutable');
@@ -408,6 +424,8 @@ class RunClient {
       required String model,
       String? provider,
       required String instructions,
+      String? personaId,
+      int personaRevision = 0,
       required List<Map<String, dynamic>> history,
       String? authorityEpoch,
       bool Function()? isCurrent,
@@ -417,6 +435,9 @@ class RunClient {
     final op = RunOperation({
       if (authorityEpoch != null) 'authorityEpoch': authorityEpoch,
       'local': local,
+      'capturedInstructions': instructions,
+      if (personaId != null) 'personaId': personaId,
+      'personaRevision': personaRevision,
       'session':
           previous?.sessionId ?? existingSessionId ?? 'saathi_${runIdentity()}',
       'key': runIdentity(),

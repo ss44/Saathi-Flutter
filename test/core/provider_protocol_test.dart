@@ -169,7 +169,7 @@ void main() {
     expect(result.text, 'firstsecond');
     expect(result.metadata['promptTokens'], 7);
     expect(result.metadata['completionTokens'], 8);
-    expect(result.metadata['totalTokens'], 15);
+    expect(result.metadata.containsKey('totalTokens'), isFalse);
     expect(core.history, isEmpty);
   });
 }

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import '../chat_organization/reported_usage.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -214,6 +215,7 @@ class SaathiStore {
             'upstreamProvider',
             'remoteSessionId',
             'remoteTitle',
+            'canonicalProfileId',
             'systemPrompt'
           ])
             if (chat.containsKey(key)) key: chat[key],
@@ -222,6 +224,24 @@ class SaathiStore {
               {
                 for (final key in ['id', 'role', 'content'])
                   if ((message as Map).containsKey(key)) key: message[key],
+                'metadata': {
+                  ...ReportedUsage.fromMetadata(Map<String, dynamic>.from(
+                          message['metadata'] as Map? ?? {}))
+                      .toMetadata(),
+                  if ((message['metadata']
+                          as Map?)?['authoritativeCompletion'] ==
+                      true)
+                    'authoritativeCompletion': true,
+                  if (const [
+                    'message',
+                    'toolActivity',
+                    'compaction',
+                    'publicNotice'
+                  ].contains(
+                      (message['metadata'] as Map?)?['canonicalRowKind']))
+                    'canonicalRowKind':
+                        (message['metadata'] as Map)['canonicalRowKind'],
+                },
               }
           ],
         }

@@ -2,6 +2,18 @@
 
 Umbrella: #59. Delivery is one integrated chat/optimization PR, not one PR per worker. Original tickets remain acceptance checklists; do not close incomplete native/device-dependent scopes.
 
+## Current user-selected delivery scope
+
+Hermes first. [The current acceptance table](../docs/HERMES_DELIVERY_ACCEPTANCE.md)
+supersedes the all-provider/media delivery order below, while preserving these
+original checklists as provenance. Issue #16 / new OpenClaw is deferred until
+Hermes is accepted; isolated work is preserved and not integrated. New #7/#9
+media/vision/SAF app wiring and feature-only tests are isolated in the complete
+pre-scope WIP snapshot, not reachable in this delivery. Existing shared chat,
+personas, organization, unread, usage, journal and queue correctness remain gates.
+The worker cannot merge or dispatch a build; exact-diff independent review and
+parent-owned CI/merge/beta gates still apply.
+
 ## Priority order
 
 1. #37/#38: stuck thinking, delivered replies, streaming, busy input and genuine continuation of existing server conversations.
@@ -33,4 +45,4 @@ Umbrella: #59. Delivery is one integrated chat/optimization PR, not one PR per w
 
 Controlled fixtures, a listening official backend, a native build, a phone and the user's deployed server prove different things. Record each separately. No production credentials or paid calls are used by automated work. Backend bootstrap/pairing/device blockers remain explicit rather than being hidden behind unsupported controls.
 
-Current v2026.47.4 remains beta. No new stable release or extra manual native build is authorized by this batch request.
+Current v2026.47.4 remains beta. The user's later authorization permits one manual run of the existing signed weekly beta workflow (`.github/workflows/release-desktop.yml`) only after the final combined PR60 scope is ready, exact-complete-diff independent review and applicable CI pass, and its squash merge is verified by remote readback. The parent integration owner alone may dispatch from the verified final merge SHA on `main`, record the run ID, and confirm an actual native build job has started; queued/preparing/verification states are not yet building. Do not dispatch from a partial/draft head, repeat an uncertain dispatch, alter the permanent signing identity, or label this release stable. This supersedes the earlier no-extra-manual-build restriction, not the remaining integration and review gates.
