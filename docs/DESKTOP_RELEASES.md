@@ -4,7 +4,7 @@ Workflow: `.github/workflows/release-desktop.yml` → **Desktop and Android bina
 
 ## Trigger
 
-- Automatic builds run **weekly on Mondays at 09:00 UTC** from the default branch. GitHub may delay scheduled execution; this is not a guaranteed wall-clock deadline.
+- Automatic builds run **daily at 09:00 UTC** from the default branch, skipping unchanged tracked trees. GitHub may delay scheduled execution; this is not a guaranteed wall-clock deadline.
 - Use **Run workflow** on the intended source branch for an on-demand testing build. UTC time selects the ISO week-year/week; the highest existing increment for that week is increased by one (starting at 1). All Git tags and all paginated releases (including hidden drafts) reserve increments before allocation.
 - Branch pushes (including `main`) and tag pushes do not trigger binary releases. PR/main verification workflows remain separate and do not publish binaries.
 - Invalid ISO weeks, leading-zero values and shell-like tags fail before compilation. Combined release increments are 1–9999, desktop internal builds are 1–65535, and Android versionCode must be at most 2100000000.

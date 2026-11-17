@@ -16,4 +16,4 @@ Keep chat readable and simple. Preserve original conversation ownership, explici
 - Use test-first slices and controlled network fixtures. Report native build, real-server and device verification separately.
 - Keep credentials in platform secure storage, never source, ordinary history or logs. Preserve TLS and updater validation.
 - Shared Android text/images must become reviewable drafts, never auto-send; intake remains separate until implemented and device-tested.
-- Keep releases weekly or explicitly requested. Merge authorization is not release authorization.
+- Keep releases daily at 09:00 UTC or explicitly requested, skipping unchanged source. Merge authorization is not authorization for an extra release.
