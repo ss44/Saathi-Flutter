@@ -25,7 +25,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.widget<TextField>(composer).controller!.text, 'Do not queue');
     expect(c.outbox, isEmpty);
-    expect(find.text('Optimize prompt'), findsNothing);
+    expect(find.byTooltip('Enhance prompt'), findsNothing);
     await tester.pumpWidget(const SizedBox());
     c.dispose();
   });
@@ -51,7 +51,7 @@ void main() {
     await tester.pump();
     await tester.longPress(find.byTooltip('Send'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Optimize prompt'));
+    await tester.tap(find.byTooltip('Enhance prompt'));
     await tester.pumpAndSettle();
     await fixture.improve(tester);
     await fixture.flush(tester);
@@ -63,6 +63,14 @@ void main() {
     expect(requests, 1);
     expect(c.current!.messages, hasLength(1));
     keyboard.value = 0;
+    await tester.pumpAndSettle();
+    final sendRect = tester.getRect(find.byTooltip('Send'));
+    await tester.longPress(find.byTooltip('Send'));
+    await tester.pumpAndSettle();
+    // Undo below Send must not become part of the action group's anchor.
+    expect(tester.getCenter(find.byTooltip('Close send actions')),
+        sendRect.center);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Undo'));
     await tester.pump();
@@ -86,7 +94,7 @@ void main() {
     await tester.pump();
     await tester.longPress(find.byTooltip('Send'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Optimize prompt'));
+    await tester.tap(find.byTooltip('Enhance prompt'));
     await tester.pumpAndSettle();
     expect(find.textContaining('No direct text connection'), findsOneWidget);
     expect(
@@ -114,7 +122,7 @@ void main() {
     await tester.tap(find.byTooltip('Send'));
     await fixture.flush(tester);
     expect(requests, 1);
-    expect(find.text('Optimize prompt'), findsNothing);
+    expect(find.byTooltip('Enhance prompt'), findsNothing);
     expect(find.byType(AlertDialog), findsNothing);
     expect(
         tester
@@ -145,7 +153,7 @@ void main() {
     node.owner!.performAction(node.id, SemanticsAction.customAction,
         node.getSemanticsData().customSemanticsActionIds!.first);
     await tester.pumpAndSettle();
-    expect(find.text('Optimize prompt'), findsOneWidget);
+    expect(find.byTooltip('Enhance prompt'), findsOneWidget);
     expect(requests, 0);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
@@ -156,13 +164,13 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.f10);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
     await tester.pumpAndSettle();
-    expect(find.text('Optimize prompt'), findsOneWidget);
+    expect(find.byTooltip('Enhance prompt'), findsOneWidget);
     expect(requests, 0);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
     await tester.tap(send, buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
-    expect(find.text('Optimize prompt'), findsOneWidget);
+    expect(find.byTooltip('Enhance prompt'), findsOneWidget);
     expect(requests, 0);
     await tester.pumpWidget(const SizedBox());
     semantics.dispose();
@@ -196,7 +204,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.longPress(find.byTooltip('Send'));
       await tester.pumpAndSettle();
-      expect(find.text('Optimize prompt'), findsOneWidget);
+      expect(find.byTooltip('Enhance prompt'), findsOneWidget);
       if (change == 'draft') {
         tester
             .widget<TextField>(find.byKey(const Key('composer')))
@@ -231,8 +239,13 @@ void main() {
         visible.value = false;
       }
       c.notifyListeners();
-      await tester.pump();
-      await tester.tap(find.text('Optimize prompt'));
+      await tester.pumpAndSettle();
+      if (change == 'session' || change == 'owner') {
+        // The anchored control was disposed; its route must leave with it.
+        expect(find.byTooltip('Enhance prompt'), findsNothing);
+      } else {
+        await tester.tap(find.byTooltip('Enhance prompt'));
+      }
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsNothing);
       expect(requests, 0);
@@ -270,7 +283,7 @@ void main() {
         final send = find.byTooltip('Send');
         final pointer = await tester.startGesture(tester.getCenter(send));
         await tester.pump(const Duration(milliseconds: 650));
-        expect(find.text('Optimize prompt'), findsOneWidget);
+        expect(find.byTooltip('Enhance prompt'), findsOneWidget);
         await pointer.up();
         await tester.pumpAndSettle();
         expect(requests, 0);
@@ -286,7 +299,7 @@ void main() {
         expect(requests, 0);
         await tester.longPress(send);
         await tester.pumpAndSettle();
-        await tester.tap(find.text('Optimize prompt'));
+        await tester.tap(find.byTooltip('Enhance prompt'));
         await tester.pumpAndSettle();
         expect(find.text('Original'), findsWidgets);
         expect(requests, 0);

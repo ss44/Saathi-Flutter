@@ -1,9 +1,13 @@
 # Prompt optimizer
 
-The composer has no separate optimize button. Hold Send, use its screen-reader
-Optimize prompt action, press the context-menu key / Shift+F10 while Send has
-focus, or secondary-click Send. Choose **Optimize prompt**. A normal Send tap
-still sends normally; releasing a hold or dismissing its menu does not send.
+The composer has no separate enhance button. Hold Send, use its screen-reader
+Enhance prompt action, press the context-menu key / Shift+F10 while Send has
+focus, or secondary-click Send. Send expands upward into an anchored vertical
+icon-button group: **Enhance prompt** above **Close send actions**, which replaces
+Send in the group. Both targets are 48px. A normal Send tap still sends normally;
+releasing/sliding a hold or dismissing the group does not send or alter the draft.
+A fresh Enhance activation opens review. Outside tap, Close, Back and Escape
+only dismiss; keyboard focus starts at Enhance and Tab reaches Close.
 
 Set **Global prompt optimizer** in Connections. **Chat prompt optimizer** in the
 conversation toolbar chooses a chat override or **Inherit global setting**.
