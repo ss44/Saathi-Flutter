@@ -21,6 +21,7 @@ void main() {
     'wheel before scheduled frame',
     'source switch before scheduled frame',
     'already at bottom',
+    'stream crosses threshold',
   ]) {
     testWidgets('$input preserves native stream scroll ownership', (t) async {
       HttpOverrides.global = null;
@@ -76,6 +77,28 @@ void main() {
         expect(scroller.position.extentAfter, lessThan(120));
         final p = t.getCenter(list);
         final oldMax = scroller.position.maxScrollExtent;
+        if (input == 'stream crosses threshold') {
+          await t.sendEventToBinding(PointerScrollEvent(
+            position: p,
+            scrollDelta: Offset(0, -scroller.position.viewportDimension + 1),
+            kind: PointerDeviceKind.mouse,
+          ));
+          await t.pumpAndSettle();
+          expect(find.byTooltip('Jump to latest'), findsNothing);
+          final before = scroller.offset;
+          await emit(
+              List.filled(30, '\n\nStreaming grows below the reader.').join());
+          await network();
+          expect(scroller.offset, before);
+          expect(find.byTooltip('Jump to latest'), findsOneWidget);
+          await t.tap(find.byTooltip('Jump to latest'));
+          await t.pump();
+          await emit(List.filled(20, '\n\nFollowing again.').join());
+          await network();
+          expect(scroller.position.extentAfter, lessThan(2));
+          expect(find.byTooltip('Jump to latest'), findsNothing);
+          return;
+        }
         if (input == 'already at bottom') {
           await emit(
               List.filled(30, '\n\nMore visible output at the live edge.')
@@ -134,7 +157,8 @@ void main() {
             reason:
                 'New output must not pull an older-history reader to bottom');
         // Returning to the live edge must restore following, not leave it off.
-        scroller.jumpTo(scroller.position.maxScrollExtent);
+        expect(find.byTooltip('Jump to latest'), findsOneWidget);
+        await t.tap(find.byTooltip('Jump to latest'));
         await t.pump();
         await emit(List.filled(20, '\n\nFollow again.').join());
         await network();

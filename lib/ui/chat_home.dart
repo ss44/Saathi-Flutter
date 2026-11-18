@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/semantics.dart';
 
+import 'transcript_latest.dart';
 import 'local_history_search.dart';
 import '../update_host.dart';
 
@@ -315,6 +316,9 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   }
 
   void syncServers() {
+    // Revoke pending scrolling at mutation start, even if the source returns
+    // to the same identity (including missing -> present -> missing).
+    if (c.changingConnection) scrollRevision++;
     final selectionChanged =
         !identical(shownOwner, c) || shownSelection != c.selectionGeneration;
     preserveTranscriptAnchor(selectionChanged);
@@ -467,6 +471,46 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
         if (mounted) setState(() => historyQuery = value);
       });
     }
+  }
+
+  // Lazy rows can revise the estimated edge after each layout. Corrections
+  // belong to this activation only, never to an unbounded stream of updates.
+  void jumpToLatest() {
+    if (!scroll.hasClients) return;
+    final owner = c;
+    final session = owner.current;
+    final selection = owner.selectionGeneration;
+    final connection = owner.connections
+        .where((connection) => connection['id'] == session?.connectionId)
+        .firstOrNull;
+    final position = scroll.position;
+    final revision = ++scrollRevision;
+    // A fixed budget based on the captured rows cannot grow with streaming.
+    var remaining = (session?.messages.length ?? 0) + 3;
+    bool valid() =>
+        mounted &&
+        identical(c, owner) &&
+        identical(owner.current, session) &&
+        owner.selectionGeneration == selection &&
+        (connection == null
+            ? !owner.connections
+                .any((connection) => connection['id'] == session?.connectionId)
+            : owner.isCurrentConnection(connection)) &&
+        scroll.hasClients &&
+        identical(scroll.position, position) &&
+        scrollRevision == revision;
+    void correct(Duration _) {
+      if (!valid() || position.extentAfter <= 1 || remaining-- <= 0) return;
+      position.jumpTo(position.maxScrollExtent);
+      WidgetsBinding.instance.addPostFrameCallback(correct);
+      WidgetsBinding.instance.scheduleFrame();
+    }
+
+    followStream = true;
+    // Immediate motion also respects the reduced-animation preference.
+    position.jumpTo(position.maxScrollExtent);
+    WidgetsBinding.instance.addPostFrameCallback(correct);
+    WidgetsBinding.instance.scheduleFrame();
   }
 
   final scroll = ScrollController();
@@ -932,9 +976,18 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                             ),
                                           ),
                                         )
-                                      : NotificationListener<
-                                          ScrollUpdateNotification>(
-                                          onNotification: (event) {
+                                      : TranscriptLatest(
+                                          key: ValueKey(
+                                              (c, c.selectionGeneration)),
+                                          controller: scroll,
+                                          onJump: jumpToLatest,
+                                          onReaderInteraction: () {
+                                            scrollRevision++;
+                                            followStream =
+                                                scroll.position.extentAfter <
+                                                    120;
+                                          },
+                                          onUpdate: (event) {
                                             if (event.dragDetails != null ||
                                                 scroll.position
                                                         .userScrollDirection !=
