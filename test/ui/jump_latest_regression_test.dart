@@ -39,12 +39,9 @@ void main() {
       final editable = t.widget<EditableText>(
           find.descendant(of: input, matching: find.byType(EditableText)));
       expect(editable.focusNode.hasFocus, isTrue);
-      final before = scroll.position.maxScrollExtent;
       await t.tap(find.byTooltip('Jump to latest'),
           kind: variable ? PointerDeviceKind.touch : PointerDeviceKind.mouse);
       await t.pumpAndSettle();
-      debugPrint(
-          'PROBE variable=$variable initialMax=$before currentMax=${scroll.position.maxScrollExtent} offset=${scroll.offset} remaining=${scroll.position.extentAfter} focus=${editable.focusNode.hasFocus} draft=${t.widget<TextField>(input).controller!.text}');
       final remaining = scroll.position.extentAfter;
       final focused = editable.focusNode.hasFocus;
       await t.pumpWidget(const SizedBox());

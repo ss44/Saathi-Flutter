@@ -17,8 +17,12 @@ const providerLabels = {
 };
 
 class ConnectionsPage extends StatefulWidget {
-  const ConnectionsPage({super.key, required this.controller});
+  const ConnectionsPage(
+      {super.key, required this.controller, this.embedded = false});
   final ChatController controller;
+
+  /// Embedded desktop settings keep navigation in the workspace rail.
+  final bool embedded;
   @override
   State<ConnectionsPage> createState() => _ConnectionsPageState();
 }
@@ -73,12 +77,16 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-      appBar: AppBar(title: const Text('Connections'), actions: [
-        OptimizerSettingsButton(controller: controller),
-        if (controller.notifications != null)
-          NotificationSettingsButton(notifications: controller.notifications!),
-        const UpdateSettingsButton()
-      ]),
+      appBar: AppBar(
+          automaticallyImplyLeading: !widget.embedded,
+          title: Text(widget.embedded ? 'Settings' : 'Connections'),
+          actions: [
+            OptimizerSettingsButton(controller: controller),
+            if (controller.notifications != null)
+              NotificationSettingsButton(
+                  notifications: controller.notifications!),
+            const UpdateSettingsButton()
+          ]),
       body: ListenableBuilder(
           listenable: controller,
           builder: (context, _) =>

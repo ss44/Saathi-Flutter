@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'canonical_connection.dart';
 import 'canonical_controls.dart';
+import 'adaptive_chat_shell.dart';
 
 import '../chat_organization/organization.dart';
 import '../chat_organization/organization_widgets.dart';
@@ -51,6 +52,9 @@ class ChatHome extends StatefulWidget {
 class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   late ActivityOwner activity;
   bool drawerOpen = false, drawerDragging = false, archivedView = false;
+  bool desktopSettings = false;
+  bool wideNavigation = false;
+  final chatScaffoldKey = GlobalKey<ScaffoldState>();
   Timer? drawerGestureTimer;
 
   void startDrawerGesture() {
@@ -312,10 +316,14 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   }
 
   void syncServers() {
+    // Revoke pending scrolling at mutation start, even if the source returns
+    // to the same identity (including missing -> present -> missing).
+    if (c.changingConnection) scrollRevision++;
     final selectionChanged =
         !identical(shownOwner, c) || shownSelection != c.selectionGeneration;
     preserveTranscriptAnchor(selectionChanged);
     if (selectionChanged) {
+      desktopSettings = false;
       if (shownOwner != null) composer.clear();
       shownOwner = c;
       shownSelection = c.selectionGeneration;
@@ -346,7 +354,9 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
         connection,
         () => ConversationServerCache(c, connection),
       );
-      if (drawerOpen && !cache.loaded && !cache.loading) cache.load();
+      if ((drawerOpen || wideNavigation) && !cache.loaded && !cache.loading) {
+        cache.load();
+      }
     }
   }
 
@@ -482,8 +492,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
         identical(c, owner) &&
         identical(owner.current, session) &&
         owner.selectionGeneration == selection &&
-        connection != null &&
-        owner.isCurrentConnection(connection) &&
+        (connection == null
+            ? !owner.connections
+                .any((connection) => connection['id'] == session?.connectionId)
+            : owner.isCurrentConnection(connection)) &&
         scroll.hasClients &&
         identical(scroll.position, position) &&
         scrollRevision == revision;
@@ -591,10 +603,20 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   }
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
+  Widget build(BuildContext context) => LayoutBuilder(builder: buildWorkspace);
+
+  Widget buildWorkspace(BuildContext context, BoxConstraints constraints) =>
+      ListenableBuilder(
         listenable: c,
         builder: (context, _) {
           final session = c.current;
+          final wide = AdaptiveChatShell.fits(context, constraints.maxWidth);
+          if (wideNavigation != wide) {
+            wideNavigation = wide;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) syncServers();
+            });
+          }
           final run = c.currentRun;
           final thinking = run == null
               ? session != null &&
@@ -630,13 +652,19 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
               : '${names.isEmpty ? 'Unavailable connection' : names.first['name']} · ${session.model}';
           return Listener(
             onPointerDown: (event) {
-              if (event.position.dx <= 48) startDrawerGesture();
+              if (!wide && event.position.dx <= 48) startDrawerGesture();
             },
             onPointerUp: (_) => endDrawerGesture(),
             onPointerCancel: (_) => endDrawerGesture(),
-            child: Scaffold(
-              drawerEdgeDragWidth: 48,
-              drawerEnableOpenDragGesture: true,
+            child: AdaptiveChatShell(
+              wide: wide,
+              scaffoldKey: chatScaffoldKey,
+              showSettings: desktopSettings,
+              onSettingsChanged: (value) {
+                FocusManager.instance.primaryFocus?.unfocus();
+                setState(() => desktopSettings = value);
+              },
+              settings: ConnectionsPage(controller: c, embedded: true),
               onDrawerChanged: (open) {
                 setState(() {
                   drawerOpen = open;
@@ -645,18 +673,21 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                 if (open) syncServers();
               },
               appBar: AppBar(
-                leading: Builder(
-                  builder: (context) => IconButton(
-                    tooltip: 'Open navigation menu',
-                    icon: const Icon(Icons.menu),
-                    onPressed: () {
-                      setState(() => drawerOpen = true);
-                      Scaffold.of(context).openDrawer();
-                    },
-                  ),
-                ),
+                automaticallyImplyLeading: !wide,
+                leading: wide
+                    ? null
+                    : Builder(
+                        builder: (context) => IconButton(
+                          tooltip: 'Open navigation menu',
+                          icon: const Icon(Icons.menu),
+                          onPressed: () {
+                            setState(() => drawerOpen = true);
+                            Scaffold.of(context).openDrawer();
+                          },
+                        ),
+                      ),
                 toolbarHeight: MediaQuery.textScalerOf(context).scale(32) + 24,
-                titleSpacing: 0,
+                titleSpacing: wide ? 24 : 0,
                 title: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -682,21 +713,23 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                 actions: [
                   if (session != null)
                     OptimizerSettingsButton(controller: c, chat: session),
-                  IconButton(
-                    tooltip: 'New conversation',
-                    onPressed: c.busy ? null : newChat,
-                    icon: const Icon(Icons.add_rounded),
-                  ),
-                  IconButton(
-                    tooltip: 'Connection settings',
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute<void>(
-                        builder: (_) => ConnectionsPage(controller: c),
-                      ),
+                  if (!wide)
+                    IconButton(
+                      tooltip: 'New conversation',
+                      onPressed: c.busy ? null : newChat,
+                      icon: const Icon(Icons.add_rounded),
                     ),
-                    icon: const Icon(Icons.tune_rounded),
-                  ),
+                  if (!wide)
+                    IconButton(
+                      tooltip: 'Connection settings',
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) => ConnectionsPage(controller: c),
+                        ),
+                      ),
+                      icon: const Icon(Icons.tune_rounded),
+                    ),
                   if (session != null)
                     IconButton(
                       tooltip: 'Delete conversation',
@@ -709,7 +742,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                   child: Divider(height: 1, color: Color(0xFFECEDE9)),
                 ),
               ),
-              drawer: Drawer(
+              sidebar: Drawer(
+                elevation: wide ? 0 : null,
+                shape: wide ? const RoundedRectangleBorder() : null,
+                backgroundColor: wide ? const Color(0xFFF1F3EE) : null,
                 child: SafeArea(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -732,7 +768,8 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                             onPressed: c.busy
                                 ? null
                                 : () {
-                                    Navigator.pop(context);
+                                    if (!wide) Navigator.pop(context);
+                                    setState(() => desktopSettings = false);
                                     newChat();
                                   },
                             icon: const Icon(Icons.add),
@@ -797,7 +834,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                 leading: const Icon(Icons.link),
                                 title: const Text('Hermes Desktop / CLI'),
                                 onTap: () {
-                                  Navigator.pop(context);
+                                  if (!wide) Navigator.pop(context);
                                   Navigator.push(
                                     context,
                                     MaterialPageRoute<void>(
@@ -827,6 +864,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                               return ConversationServer(
                                 key: ObjectKey(cache.connection),
                                 cache: cache,
+                                closeDrawerOnOpen: !wide,
                               );
                             }
                             if (localMatches.isEmpty) {
@@ -838,6 +876,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                             final s = match.session;
                             return ConversationActionRow(
                               key: ValueKey(c.identityOf(s).storageKey),
+                              selected: wide && identical(s, session),
                               row: ConversationRowData(
                                 identity: c.identityOf(s),
                                 title: s.title,
@@ -863,8 +902,8 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                               },
                               onSelect: () {
                                 c.select(s);
-                                composer.clear();
-                                Navigator.pop(context);
+                                if (!wide) Navigator.pop(context);
+                                setState(() => desktopSettings = false);
                               },
                             );
                           },
@@ -1007,7 +1046,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                         c.identityOf(session),
                                                         session.messages[i].id,
                                                       ),
-                                                      enabled: !drawerOpen &&
+                                                      enabled: !(wide &&
+                                                              desktopSettings) &&
+                                                          !(drawerOpen &&
+                                                              !wide) &&
                                                           !drawerDragging &&
                                                           identical(
                                                             c.current,
