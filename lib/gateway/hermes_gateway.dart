@@ -161,12 +161,15 @@ class GatewaySnapshot {
 String _visibleText(dynamic value) {
   if (value is String) return value;
   if (value is List) {
-    return value
-        .whereType<Map>()
-        .where((p) => p['type'] == 'text')
-        .map((p) => p['text'])
-        .whereType<String>()
-        .join('\n');
+    // Project images before empty-row filtering. Retain only a safe placeholder,
+    // not an untrusted URL or inline bytes in the persisted transcript.
+    return [
+      for (final block in value.whereType<Map>())
+        if (block['type'] == 'text' && block['text'] is String)
+          block['text'] as String
+        else if (['image', 'image_url'].contains(block['type']))
+          'Image blocked · attachment preview is unavailable',
+    ].join('\n');
   }
   return '';
 }

@@ -81,6 +81,16 @@ false and throwing channel writes are tested with same-cache and cold owners.
 These are controlled widget/storage tests, not native-device accessibility or
 OS-storage durability certification.
 
+## Transcript presentation
+
+Historical rows are filtered only at the presentation boundary: blank/whitespace assistant messages and raw tool records occupy no bubble or spacing. Original local records, canonical row identities and remote pagination counts remain unchanged. Gateway-sanitized tool labels are available by swiping the following response; raw tool bodies are never substituted for answers. Active thinking/streaming and terminal-error recovery remain separate from historical filtering.
+
+Both speakers use theme-derived bubbles (user right, assistant left). The UI does not prepend an assistant name or rewrite response content. Markdown, blocked-image placeholders, immediate long-press copy and swipe activity share one renderer for local and remote history. Supported structured remote text is projected before filtering; image-only blocks retain a blocked attachment placeholder without fetching or storing their URLs, including canonical snapshot and paged-transcript paths. This does not add attachment downloads or previews.
+
+A newly settled empty answer remains an explicit conversation-owned outcome, not a successful reply bubble or completion notification. Direct, native Runs and canonical storage retries cannot erase that outcome or resend inference; canonical emptiness is established only from the settled original input and typed answer rows. Imported historical blanks do not create errors. The outcome is retained for the current controller lifetime; historical blanks alone are not reclassified as failed work after restart.
+
+`test/ui/transcript_presentation_test.dart` covers mixed history, raw pagination, safe image-only placeholders, exact Markdown copy, real swipe gestures and 360px/390px 2× text in both brightness modes. The independent outcome, native-image and Runs-outcome tests cover snapshot/journal storage failure and retry, no duplicate submission, typed activity and completion accounting. Existing adaptive-workspace, streaming scroll-ownership and native combined-home regressions remain separate gates.
+
 ## Layout verification
 Wide windows at least 1,000 logical pixels use the persistent workspace when there is also room for the current text scale (at least 720 times the scaled unit size). The chat list stays 300px wide beside the navigation rail; conversation content is capped at 960px. Settings opens inside the workspace without replacing the conversation or its draft. Resizing back to compact navigation preserves the composer. Remote history continues to open as a separate read-only route, not as a local conversation or replayed input.
 

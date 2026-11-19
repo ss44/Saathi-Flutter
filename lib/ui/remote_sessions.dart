@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import '../core/saathi_core.dart';
 import 'chat_controller.dart';
-import 'safe_markdown.dart';
+import 'chat_home.dart' show MessageView;
+import 'transcript_presentation.dart';
 
 class RemoteSessionsPage extends StatefulWidget {
   const RemoteSessionsPage(
@@ -226,18 +226,6 @@ class _RemoteHistoryPageState extends State<RemoteHistoryPage> {
     }
   }
 
-  String visibleContent(dynamic content) {
-    if (content is String) return content;
-    if (content is List) {
-      return content
-          .whereType<Map>()
-          .where((b) => b['type'] == 'text')
-          .map((b) => b['text'] is String ? b['text'] : '')
-          .join('\n');
-    }
-    return '';
-  }
-
   @override
   Widget build(BuildContext context) => Scaffold(
       appBar: AppBar(
@@ -280,24 +268,9 @@ class _RemoteHistoryPageState extends State<RemoteHistoryPage> {
                         },
               child: const Text('Continue conversation')),
         const Divider(height: 32),
-        for (final m in messages.where((m) =>
-            m['display_kind'] != 'hidden' &&
-            ['user', 'assistant', 'model'].contains(m['role'])))
-          if (visibleContent(m['content']).isNotEmpty)
-            Padding(
-                padding: const EdgeInsets.only(bottom: 24),
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(m['role'] == 'user' ? 'You' : 'Assistant',
-                          style: const TextStyle(
-                              fontSize: 12, fontWeight: FontWeight.w700)),
-                      const SizedBox(height: 8),
-                      MarkdownBody(
-                          data: visibleContent(m['content']),
-                          imageBuilder: safeMarkdownImageBuilder,
-                          selectable: true)
-                    ])),
+        for (final message in messages.map(projectRemoteHistory).nonNulls)
+          if (showsHistoryBubble(message))
+            MessageView(text: message.content, user: message.role == 'user'),
         if (error != null)
           Text(error!,
               style: TextStyle(color: Theme.of(context).colorScheme.error)),

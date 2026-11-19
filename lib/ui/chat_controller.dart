@@ -8,6 +8,7 @@ import '../gateway/canonical_chat.dart';
 import '../gateway/hermes_gateway.dart';
 import '../gateway/host_invite.dart';
 import '../agent_runs/run_client.dart';
+import 'transcript_presentation.dart';
 import '../agent_controls/agent_controls.dart';
 
 import 'dart:math';
@@ -324,6 +325,11 @@ class ChatController extends ChangeNotifier {
     required String replyId,
     Map<String, dynamic> metadata = const {},
   }) async {
+    if (text.trim().isEmpty) {
+      _terminalProblems[session] = _emptyFinalMessage;
+    } else {
+      _terminalProblems.remove(session);
+    }
     session.messages.addAll([
       ChatMessage(role: 'user', content: input),
       ChatMessage(
@@ -338,7 +344,9 @@ class ChatController extends ChangeNotifier {
     ]);
     if (text.trim().isNotEmpty) await _recordCompletion(session, replyId);
     try {
-      if (!_disposed) onReplyReceived?.call(session.id);
+      if (!_disposed && text.trim().isNotEmpty) {
+        onReplyReceived?.call(session.id);
+      }
     } catch (_) {
       // Optional notification cannot turn an accepted answer into a resend.
     }
@@ -883,7 +891,14 @@ class ChatController extends ChangeNotifier {
     super.dispose();
   }
 
-  String? error, _pendingText;
+  static const _emptyFinalMessage =
+      'The server finished without a text response. Nothing will be resent.';
+  // A terminal outcome belongs to its conversation, not a storage attempt.
+  // Transient failures take precedence without erasing the retained outcome.
+  final _terminalProblems = <ChatSession, String>{};
+  String? _error, _pendingText;
+  String? get error => _error ?? _terminalProblems[current];
+  set error(String? value) => _error = value;
   String? get pendingText {
     final op = currentRun;
     if (op != null &&
@@ -1236,6 +1251,7 @@ class ChatController extends ChangeNotifier {
         return;
       }
       _canonicalResyncRequested = false;
+      final inputId = owner.pendingInputId;
       final terminal = await owner.refresh();
       if (!owner.observable ||
           !identical(owner, _canonical) ||
@@ -1243,6 +1259,32 @@ class ChatController extends ChangeNotifier {
         return;
       }
       final snapshot = owner.snapshot;
+      final emptyOutcome = switch (owner.client.run?.state) {
+        GatewayRunState.complete => _emptyFinalMessage,
+        GatewayRunState.failed =>
+          'The server could not complete this response. Nothing will be resent.',
+        GatewayRunState.cancelled =>
+          'This response was cancelled. Nothing will be resent.',
+        _ => null,
+      };
+      if (terminal &&
+          inputId != null &&
+          emptyOutcome != null &&
+          snapshot != null) {
+        final inputIndex = snapshot.messages.indexWhere(
+          (m) => m.role == 'user' && m.submissionId == inputId,
+        );
+        // Only the settled local input can establish an empty final. Imported
+        // blank history and in-progress/tool rows are not completion evidence.
+        if (inputIndex >= 0 &&
+            !snapshot.messages
+                .skip(inputIndex + 1)
+                .takeWhile((m) => m.role != 'user')
+                .any((m) => m.isCompletedAnswer)) {
+          // Retain the receipt's outcome before storage cleanup clears it.
+          _terminalProblems[session] = emptyOutcome;
+        }
+      }
       if (snapshot != null && !identical(snapshot, _savedCanonicalSnapshot)) {
         final previous = {for (final m in session.messages) m.id: m};
         final completed = <String>[];
@@ -1365,16 +1407,7 @@ class ChatController extends ChangeNotifier {
         remoteTitle: remote.title,
         model: remote.data['model'] as String? ?? 'Server model',
         upstreamProvider: remote.data['provider'] as String?,
-        messages: [
-          for (final row in page.messages)
-            if (['user', 'assistant'].contains(row['role']) &&
-                row['display_kind'] != 'hidden' &&
-                row['content'] is String)
-              ChatMessage(
-                role: row['role'] == 'assistant' ? 'model' : 'user',
-                content: row['content'] as String,
-              ),
-        ],
+        messages: page.messages.map(projectRemoteHistory).nonNulls.toList(),
       );
       sessions.add(session);
       try {
@@ -1632,6 +1665,11 @@ class ChatController extends ChangeNotifier {
     }
     if (snapshot.terminal && !op.committed) op.data['journalDirty'] = true;
     if (snapshot.state == RunState.completed) {
+      if (snapshot.output.trim().isEmpty) {
+        _terminalProblems[session] = _emptyFinalMessage;
+      } else {
+        _terminalProblems.remove(session);
+      }
       final marker = 'run-${op.key}';
       if (!session.messages.any((m) => m.id == marker)) {
         session.messages.addAll([
@@ -1646,7 +1684,8 @@ class ChatController extends ChangeNotifier {
             },
           ),
         ]);
-        if (op.data['alertClaimed'] != true) {
+        if (snapshot.output.trim().isNotEmpty &&
+            op.data['alertClaimed'] != true) {
           op.data['alertClaimed'] = true;
           try {
             await _ledger.save(op, isCurrent: isCurrent);
@@ -1668,10 +1707,6 @@ class ChatController extends ChangeNotifier {
         if (!isCurrent()) return;
         unsavedChanges = false;
         error = null;
-        if (snapshot.output.trim().isEmpty) {
-          error =
-              'The server finished without a text response. Nothing will be resent.';
-        }
       } catch (_) {
         if (!isCurrent()) return;
         unsavedChanges = true;
@@ -2289,6 +2324,7 @@ class ChatController extends ChangeNotifier {
     _dispatchingSession = session;
     _preparing = permission;
     busy = true;
+    _terminalProblems.remove(session);
     error = null;
     pendingText = text;
     notifyListeners();
