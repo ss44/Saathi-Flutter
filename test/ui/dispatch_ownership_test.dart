@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -10,9 +11,14 @@ import 'package:saathi/ui/chat_controller.dart';
 import 'package:saathi/ui/chat_home.dart';
 
 class DelayedSecrets extends MemorySecrets {
-  Completer<String?>? pending;
+  Completer<String?>? pending, fresh;
+  int gatedReads = 0;
   @override
-  Future<String?> read(String id) => pending?.future ?? super.read(id);
+  Future<String?> read(String id) {
+    if (pending == null) return super.read(id);
+    gatedReads++;
+    return (gatedReads == 1 ? pending! : fresh ?? pending!).future;
+  }
 }
 
 void main() {
@@ -48,11 +54,7 @@ void main() {
   });
   tearDown(() => c.dispose());
 
-  for (final action in [
-    'switch away/back',
-    'explicit pause',
-    'background return'
-  ]) {
+  for (final action in ['switch away/back', 'explicit pause']) {
     test('preparing head is held without HTTP after $action', () async {
       final original = c.current!;
       secrets.pending = Completer<String?>();
@@ -65,11 +67,8 @@ void main() {
         c.sessions.add(other);
         c.select(other);
         c.select(original);
-      } else if (action == 'explicit pause') {
-        c.pauseQueue('Explicit pause');
       } else {
-        c.setQueueBackground(true);
-        c.setQueueBackground(false);
+        c.pauseQueue('Explicit pause');
       }
       secrets.pending!.complete('');
       await tick();
@@ -84,6 +83,85 @@ void main() {
       expect(c.queueStatus, isNull);
     });
   }
+
+  test(
+      'background return rejects old permission then reauthorizes unsent head once',
+      () async {
+    final original = c.current!;
+    final source = c.connections.single;
+    secrets.pending = Completer<String?>();
+    secrets.fresh = Completer<String?>();
+    expect(c.submit('Original accepted text'), isTrue);
+    await tick();
+    expect(secrets.gatedReads, 1);
+    expect(c.outbox, isEmpty);
+    final prepared =
+        c.store.preferences.getString(ChatController.preparedInputsKey);
+    expect(prepared, isNotNull);
+    c.setQueueBackground(true);
+    c.setQueueBackground(false);
+    secrets.pending!.complete('');
+    await tick();
+    // The aggregate-zero-POST assertion after return hid the permission boundary:
+    // automatic continuation is allowed, but only under a NEW validated grant.
+    expect(requests, isEmpty,
+        reason: 'The revoked credential read cannot send');
+    expect(secrets.gatedReads, 2,
+        reason:
+            'Foreground continuation obtains fresh authority without Resume');
+    expect(c.store.preferences.getString(ChatController.preparedInputsKey),
+        prepared);
+    expect(c.uncertainInput, isNull);
+    expect(original.messages, isEmpty);
+    expect(c.connections.single, same(source));
+    secrets.fresh!.complete('');
+    await tick();
+    expect(requests, hasLength(1));
+    expect(jsonDecode(requests.single), {
+      'model': 'small',
+      'messages': [
+        {'role': 'user', 'content': 'Original accepted text'}
+      ]
+    });
+    replies.single.complete(
+        http.Response('{"choices":[{"message":{"content":"Done"}}]}', 200));
+    await tick();
+    expect(original.messages.map((m) => m.content),
+        ['Original accepted text', 'Done']);
+    expect(c.outbox, isEmpty);
+    expect(c.uncertainInput, isNull);
+    expect(requests, hasLength(1));
+  });
+
+  test(
+      'source replacement round trip cannot reauthorize a background-held head',
+      () async {
+    final originalSource = c.connections.single;
+    secrets.pending = Completer<String?>();
+    expect(c.submit('Original accepted text'), isTrue);
+    await tick();
+    c.setQueueBackground(true);
+    secrets.pending!.complete('');
+    await tick();
+    expect(c.busy, isFalse);
+    expect(requests, isEmpty);
+    expect(c.outbox.single.connection, same(originalSource));
+    secrets.pending = null;
+    await c.updateConnection('a', {...originalSource},
+        apiKey: 'fixture-replacement');
+    await c.updateConnection('a', {...originalSource}, apiKey: '');
+    expect(c.connections.single, isNot(same(originalSource)));
+    c.setQueueBackground(false);
+    await tick();
+    expect(c.canResumeQueue, isFalse);
+    c.resumeQueue();
+    await tick();
+    expect(requests, isEmpty);
+    expect(c.outbox.single.text, 'Original accepted text');
+    expect(c.outbox.single.connection, same(originalSource));
+    expect(c.uncertainInput, isNull);
+    expect(c.current!.messages, isEmpty);
+  });
 
   testWidgets('owner ChatHome-only disposal revokes preparing head', (t) async {
     final visible = ValueNotifier<bool>(true);

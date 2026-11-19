@@ -21,10 +21,37 @@ Widget host(
 
 void main() {
   testWidgets(
+      'loader animates, preserves phrase cadence through native polls and disposes',
+      (tester) async {
+    await tester.pumpWidget(host());
+    final first =
+        tester.widget<Text>(find.byKey(const Key('thinking-quip'))).data;
+    final turns = tester
+        .widget<AnimatedRotation>(find.byKey(const Key('thinking-loader')))
+        .turns;
+    await tester.pump(const Duration(milliseconds: 800));
+    expect(
+        tester
+            .widget<AnimatedRotation>(find.byKey(const Key('thinking-loader')))
+            .turns,
+        greaterThan(turns));
+    await tester.pumpAndSettle();
+    for (var i = 0; i < 9; i++) {
+      await tester.pumpWidget(host());
+      await tester.pump(const Duration(seconds: 1));
+    }
+    expect(tester.widget<Text>(find.byKey(const Key('thinking-quip'))).data,
+        isNot(first));
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 10));
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets(
       'rotates only after eight seconds, pauses in background, ends cleanly',
       (tester) async {
     final semantics = tester.ensureSemantics();
     await tester.pumpWidget(host());
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
     String quip() =>
         tester.widget<Text>(find.byKey(const Key('thinking-quip'))).data!;
     final first = quip();
@@ -51,6 +78,7 @@ void main() {
         (tester) async {
       await tester
           .pumpWidget(host(reduced: true, width: size.$1, scale: size.$2));
+      expect(find.byType(CircularProgressIndicator), findsNothing);
       final first =
           tester.widget<Text>(find.byKey(const Key('thinking-quip'))).data;
       await tester.pump(const Duration(seconds: 40));

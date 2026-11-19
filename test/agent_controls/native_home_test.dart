@@ -196,7 +196,11 @@ void main() {
         await t.ensureVisible(button);
         await t.tap(button);
         await t.tap(button);
-        await t.pumpAndSettle();
+        // Settle this control transaction, not the ongoing thinking animation
+        // plus unrelated two-second status polling. Keep exact wire assertions.
+        await t.pump();
+        await t.pump(const Duration(milliseconds: 300));
+        await t.pump();
         expect(f.posts.map((r) => r.url.path),
             ['/v1/runs/run_a/${clarify ? 'clarify' : 'approval'}']);
         expect(jsonDecode(f.posts.single.body), {

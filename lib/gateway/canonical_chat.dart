@@ -55,13 +55,65 @@ class CanonicalChat extends ChangeNotifier {
   int _epoch = 0;
   Map<String, dynamic>? _journal;
   GatewaySnapshot? snapshot;
-  String? streamText, _problem;
+  String? streamText, _problem, _notice;
   bool _previewTruncated = false;
-  String? get problem => _previewTruncated
-      ? 'Live preview limit reached. Further preview text is omitted; resync for the authoritative result.${_problem == null ? '' : '\n$_problem'}'
-      : _problem;
-  set problem(String? value) => _problem = value;
+  String? get problem {
+    final feedback = _problem ?? _notice;
+    return _previewTruncated
+        ? 'Live preview limit reached. Further preview text is omitted; resync for the authoritative result.${feedback == null ? '' : '\n$feedback'}'
+        : feedback;
+  }
+
+  set problem(String? value) {
+    _problem = value;
+    _notice = null;
+  }
+
+  /// Informational control/preview feedback does not settle the pending input.
+  /// Only its typed receipt, decision and observation lifecycle own thinking.
+  bool get replyInProgress {
+    if (!pending || !observable || needsUserAction) return false;
+    final state = pendingRun?.state;
+    if ([
+      GatewayRunState.complete,
+      GatewayRunState.failed,
+      GatewayRunState.cancelled,
+    ].contains(state)) {
+      return false;
+    }
+    return reconciling ||
+        (_problem == null &&
+            (_sending ||
+                state == GatewayRunState.queued ||
+                state == GatewayRunState.running));
+  }
+
   bool pending = false;
+  bool reconciling = false;
+  String? _terminalProblem;
+
+  /// The last client's receipt may belong to a previous, completed input.
+  GatewayRun? get pendingRun =>
+      pending && client.run?.inputId == pendingInputId ? client.run : null;
+  String? get pendingText {
+    if (!pending ||
+        messages.any((m) =>
+            m.role == 'user' && m.submissionId == _journal?['inputId'])) {
+      return null;
+    }
+    return _journal?['text'] as String?;
+  }
+
+  String get pendingStatus {
+    if (reconciling) return 'Reconnecting to check your reply';
+    if (problem != null) return problem!;
+    return switch (pendingRun?.state) {
+      GatewayRunState.queued => 'Waiting for its turn',
+      GatewayRunState.running => 'Working on your reply',
+      _ => _sending ? 'Sending your message' : 'Checking your reply',
+    };
+  }
+
   bool awaitingSnapshotSave = false;
   String? get heldInput =>
       _journal?['state'] == 'prepared' ? _journal!['text'] as String? : null;
@@ -343,11 +395,13 @@ class CanonicalChat extends ChangeNotifier {
       final accepted =
           await client.control(action, generation: generation, text: text);
       if (!_valid(epoch)) return false;
-      problem = accepted
-          ? (action == 'interrupt'
-              ? 'Stop requested. Waiting for Hermes to confirm the outcome.'
-              : 'Guidance accepted for current work; not a new turn.')
-          : 'Control was not confirmed. Keep your draft and check the session.';
+      if (accepted && action != 'interrupt') {
+        _notice = 'Guidance accepted for current work; not a new turn.';
+      } else {
+        problem = accepted
+            ? 'Stop requested. Waiting for Hermes to confirm the outcome.'
+            : 'Control was not confirmed. Keep your draft and check the session.';
+      }
       return accepted;
     } catch (_) {
       if (_valid(epoch)) {
@@ -485,6 +539,8 @@ class CanonicalChat extends ChangeNotifier {
     streamText = null;
     _previewTruncated = false;
     problem = null;
+    _terminalProblem = null;
+    notifyListeners();
     try {
       try {
         await secrets.write(journalKey, jsonEncode(journal));
@@ -511,9 +567,33 @@ class CanonicalChat extends ChangeNotifier {
         await secrets.write(journalKey, jsonEncode(journal));
         if (!valid()) return;
       } catch (_) {
-        if (valid()) {
-          problem =
-              'Outcome unconfirmed. Check the original session; do not resend.';
+        // Stay inside the original authority reservation. Recovery only reads
+        // exact pending-input identity and receipts; it never submits again.
+        reconciling = true;
+        if (!_closed) notifyListeners();
+        try {
+          for (final delay in [250, 500, 1000]) {
+            if (!valid() || !observable) break;
+            await Future<void>.delayed(Duration(milliseconds: delay));
+            if (!valid() || !observable) break;
+            try {
+              await _refresh();
+              if (!valid()) break;
+              if (journal['admissionId'] != null &&
+                  client.run?.state != GatewayRunState.unknown) {
+                problem = null;
+                return;
+              }
+            } catch (_) {
+              if (!valid()) break;
+            }
+          }
+          if (valid()) {
+            problem =
+                'Could not confirm your reply. Check the original session when connected. Your message will not be sent again.';
+          }
+        } finally {
+          reconciling = false;
         }
         rethrow;
       }
@@ -570,17 +650,29 @@ class CanonicalChat extends ChangeNotifier {
           final landed = value.messages.any((row) =>
               row.role == 'user' && row.submissionId == _journal!['inputId']);
           problem = landed
-              ? 'This input landed in the original session. Its terminal outcome is unproven. Nothing will be resent.'
-              : 'Admission ACK was lost. Ownership is unproven. Nothing will be resent.';
+              ? 'Your message landed in the original conversation, but we could not confirm its reply. Nothing will be sent again.'
+              : 'Could not confirm whether your message arrived. Check the original conversation; nothing will be sent again.';
         } else {
           final run = await client.recoverRun(
               admissionId: admission, inputId: _journal!['inputId'] as String);
           if (!_valid(epoch)) return false;
+          if (run.state != GatewayRunState.unknown) {
+            // An exact authoritative receipt supersedes an earlier failed read.
+            // Do not clear the journal or release followers until snapshot save.
+            problem = null;
+          }
           if ([
             GatewayRunState.complete,
             GatewayRunState.failed,
             GatewayRunState.cancelled
           ].contains(run.state)) {
+            _terminalProblem = switch (run.state) {
+              GatewayRunState.failed =>
+                'The server could not finish this reply. Check the session before continuing.',
+              GatewayRunState.cancelled =>
+                'This reply was stopped. Check the session before continuing.',
+              _ => null,
+            };
             _journal!['state'] = 'terminal';
             await secrets.write(_key, jsonEncode(_journal));
             if (!_valid(epoch)) return false;
@@ -591,8 +683,8 @@ class CanonicalChat extends ChangeNotifier {
             final landed = value.messages.any((row) =>
                 row.role == 'user' && row.submissionId == _journal!['inputId']);
             problem = landed
-                ? 'This input landed in the original session. Its terminal outcome is unproven. Nothing will be resent.'
-                : 'Admission is known, but its terminal outcome is unproven. Nothing will be resent.';
+                ? 'Your message landed in the original conversation, but we could not confirm its reply. Nothing will be sent again.'
+                : 'Your message was accepted, but its reply is not confirmed. Nothing will be sent again.';
           }
         }
       }
@@ -646,7 +738,7 @@ class CanonicalChat extends ChangeNotifier {
       pending = false;
     }
     awaitingSnapshotSave = false;
-    problem = null;
+    problem = _terminalProblem;
     if (!_closed) notifyListeners();
   }
 

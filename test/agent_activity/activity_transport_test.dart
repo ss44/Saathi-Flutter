@@ -7,6 +7,38 @@ import 'package:http/testing.dart';
 import 'package:saathi/agent_activity/activity_transport.dart';
 
 void main() {
+  test('public tool lifecycle survives SSE projection without private payloads',
+      () async {
+    final client = MockClient((_) async => http.Response(
+        'id: 1\ndata: ${jsonEncode({
+              'event': 'tool.started',
+              'run_id': 'run_actual',
+              'tool': 'search',
+              'preview': 'PRIVATE',
+              'arguments': 'PRIVATE',
+              'error': 'PRIVATE fixture',
+            })}\n\n',
+        200,
+        headers: {'content-type': 'text/event-stream'}));
+    final transport = ActivityTransport(
+        origin: Uri.parse('https://host'),
+        bearerKey: 'fixture',
+        isCurrent: () => true,
+        eventsSupported: true,
+        client: client);
+    final events = <ActivityTransportEvent>[];
+    final done = Completer<void>();
+    transport
+        .connect('run_actual')
+        .listen(events.add, onError: (Object _) {}, onDone: done.complete);
+    await done.future;
+    expect(events.single.data['tool'], 'search');
+    expect(events.single.data.containsKey('preview'), isFalse);
+    expect(events.single.data.containsKey('arguments'), isFalse);
+    expect(events.single.data.containsKey('error'), isFalse);
+    await transport.close();
+    client.close();
+  });
   test('localhost valid activity outlives deadline then idle disconnects',
       () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

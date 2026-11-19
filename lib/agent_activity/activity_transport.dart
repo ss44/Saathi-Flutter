@@ -183,7 +183,8 @@ class ActivityTransport {
               'input_tokens',
               'output_tokens',
               'api_calls',
-              'cost_usd'
+              'cost_usd',
+              'tool',
             };
             out.add(ActivityTransportEvent(
                 Map.unmodifiable({
@@ -193,7 +194,11 @@ class ActivityTransport {
                             e.value is String ||
                             e.value is num ||
                             e.value is bool))
-                      e.key: e.value
+                      e.key: e.key == 'tool' &&
+                              e.value is String &&
+                              _key.isNotEmpty
+                          ? (e.value as String).replaceAll(_key, '[redacted]')
+                          : e.value
                     else if (decoded['event'] == 'message.delta' &&
                         e.key == 'delta' &&
                         e.value is String)
