@@ -94,6 +94,10 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                     const SizedBox(height: 12),
                     const Text(
                         'Keys are held in platform secure storage. Chat history is stored on this device. Existing conversations stay bound to their original connection.'),
+                    if (controller.organization.saving ||
+                        controller.organization.hasUnsavedChanges)
+                      const Text(
+                          'Save or recover conversation details in Chats before changing connections.'),
                     const SizedBox(height: 20),
                     for (final c in controller.connections)
                       GestureDetector(

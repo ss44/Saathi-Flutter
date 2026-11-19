@@ -13,9 +13,11 @@ class AdaptiveChatShell extends StatelessWidget {
     required this.showSettings,
     required this.onSettingsChanged,
     required this.onDrawerChanged,
+    this.chatSettings,
   });
 
   final bool wide;
+  final Widget? chatSettings;
   final GlobalKey<ScaffoldState> scaffoldKey;
   final PreferredSizeWidget appBar;
   final Widget sidebar, body, settings;
@@ -42,7 +44,26 @@ class AdaptiveChatShell extends StatelessWidget {
         ),
       ),
     );
-    if (!wide) return conversation;
+    final workspace = Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(child: conversation),
+        if (chatSettings != null)
+          Offstage(
+            offstage: !wide,
+            child: ExcludeFocus(
+              excluding: !wide,
+              child: SizedBox(
+                width: (340 * MediaQuery.textScalerOf(context).scale(1))
+                    .clamp(340, 480)
+                    .toDouble(),
+                child: chatSettings,
+              ),
+            ),
+          ),
+      ],
+    );
+    if (!wide) return workspace;
 
     return PopScope<void>(
       canPop: !showSettings,
@@ -83,12 +104,18 @@ class AdaptiveChatShell extends StatelessWidget {
                 ],
               ),
               const VerticalDivider(width: 1),
-              SizedBox(width: 300, child: sidebar),
+              Offstage(
+                offstage: chatSettings != null && !showSettings,
+                child: ExcludeFocus(
+                  excluding: chatSettings != null && !showSettings,
+                  child: SizedBox(width: 300, child: sidebar),
+                ),
+              ),
               const VerticalDivider(width: 1),
               Expanded(
                 child: IndexedStack(
                   index: showSettings ? 1 : 0,
-                  children: [conversation, settings],
+                  children: [workspace, settings],
                 ),
               ),
             ],

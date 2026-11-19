@@ -23,10 +23,15 @@ class ConversationPresentation {
       {this.displayName = '',
       this.archived = false,
       this.personaId,
+      this.replyModel,
+      this.instructions,
       this.completions = const {}});
   final String displayName;
   final bool archived;
   final String? personaId;
+
+  /// Direct reply overrides, not native server configuration.
+  final String? replyModel, instructions;
 
   /// Stable authoritative reply identity -> durably seen. ACKs/deltas never enter.
   final Map<String, bool> completions;
@@ -41,18 +46,31 @@ class ConversationPresentation {
           bool? archived,
           String? personaId,
           bool clearPersona = false,
+          String? replyModel,
+          String? instructions,
           Map<String, bool>? completions}) =>
       ConversationPresentation(
           displayName: displayName ?? this.displayName,
           archived: archived ?? this.archived,
           personaId: clearPersona ? null : personaId ?? this.personaId,
+          replyModel: replyModel ?? this.replyModel,
+          instructions: instructions ?? this.instructions,
           completions: Map.unmodifiable(completions ?? this.completions));
   Map<String, dynamic> toJson() => {
         'displayName': displayName,
         'archived': archived,
         if (personaId != null) 'personaId': personaId,
+        if (replyModel != null) 'replyModel': replyModel,
+        if (instructions != null) 'instructions': instructions,
         'completions': completions
       };
+}
+
+/// A failed settings write whose compensating durable write may also have failed.
+class OrganizationWriteFailure extends StateError {
+  OrganizationWriteFailure(this.rollbackConfirmed)
+      : super('Could not save conversation details');
+  final bool rollbackConfirmed;
 }
 
 /// Separate bounded metadata; no backend configuration, messages or secrets.
@@ -71,16 +89,15 @@ class OrganizationStorage {
     } catch (_) {
       // SharedPreferences updates its memory cache BEFORE durability returns.
       // Restore that cache as well as trying compensating disk recovery.
+      var restored = false;
       try {
-        if (before == null) {
-          await preferences.remove(key);
-        } else {
-          await preferences.setString(key, before);
-        }
+        restored = before == null
+            ? await preferences.remove(key)
+            : await preferences.setString(key, before);
       } catch (_) {
         // Caller remains blocked with the exact unsaved candidate for recovery.
       }
-      throw StateError('Could not save conversation details');
+      throw OrganizationWriteFailure(restored);
     }
   }
 }
@@ -209,6 +226,16 @@ class ChatOrganization extends ChangeNotifier {
         final archived = data['archived'];
         final persona = data['personaId'];
         final completions = data['completions'];
+        final replyModel = data['replyModel'];
+        final instructions = data['instructions'];
+        if ((replyModel != null &&
+                (replyModel is! String ||
+                    replyModel.trim().isEmpty ||
+                    replyModel.length > 256)) ||
+            (instructions != null &&
+                (instructions is! String || instructions.length > 16000))) {
+          throw const FormatException('Invalid chat settings');
+        }
         if (name is! String ||
             name.length > 120 ||
             archived is! bool ||
@@ -229,6 +256,8 @@ class ChatOrganization extends ChangeNotifier {
             displayName: name,
             archived: archived,
             personaId: persona as String?,
+            replyModel: replyModel as String?,
+            instructions: instructions as String?,
             completions: Map.unmodifiable(Map<String, bool>.from(completions)));
       }
       final savedPersonas = json['personas'] ?? [];
@@ -323,8 +352,8 @@ class ChatOrganization extends ChangeNotifier {
   CapturedInstructions captureInstructions(ConversationIdentity key,
       {required String fallback}) {
     final persona = _personas[entry(key).personaId];
-    return CapturedInstructions(
-        persona?.id, persona?.revision ?? 0, persona?.instructions ?? fallback);
+    return CapturedInstructions(persona?.id, persona?.revision ?? 0,
+        persona?.instructions ?? entry(key).instructions ?? fallback);
   }
 
   List<ConversationIdentity> affectedChats(String personaId) => [
@@ -413,6 +442,52 @@ class ChatOrganization extends ChangeNotifier {
                 final reason = revalidatePersonaChange?.call();
                 if (reason != null) throw StateError(reason);
               });
+  }
+
+  /// Commit one conversation's direct reply settings atomically with its persona
+  /// choice. A selected shared persona remains shared and is not edited here.
+  Future<void> saveChatSettings(
+    ConversationIdentity key, {
+    required String replyModel,
+    required String instructions,
+    required String? personaId,
+    required String? Function() restriction,
+  }) async {
+    _checkIdentity(key);
+    if (replyModel.trim().isEmpty ||
+        replyModel.length > 256 ||
+        instructions.length > 16000) {
+      throw ArgumentError('Check the model and instruction lengths');
+    }
+    final reason = restriction();
+    if (reason != null) throw StateError(reason);
+    if (personaId != null && !_personas.containsKey(personaId)) {
+      throw StateError('Persona no longer exists');
+    }
+    final next = {
+      ..._entries,
+      key.storageKey: entry(key).copyWith(
+        replyModel: replyModel.trim(),
+        instructions: instructions,
+        personaId: personaId,
+        clearPersona: personaId == null,
+      ),
+    };
+    try {
+      await _save(next, validate: () {
+        final reason = restriction();
+        if (reason != null) throw StateError(reason);
+      });
+    } catch (error) {
+      // Only a confirmed rollback permits dropping this candidate. Otherwise
+      // keep the existing recovery barrier; cached values do not prove durability.
+      final uncertain =
+          error is OrganizationWriteFailure && !error.rollbackConfirmed;
+      if (!uncertain && identical(_pending, next) && !saving) {
+        discardPendingEdit();
+      }
+      rethrow;
+    }
   }
 
   Future<void> recordCompletion(

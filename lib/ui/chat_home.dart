@@ -3,6 +3,7 @@ import 'dart:async';
 import 'canonical_connection.dart';
 import 'canonical_controls.dart';
 import 'adaptive_chat_shell.dart';
+import 'chat_settings_panel.dart';
 
 import '../chat_organization/organization.dart';
 import '../chat_organization/organization_widgets.dart';
@@ -52,8 +53,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   late ActivityOwner activity;
   bool drawerOpen = false, drawerDragging = false, archivedView = false;
   bool desktopSettings = false;
+  ChatSession? settingsSession;
   bool wideNavigation = false;
   final chatScaffoldKey = GlobalKey<ScaffoldState>();
+  final chatSettingsKey = GlobalKey();
   Timer? drawerGestureTimer;
 
   void startDrawerGesture() {
@@ -196,7 +199,8 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
           (session.id, session.messages[index].id ?? 'index-$index'),
           GlobalKey.new);
 
-  void preserveTranscriptAnchor(bool selectionChanged) {
+  void preserveTranscriptAnchor(bool selectionChanged,
+      {bool layoutChanged = false}) {
     final session = c.current;
     final ids = [
       for (var i = 0; i < (session?.messages.length ?? 0); i++)
@@ -210,7 +214,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
       _messageKeys.clear();
       return;
     }
-    if (!changed ||
+    if ((!changed && !layoutChanged) ||
         session == null ||
         !scroll.hasClients ||
         scroll.position.extentAfter < 120) {
@@ -272,6 +276,11 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback(restore);
   }
 
+  void setChatSettings(ChatSession? session) {
+    preserveTranscriptAnchor(false, layoutChanged: true);
+    setState(() => settingsSession = session);
+  }
+
   void followOutput({bool newInput = false}) {
     if (!scroll.hasClients || !followStream) return;
     final owner = c;
@@ -323,6 +332,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
     preserveTranscriptAnchor(selectionChanged);
     if (selectionChanged) {
       desktopSettings = false;
+      settingsSession = null;
       if (shownOwner != null) composer.clear();
       shownOwner = c;
       shownSelection = c.selectionGeneration;
@@ -648,7 +658,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
           );
           final subtitle = session == null
               ? 'Your models. Your space.'
-              : '${names.isEmpty ? 'Unavailable connection' : names.first['name']} · ${session.model}';
+              : '${names.isEmpty ? 'Unavailable connection' : names.first['name']} · ${c.replyModel(session)}';
           return Listener(
             onPointerDown: (event) {
               if (!wide && event.position.dx <= 48) startDrawerGesture();
@@ -668,6 +678,15 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
               settings: desktopSettings
                   ? ConnectionsPage(controller: c, embedded: true)
                   : const SizedBox.shrink(),
+              chatSettings:
+                  settingsSession != null && identical(settingsSession, session)
+                      ? ChatSettingsPanel(
+                          key: chatSettingsKey,
+                          controller: c,
+                          session: session!,
+                          onClose: () => setChatSettings(null),
+                        )
+                      : null,
               onDrawerChanged: (open) {
                 setState(() {
                   drawerOpen = open;
@@ -717,6 +736,20 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                   ],
                 ),
                 actions: [
+                  if (wide &&
+                      session != null &&
+                      {
+                        TargetPlatform.linux,
+                        TargetPlatform.macOS,
+                        TargetPlatform.windows
+                      }.contains(Theme.of(context).platform))
+                    TextFieldTapRegion(
+                      child: IconButton(
+                        tooltip: 'Chat settings',
+                        onPressed: () => setChatSettings(session),
+                        icon: const Icon(Icons.tune_rounded),
+                      ),
+                    ),
                   if (!wide)
                     IconButton(
                       tooltip: 'New conversation',
@@ -739,7 +772,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                   if (session != null)
                     IconButton(
                       tooltip: 'Delete conversation',
-                      onPressed: c.busy ? null : clear,
+                      onPressed: c.canDeleteConversation ? clear : null,
                       icon: const Icon(Icons.delete_outline),
                     ),
                 ],
