@@ -5,6 +5,9 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:saathi/core/saathi_core.dart';
 import 'package:saathi/agent_runs/run_client.dart';
+import 'package:saathi/storage/saathi_store.dart';
+import 'package:saathi/ui/busy_thinking.dart';
+import 'package:saathi/ui/chat_home.dart';
 import 'package:saathi/ui/connections.dart';
 import 'package:saathi/ui/chat_controller.dart';
 import 'controller_http_test.dart' show makeStore;
@@ -24,44 +27,163 @@ const capabilities = {
 };
 
 void main() {
-  test(
-      'provider-bearing lost admission restarts with the same immutable body and idempotency key',
-      () async {
+  testWidgets(
+      'provider-bearing lost admission retains exact noncanonical journal without resubmission after restart',
+      (tester) async {
     final secrets = ReconcileSecrets();
+    final requests = <http.Request>[];
     final keys = <String>[], bodies = <String>[];
     Future<http.Response> handler(http.Request request) async {
+      requests.add(request);
       if (request.method == 'POST') {
         keys.add(request.headers['Idempotency-Key']!);
         bodies.add(request.body);
-        if (keys.length == 1) secrets.fail = true;
+        secrets.fail = true; // The server ACK cannot be durably recorded.
       }
       return answer(request);
     }
 
-    final controller = await setup(secrets, handler);
-    await controller.newSession(
-        controller.connections.single, 'same', 'instructions',
-        upstreamProvider: 'two');
-    await controller.send('original');
-    final original = controller.current!;
-    controller.dispose();
-    secrets.fail = false;
-    final restored = ChatController(controller.store,
-        runClientFactory: (root, key) =>
-            RunClient(root, key, client: MockClient(handler)));
-    await restored.load();
-    restored.select(restored.sessions.singleWhere((s) => s.id == original.id));
-    expect(restored.current!.upstreamProvider, 'two');
-    expect(await restored.send('new work'), false);
-    await restored.checkRunStatus();
-    expect(keys.length, 2);
-    expect(keys.toSet().length, 1);
-    expect(bodies.toSet().length, 1);
-    expect(jsonDecode(bodies.first)['provider'], 'two');
-    expect(jsonDecode(bodies.first)['model'], 'same');
-    expect(restored.current!.messages.map((m) => m.content),
-        ['original', 'actual']);
-    restored.dispose();
+    late ChatController controller;
+    late SaathiStore store;
+    late ChatSession original;
+    late String payload, journalKey, rawJournal;
+    late Map<String, dynamic> operation;
+    late Map<String, dynamic> originalSource;
+    await tester.runAsync(() async {
+      controller = await setup(secrets, handler);
+      store = controller.store;
+      controller.current!.messages.add(ChatMessage(
+          role: 'user', content: 'Nonempty private history from another chat'));
+      expect(controller.current!.messages, isNotEmpty);
+      await controller.persist();
+      await controller.newSession(
+          controller.connections.single, 'same', 'instructions',
+          upstreamProvider: 'two');
+      original = controller.current!;
+      originalSource = Map<String, dynamic>.from(controller.connections.single);
+      // A restored prepared operation can contain valid noncanonical JSON.
+      // Seed that exact record before the controller/ledger owns its identity.
+      final preparer = RunClient('https://host', 'fixture');
+      final prepared = await preparer.prepare(RunLedger(MemorySecrets()),
+          local: original.id,
+          input: 'original',
+          model: 'same',
+          provider: 'two',
+          instructions: 'instructions',
+          authorityEpoch: originalSource['authorityEpoch'] as String,
+          history: []);
+      preparer.close();
+      payload = const JsonEncoder.withIndent('  ')
+          .convert(jsonDecode(prepared.payload));
+      expect(payload, isNot(jsonEncode(jsonDecode(payload))));
+      journalKey = 'run.v1.${original.id}';
+      await secrets.write(
+          journalKey, jsonEncode({...prepared.data, 'payload': payload}));
+      controller.dispose();
+      controller = ChatController(store,
+          runClientFactory: (root, key) =>
+              RunClient(root, key, client: MockClient(handler)));
+      await controller.load();
+      controller
+          .select(controller.sessions.singleWhere((s) => s.id == original.id));
+      expect(controller.currentRun!.data['attempted'], isNot(true));
+      await controller
+          .checkRunStatus(); // Explicit first send, not uncertain replay.
+      expect(keys, [prepared.key]);
+      expect(bodies, [payload]);
+      expect(jsonDecode(payload)['provider'], 'two');
+      expect(jsonDecode(payload)['model'], 'same');
+      expect(payload, isNot(contains('Nonempty private history')));
+      rawJournal = (await secrets.read(journalKey))!;
+      operation = Map<String, dynamic>.from(jsonDecode(rawJournal) as Map);
+      expect(operation['attempted'], isTrue);
+      expect(operation['run'], isNull);
+      expect(operation['payload'], payload);
+      expect(operation['key'], keys.single);
+      expect(operation['local'], original.id);
+      expect(operation['session'], prepared.sessionId);
+      expect(operation['scope'], prepared.data['scope']);
+      expect(operation['created'], prepared.data['created']);
+      expect(operation['capturedInstructions'], 'instructions');
+      expect(operation['authorityEpoch'], originalSource['authorityEpoch']);
+      expect(operation['origin'], originalSource['url']);
+      controller.dispose();
+      secrets.fail = false;
+    });
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(() {
+      tester.view.resetDevicePixelRatio();
+      tester.view.resetPhysicalSize();
+    });
+    for (var restart = 0; restart < 2; restart++) {
+      await tester.runAsync(() async {
+        controller = ChatController(store,
+            runClientFactory: (root, key) =>
+                RunClient(root, key, client: MockClient(handler)));
+        await controller.load();
+        controller.select(
+            controller.sessions.singleWhere((s) => s.id == original.id));
+        expect(controller.current!.upstreamProvider, 'two');
+        expect(controller.current!.model, 'same');
+        expect(controller.current!.systemPrompt, 'instructions');
+        expect(controller.connections.single, originalSource);
+        expect(controller.currentRun!.data, operation);
+        expect(await controller.send('new work'), isFalse);
+        for (var check = 0; check < 3; check++) {
+          await controller.checkRunStatus();
+        }
+      });
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester
+          .pumpWidget(MaterialApp(home: ChatHome(controller: controller)));
+      for (final state in [
+        AppLifecycleState.inactive,
+        AppLifecycleState.hidden,
+        AppLifecycleState.paused,
+        AppLifecycleState.hidden,
+        AppLifecycleState.inactive,
+        AppLifecycleState.resumed
+      ]) {
+        tester.binding.handleAppLifecycleStateChanged(state);
+      }
+      await tester.pump(const Duration(seconds: 30));
+      await tester.runAsync(() async {
+        expect(await secrets.read(journalKey), rawJournal);
+      });
+      expect(controller.currentRun!.data, operation);
+      expect(controller.currentRun!.runId, isNull);
+      expect(controller.currentRun!.committed, isFalse);
+      expect(controller.runPending, isTrue);
+      expect(controller.showPendingThinking, isFalse);
+      expect(controller.current!.messages, isEmpty);
+      expect(controller.pendingText, 'original');
+      expect(
+          controller.runObservationProblem, contains('without its reply ID'));
+      expect(find.textContaining('without its reply ID'), findsOneWidget);
+      expect(find.byType(BusyThinking), findsNothing);
+      expect(find.text('actual'), findsNothing);
+      expect(requests.where((r) => r.url.path.startsWith('/v1/runs/')), isEmpty,
+          reason: 'No invented run ID or status GET');
+      expect(keys, [operation['key']]);
+      expect(bodies, [payload]);
+      expect(requests.every((r) => r.url.host == 'host'), isTrue);
+      expect(
+          requests.every((r) => r.headers['authorization'] == 'Bearer fixture'),
+          isTrue);
+      final preferences = jsonEncode({
+        for (final key in store.preferences.getKeys())
+          key: store.preferences.get(key)
+      });
+      expect(preferences, isNot(contains('fixture')));
+      expect(preferences, isNot(contains('"payload"')));
+      expect(preferences, isNot(contains('"original"')));
+      expect(preferences, isNot(contains(operation['key'] as String)));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+      await tester.pump();
+    }
   });
   for (final runs in [false, true]) {
     testWidgets(

@@ -33,6 +33,7 @@ void main() {
       await settle();
       expect(posts, 1);
       if (paused) {
+        c.pauseQueue('Paused by you');
         c.setQueueBackground(true);
         c.setQueueBackground(false);
       }
@@ -44,7 +45,10 @@ void main() {
           c.current!.messages.any((m) => m.content == 'Actual terminal answer'),
           isTrue);
       expect(posts, paused ? 1 : 2);
-      if (paused) expect(c.canResumeQueue, isTrue);
+      if (paused) {
+        expect(c.canResumeQueue, isTrue);
+        expect(c.queueStatus, 'Paused by you');
+      }
     });
   }
 }

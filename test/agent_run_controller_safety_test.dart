@@ -117,7 +117,8 @@ void main() {
       if (kind != 'dispose') c.dispose();
     });
   }
-  test('lost post-admission journal write restarts with exact key and body',
+  test(
+      'lost post-admission journal write stays uncertain without replay after restart',
       () async {
     final secrets = ReconcileSecrets();
     final keys = <String>[], bodies = <String>[];
@@ -140,13 +141,17 @@ void main() {
     await restored.load();
     expect(await restored.send('new work'), false);
     await restored.checkRunStatus();
-    expect(keys.length, 2);
+    expect(keys.length, 1);
     expect(keys.toSet().length, 1);
     expect(bodies.toSet().length, 1);
-    expect(restored.current!.messages.map((m) => m.content),
-        ['original', 'actual']);
+    expect(restored.current!.messages, isEmpty);
+    expect(restored.runPending, isTrue);
+    expect(restored.currentRun!.key, keys.single);
+    expect(restored.currentRun!.payload, bodies.single);
+    expect(restored.runObservationProblem, contains('cannot look it up'));
     await restored.checkRunStatus();
-    expect(restored.current!.messages.length, 2);
+    expect(keys.length, 1);
+    expect(restored.current!.messages, isEmpty);
     restored.dispose();
   });
   test(

@@ -613,9 +613,15 @@ class ChatController extends ChangeNotifier {
       );
   final Map<ChatSession, QueuedFollowup> _uncertain = {};
   final Map<ChatSession, String> _paused = {};
+  final Map<ChatSession, String> _recoveryPauses = {};
+  final Map<ChatSession, String> _foregroundPauses = {};
+  final Set<QueuedFollowup> _foregroundHeld = {};
   QueuedFollowup? get uncertainInput => _uncertain[current];
-  String? get queueStatus =>
-      uncertainInput != null || outbox.isNotEmpty ? _paused[current] : null;
+  String? get queueStatus => uncertainInput != null || outbox.isNotEmpty
+      ? _paused[current] ??
+          _recoveryPauses[current] ??
+          (unsavedChanges ? 'Waiting to save your reply.' : null)
+      : null;
   bool _draining = false, _background = false;
   int _catalogGeneration = 0;
   bool _catalogPaused = false;
@@ -775,6 +781,11 @@ class ChatController extends ChangeNotifier {
     bool allSources = false,
   }) {
     final source = session ?? current;
+
+    _foregroundPauses
+        .removeWhere((chat, _) => allSources || identical(chat, source));
+    _foregroundHeld
+        .removeWhere((item) => allSources || identical(item.session, source));
     final preparing = _preparing;
     if (preparing != null &&
         (allSources || identical(preparing.source.session, source))) {
@@ -790,13 +801,40 @@ class ChatController extends ChangeNotifier {
   }
 
   void setQueueBackground(bool background) {
+    if (_background == background) return;
     _background = background;
     if (background) {
       _catalogGeneration++;
+      final previous = Map<ChatSession, String>.of(_paused);
+      final preparing = _preparing?.source;
       pauseQueue(
-        'Queue paused while Saathi is in the background. Return and choose Resume.',
+        'Messages are held while Saathi is in the background.',
         allSources: true,
       );
+      _paused.addAll(previous);
+      for (final entry in _paused.entries) {
+        if (!previous.containsKey(entry.key)) {
+          _foregroundPauses[entry.key] = entry.value;
+        }
+      }
+      if (preparing != null && !previous.containsKey(preparing.session)) {
+        _foregroundHeld.add(preparing);
+      }
+    } else {
+      final session = current;
+      if (session != null &&
+          _paused[session] == _foregroundPauses[session] &&
+          _foregroundPauses.containsKey(session) &&
+          !readOnly &&
+          !_uncertain.containsKey(session) &&
+          _outbox
+              .where((item) => identical(item.session, session))
+              .every(_bound)) {
+        _paused.remove(session);
+        _foregroundPauses.remove(session);
+      }
+      _scheduleSelectedQueue();
+      notifyListeners();
     }
   }
 
@@ -867,6 +905,14 @@ class ChatController extends ChangeNotifier {
         final result = await _dispatch(item.text, source: item);
         if (result == _DispatchResult.notDispatched) {
           _outbox.insert(0, item);
+          if (_foregroundHeld.remove(item) &&
+              !_background &&
+              _bound(item) &&
+              !_paused.containsKey(item.session) &&
+              !unsavedChanges &&
+              !organizationBlocked) {
+            break; // Fresh dispatch permission, same accepted unsent input.
+          }
           _paused.putIfAbsent(
             item.session,
             () => 'Not sent. Queue held. Choose Resume when ready.',
@@ -874,6 +920,7 @@ class ChatController extends ChangeNotifier {
           break;
         }
         _canonicalHeldOwners.remove(item);
+        _foregroundHeld.remove(item);
         if (result == _DispatchResult.dispatchedUnknown) {
           _uncertain[item.session] = item;
           _paused[item.session] =
@@ -958,6 +1005,7 @@ class ChatController extends ChangeNotifier {
   String? get error => _error ?? _terminalProblems[current];
   set error(String? value) => _error = value;
   String? get pendingText {
+    if (canonical?.pendingText != null) return canonical!.pendingText;
     final op = currentRun;
     if (op != null &&
         !current!.messages.any((m) => m.id == 'input-${op.key}')) {
@@ -973,7 +1021,120 @@ class ChatController extends ChangeNotifier {
   final _streamText = <String, String>{};
   final _streamCursors = <String, BigInt>{};
   final _observationProblems = <String, String>{};
+  final _statusFailures = <String, int>{};
+  final _reportedActivity = <String, String>{};
+  RunOperation? _dispatchRun;
+  bool get _preparingReply =>
+      busy && identical(_dispatchingSession, current) && _dispatchRun == null;
+  String? get reportedActivity =>
+      !_preparingReply && currentRun?.snapshot.terminal == false
+          ? _reportedActivity[currentRun?.key]
+          : null;
+  // A failed observation or answer does not resolve an authoritative decision.
+  // Clarification is represented by pending controls on an otherwise running run.
+  bool get _awaitingRunDecision {
+    final snapshot = currentRun?.snapshot;
+    return snapshot != null &&
+        !snapshot.terminal &&
+        (snapshot.state == RunState.waitingForApproval ||
+            snapshot.pendingControls.isNotEmpty);
+  }
+
+  bool get showPendingThinking {
+    final owner = canonical;
+    if (owner != null) {
+      if (canonicalQueueSaving && !owner.pending) return true;
+      return owner.replyInProgress;
+    }
+    if (_preparingReply) return true;
+    final op = currentRun;
+    if (op == null) return busy && identical(_dispatchingSession, current);
+    if (op.snapshot.terminal || _awaitingRunDecision) return false;
+    if (busy && identical(_dispatchingSession, current)) return true;
+    return runPending &&
+        (op.snapshot.state == RunState.queued ||
+            op.snapshot.state == RunState.running ||
+            (_statusFailures[op.key] ?? 0) > 0) &&
+        (_statusFailures[op.key] ?? 0) <= 3;
+  }
+
+  bool _canPoll(RunOperation op) =>
+      !op.committed &&
+      op.runId != null &&
+      !op.snapshot.terminal &&
+      (op.snapshot.state != RunState.unknown ||
+          (_statusFailures[op.key] ?? 0) > 0) &&
+      (_statusFailures[op.key] ?? 0) <= 3;
+
+  void _statusUnavailable(ChatSession session, RunOperation op) {
+    final failures = (_statusFailures[op.key] ?? 0) + 1;
+    _statusFailures[op.key] = failures;
+    _observationProblems[op.key] = failures <= 3
+        ? 'Reconnecting to check your reply'
+        : 'Could not check your reply. Use Check status when the connection is back. Your message will not be sent again.';
+    if (failures > 3) {
+      _recoveryPauses[session] =
+          'Check your reply before resuming queued messages.';
+    }
+    _schedulePoll();
+  }
+
   String? get runObservationProblem => _observationProblems[currentRun?.key];
+
+  // Only call after a validated original-run status GET, never a control ACK.
+  // Recovery belongs to the existing poll owner, not to the UI that read it.
+  void _statusObserved(RunOperation op, {required bool Function() isCurrent}) {
+    if (!isCurrent()) throw StateError('Stale observation');
+    if (op.snapshot.data.containsKey('pending_controls')) {
+      final controls = PendingControlsSnapshot.fromJson(
+        ControlScope(
+          sourceId: op.localId,
+          runId: op.runId!,
+          authorityToken: op,
+        ),
+        op.snapshot.data,
+      );
+      if (controls.hasMalformedControls) {
+        // Retain safely displayable requests (including denial), but do not
+        // grant a new observation budget from malformed control details.
+        return;
+      }
+    }
+    _statusFailures.remove(op.key);
+    _observationProblems.remove(op.key);
+    // This does not grant dispatch authority or remove intentional queue pauses.
+    _schedulePoll();
+  }
+
+  /// Presentation of observed state, not decorative thinking or hidden reasoning.
+  String get pendingStatus => canonical != null
+      ? (canonicalQueueSaving && !canonical!.pending
+          ? 'Preparing your message'
+          : canonical!.pendingStatus)
+      : _preparingReply
+          ? 'Sending your message'
+          : _awaitingRunDecision
+              ? 'Your decision is needed'
+              : runObservationProblem != null
+                  ? ((_statusFailures[currentRun?.key] ?? 0) <= 3 &&
+                          currentRun?.runId != null
+                      ? 'Reconnecting to check your reply'
+                      : 'Check your message’s status')
+                  : switch (currentRun?.snapshot.state) {
+                      RunState.queued => 'Waiting for its turn',
+                      RunState.running => 'Working on your reply',
+                      RunState.stopping => 'Waiting for the server to stop',
+                      RunState.waitingForApproval => 'Your decision is needed',
+                      RunState.failed =>
+                        'The server could not finish this reply',
+                      RunState.cancelled ||
+                      RunState.interrupted =>
+                        'This reply was stopped',
+                      RunState.completed => 'Reply received',
+                      _ => busy && identical(_dispatchingSession, current)
+                          ? 'Sending your message'
+                          : 'Check your message’s status',
+                    };
   String? get streamingText =>
       canonical?.streamText ??
       (runPending ? _streamText[currentRun?.key] : null);
@@ -996,6 +1157,20 @@ class ChatController extends ChangeNotifier {
       return;
     }
     _streamCursors[op.key] = sequence;
+    final kind = event['event'];
+    final tool = event['tool'];
+    // Only public lifecycle labels. Never render arguments, results, previews
+    // or reasoning payloads as thinking telemetry.
+    if (['tool.started', 'tool.completed', 'tool.failed'].contains(kind) &&
+        tool is String &&
+        RegExp(r'^[a-zA-Z0-9_.-]{1,64}$').hasMatch(tool)) {
+      _reportedActivity[op.key] = switch (kind) {
+        'tool.started' => 'Using $tool',
+        'tool.completed' => 'Finished $tool',
+        _ => 'Tool could not finish: $tool',
+      };
+      notifyListeners();
+    }
     if (event['event'] == 'message.delta' && event['delta'] is String) {
       final text = '${_streamText[op.key] ?? ''}${event['delta']}';
       if (text.length <= 256 * 1024) _streamText[op.key] = text;
@@ -1092,12 +1267,14 @@ class ChatController extends ChangeNotifier {
       if (!await client.discover() || !valid()) return false;
       _rememberRunFeatures(connection, client);
       await client.status(op, _ledger, isCurrent: valid);
+      _statusObserved(op, isCurrent: valid);
       if (op.snapshot.terminal) {
         await _reconcile(session, connection, op);
         return false;
       }
       await client.control(op, guidance: guidance, isCurrent: valid);
       await client.status(op, _ledger, isCurrent: valid);
+      _statusObserved(op, isCurrent: valid);
       await _reconcile(session, connection, op);
       if (valid() && !op.snapshot.terminal) {
         error = guidance == null
@@ -1316,6 +1493,20 @@ class ChatController extends ChangeNotifier {
           session.canonicalProfileId != owner.client.profileId) {
         return;
       }
+      Future<void> settleSnapshot() async {
+        if (!terminal) return;
+        if ([GatewayRunState.failed, GatewayRunState.cancelled]
+            .contains(owner.client.run?.state)) {
+          _paused.putIfAbsent(
+            session,
+            () =>
+                owner.problem ??
+                'Review the interrupted reply before continuing.',
+          );
+        }
+        await owner.markSnapshotSaved();
+      }
+
       final snapshot = owner.snapshot;
       final emptyOutcome = switch (owner.client.run?.state) {
         GatewayRunState.complete => _emptyFinalMessage,
@@ -1379,13 +1570,13 @@ class ChatController extends ChangeNotifier {
           }
           await persist();
           _savedCanonicalSnapshot = snapshot;
-          if (terminal) await owner.markSnapshotSaved();
+          await settleSnapshot();
           error = null;
         };
         await _canonicalSaveRetry!();
         _canonicalSaveRetry = null;
       } else if (terminal) {
-        await owner.markSnapshotSaved();
+        await settleSnapshot();
       }
       _scheduleSelectedQueue();
     } catch (_) {
@@ -1502,8 +1693,10 @@ class ChatController extends ChangeNotifier {
     final origin = connection['url'];
     final controlRevision = _controlRevisions[connection] ??= Object();
     final selection = selectionGeneration;
+    final generation = _runsGeneration;
     bool valid() =>
         isOwnerCurrent() &&
+        generation == _runsGeneration &&
         selection == selectionGeneration &&
         !changingConnection &&
         identical(controlRevision, _controlRevisions[connection]) &&
@@ -1550,7 +1743,11 @@ class ChatController extends ChangeNotifier {
             // the normal poll. Wake only through the existing durable,
             // source-bound queue gate; explicit pauses remain intact.
             _scheduleSelectedQueue();
-            return PendingControlsSnapshot.fromJson(scope, snapshot.data);
+            final controls =
+                PendingControlsSnapshot.fromJson(scope, snapshot.data);
+            _statusObserved(operation, isCurrent: valid);
+            notifyListeners();
+            return controls;
           },
           postDecision: (action, body) async {
             if (!valid()) throw StateError('Stale controls');
@@ -1587,6 +1784,19 @@ class ChatController extends ChangeNotifier {
   /// Initial native-run suspension need not block a foreground setup flow.
   /// Actual lifecycle/owner revocation always pauses catalogs by default.
   void pauseRuns(bool paused, {bool pauseCatalog = true}) {
+    if (_runsPaused && !paused) {
+      // A genuine return grants another bounded read-only check, not permission
+      // to replay a missing admission or clear an explicit queue pause.
+      for (final op in runs.values) {
+        if (!op.committed &&
+            !op.snapshot.terminal &&
+            op.runId != null &&
+            (_statusFailures[op.key] ?? 0) > 3) {
+          _statusFailures[op.key] = 1;
+          _observationProblems[op.key] = 'Reconnecting to check your reply';
+        }
+      }
+    }
     if (paused) {
       _canonical?.suspend();
       _runsGeneration++;
@@ -1604,25 +1814,19 @@ class ChatController extends ChangeNotifier {
 
   void _schedulePoll() {
     _poll?.cancel();
-    if (_runsPaused ||
-        _disposed ||
-        !runs.values.any(
-          (r) =>
-              !r.committed &&
-              r.runId != null &&
-              !r.snapshot.terminal &&
-              r.snapshot.state != RunState.unknown,
-        )) {
+    if (_runsPaused || _disposed || !runs.values.any(_canPoll)) {
       return;
     }
-    _poll = Timer(const Duration(seconds: 2), () async {
+    final failures = runs.values
+        .where(_canPoll)
+        .map((op) => _statusFailures[op.key] ?? 0)
+        .reduce((a, b) => a < b ? a : b);
+    _poll =
+        Timer(Duration(seconds: failures == 0 ? 2 : 1 << failures), () async {
       for (final session in sessions.toList()) {
         if (_runsPaused || _disposed) break;
         final op = runs[session.id];
-        if (op != null &&
-            !op.committed &&
-            op.runId != null &&
-            !op.snapshot.terminal) {
+        if (op != null && _canPoll(op)) {
           await checkRunStatus(sessionId: session.id);
         }
       }
@@ -1676,6 +1880,9 @@ class ChatController extends ChangeNotifier {
     if (!isCurrent()) return;
     op.data['committed'] = true;
     op.data['journalDirty'] = false;
+    if (op.snapshot.terminal) {
+      _recoveryPauses.remove(session);
+    }
   }
 
   Future<void> _reconcile(
@@ -1768,20 +1975,20 @@ class ChatController extends ChangeNotifier {
       } catch (_) {
         if (!isCurrent()) return;
         unsavedChanges = true;
-        pauseQueue(
-          'Queue paused until the response is saved. Then choose Resume.',
-          allSources: true,
-        );
+        // unsavedChanges gates every queue without replacing explicit pauses.
         error =
             'Response received but not saved. Try saving again; do not resend.';
       }
     } else if (snapshot.terminal) {
+      final result = snapshot.state == RunState.failed
+          ? 'The server could not finish this reply'
+          : 'This reply was stopped';
       _paused[session] =
-          'Run ${snapshot.status}. Prior work may have had side effects. Review before choosing Resume.';
+          '$result. Prior work may have had side effects. Review before choosing Resume.';
       try {
         await _commitRun(session, connection, op);
         if (!isCurrent()) return;
-        error = 'Run ${snapshot.status}. Prior work may have had side effects.';
+        error = '$result. Prior work may have had side effects.';
       } catch (_) {
         if (!isCurrent()) return;
         unsavedChanges = true;
@@ -1790,8 +1997,8 @@ class ChatController extends ChangeNotifier {
     }
     if (snapshot.state == RunState.unknown ||
         snapshot.state == RunState.unrecognized) {
-      _paused[session] =
-          'Run outcome unknown. Check the original run; never resend it with a fresh key.';
+      _recoveryPauses[session] =
+          'The reply is not confirmed. Check its status before queued messages continue. Nothing will be sent again.';
     }
     if (isCurrent()) notifyListeners();
   }
@@ -1814,11 +2021,21 @@ class ChatController extends ChangeNotifier {
       final c = connections.singleWhere((c) => c['id'] == session.connectionId);
       bool isCurrent() =>
           generation == _runsGeneration && _active(session, c, op);
-      client = await _runClient(c, isCurrent: isCurrent);
-      if (!isCurrent()) return;
-      if (op.data['authorityEpoch'] != c['authorityEpoch']) {
-        throw StateError('Original connection creation required');
+      bool hasOriginalAuthority() {
+        if (op.data['authorityEpoch'] == c['authorityEpoch']) return true;
+        const problem =
+            'This reply belongs to a removed or replaced connection. Nothing was sent again.';
+        _statusFailures[op.key] = 4;
+        _observationProblems[op.key] = problem;
+        _recoveryPauses[session] = problem;
+        if (identical(current, session)) error = problem;
+        return false;
       }
+
+      // A replacement connection must not even lend its key to the old run.
+      if (!hasOriginalAuthority()) return;
+      client = await _runClient(c, isCurrent: isCurrent);
+      if (!isCurrent() || !hasOriginalAuthority()) return;
       client.bind(op);
       if (op.snapshot.terminal) {
         await _reconcile(session, c, op);
@@ -1828,7 +2045,13 @@ class ChatController extends ChangeNotifier {
       if (!isCurrent()) return;
       _rememberRunFeatures(c, client);
       if (op.runId == null) {
-        // Explicit reconnect only: identical key/body, within the replay window.
+        if (op.data['attempted'] == true) {
+          _observationProblems[op.key] =
+              'Could not confirm receipt of your message. This server cannot look it up without its reply ID. Check the original session; nothing will be sent again.';
+          return;
+        }
+        // A prepared operation that provably never reached dispatch may still
+        // be sent by an explicit user action. Uncertain sends never are.
         await client.submit(op, _ledger, isCurrent: isCurrent);
       }
       if (op.runId != null) {
@@ -1838,25 +2061,48 @@ class ChatController extends ChangeNotifier {
             _ledger,
             acknowledgedSideEffects: true,
             isCurrent: isCurrent,
+            onObserved: () async {
+              _statusObserved(op, isCurrent: isCurrent);
+              await _reconcile(session, c, op);
+            },
           );
         } else {
           await client.status(op, _ledger, isCurrent: isCurrent);
         }
         if (!isCurrent()) return;
-        _observationProblems.remove(op.key);
+        _statusObserved(op, isCurrent: isCurrent);
         await _reconcile(session, c, op);
       }
       error ??= op.runId == null
           ? 'Admission saved; outcome unknown. Reconnect without sending again.'
           : null;
     } catch (_) {
-      _observationProblems[op.key] =
-          'Could not confirm this run. Check status using the original connection; nothing will be resent automatically.';
-      error =
-          'Could not confirm this run. Keep its original connection and use Reconnect. Do not resend.';
+      final connection =
+          connections.where((c) => c['id'] == session.connectionId).firstOrNull;
+      if (generation != _runsGeneration ||
+          connection == null ||
+          !_active(session, connection, op) ||
+          op.data['authorityEpoch'] != connection['authorityEpoch']) {
+        return;
+      }
+      // A resolution can become obsolete after its authoritative status read.
+      // Preserve terminal settlement rather than turning that into a read error.
+      if (op.snapshot.terminal) {
+        await _reconcile(session, connection, op);
+        return;
+      }
+      if (op.runId != null) {
+        _statusUnavailable(session, op);
+      } else {
+        _observationProblems[op.key] =
+            'Could not confirm receipt of your message. Keep the original connection; nothing was sent again.';
+      }
     } finally {
       client?.close();
       busy = false;
+      // A manual check after exhaustion may observe ongoing work. Restore the
+      // existing bounded poll owner; a running snapshot alone is not progress.
+      _schedulePoll();
       _scheduleSelectedQueue();
       notifyListeners();
     }
@@ -1918,6 +2164,7 @@ class ChatController extends ChangeNotifier {
       );
       if (!isCurrent()) throw StateError('Stale run');
       runs[session.id] = op;
+      _dispatchRun = op;
       await client.submit(
         op,
         _ledger,
@@ -1939,6 +2186,11 @@ class ChatController extends ChangeNotifier {
             !_active(session, connection, op)) {
           return _DispatchResult.admitted;
         }
+        _statusObserved(
+          op,
+          isCurrent: () =>
+              generation == _runsGeneration && _active(session, connection, op),
+        );
         await _reconcile(session, connection, op);
       }
       _schedulePoll();
@@ -2288,6 +2540,7 @@ class ChatController extends ChangeNotifier {
           'Conversation is still not saved. Keep Saathi open and try again.';
     } finally {
       busy = false;
+      _scheduleSelectedQueue();
       notifyListeners();
     }
   }
@@ -2401,6 +2654,7 @@ class ChatController extends ChangeNotifier {
           ),
     );
     _dispatchingSession = session;
+    _dispatchRun = null;
     _preparing = permission;
     busy = true;
     _terminalProblems.remove(session);
@@ -2420,9 +2674,10 @@ class ChatController extends ChangeNotifier {
           await owner.send(text, inputId: permission.source.replyId);
         } catch (_) {
           if (!owner.pending) rethrow;
-          error = owner.problem ??
-              'Native outcome unconfirmed. No input will be resent.';
+          // The owner retains the original journal and plain-language recovery.
+          // An acknowledgement loss is not a confirmed execution failure.
         }
+        if (owner.awaitingSnapshotSave) await refreshCanonical();
         return _DispatchResult.admitted;
       }
       final runResult = await _sendRun(session, connection, text, permission);
@@ -2475,11 +2730,15 @@ class ChatController extends ChangeNotifier {
           : _DispatchResult.notDispatched;
     } catch (_) {
       if (runs[session.id] != null && !runs[session.id]!.committed) {
-        _observationProblems[runs[session.id]!.key] =
-            'Native outcome unconfirmed. Check status; this input will not be resent automatically.';
-        _paused[session] =
-            'Native outcome unconfirmed. Check status using the original operation; do not resend.';
-        error = _paused[session];
+        final op = runs[session.id]!;
+        if (op.runId != null && !op.snapshot.terminal) {
+          _statusUnavailable(session, op);
+        } else {
+          _observationProblems[op.key] =
+              'Could not confirm receipt of your message. Check the original session; your message will not be sent again.';
+          _paused[session] =
+              'Check your message before resuming queued messages.';
+        }
         return _DispatchResult.admitted;
       }
       error =
@@ -2490,6 +2749,7 @@ class ChatController extends ChangeNotifier {
     } finally {
       if (identical(_preparing, permission)) _preparing = null;
       if (identical(_dispatchingSession, session)) _dispatchingSession = null;
+      _dispatchRun = null;
       core?.close();
       busy = false;
       pendingText = null;
@@ -2498,7 +2758,7 @@ class ChatController extends ChangeNotifier {
         _paused[session] =
             'Outcome unknown. The last request may have executed. It will not be sent again. Start a new conversation safely, or explicitly abandon this held outbox.';
       }
-      if (!_draining && unsavedChanges) {
+      if (!_draining && unsavedChanges && runs[session.id] == null) {
         pauseQueue(
           'Queue paused until the response is saved. Then choose Resume.',
           allSources: true,

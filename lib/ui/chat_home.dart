@@ -27,7 +27,6 @@ import '../update_host.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
-import '../agent_runs/run_client.dart';
 import '../agent_controls/agent_controls.dart';
 import '../agent_controls/agent_controls_panel.dart';
 import 'chat_controller.dart';
@@ -626,14 +625,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
               if (mounted) syncServers();
             });
           }
-          final run = c.currentRun;
-          final thinking = run == null
-              ? session != null &&
-                  c.workState(session) == ConversationWorkState.working
-              : c.runPending &&
-                  c.runObservationProblem == null &&
-                  (run.snapshot.state == RunState.queued ||
-                      run.snapshot.state == RunState.running);
+          final thinking = c.showPendingThinking;
           final localMatches = searchLocalHistory(
             c.sessions.reversed.where(
               (s) =>
@@ -1155,16 +1147,26 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                   padding: EdgeInsets.symmetric(
                                                     vertical: 18,
                                                   ),
-                                                  child: run == null
-                                                      ? const BusyThinking(
-                                                          busy: true,
-                                                        )
-                                                      : const Text(
-                                                          'Waiting for the server response',
-                                                          key: Key(
-                                                            'native-waiting',
-                                                          ),
-                                                        ),
+                                                  child: Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      const BusyThinking(
+                                                          busy: true),
+                                                      Text(c.pendingStatus,
+                                                          key: const Key(
+                                                              'pending-status')),
+                                                      if (c.reportedActivity !=
+                                                              null &&
+                                                          c.runObservationProblem ==
+                                                              null)
+                                                        Text(
+                                                            c.reportedActivity!,
+                                                            key: const Key(
+                                                                'reported-activity')),
+                                                    ],
+                                                  ),
                                                 ),
                                             ],
                                           ),
@@ -1200,9 +1202,14 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                               children: [
                                                 Expanded(
                                                   child: Text(
-                                                    c.canonical!.problem ??
+                                                    (c.canonical!.reconciling
+                                                            ? c.canonical!
+                                                                .pendingStatus
+                                                            : c.canonical!
+                                                                .problem) ??
                                                         (c.runPending
-                                                            ? 'Hermes is working'
+                                                            ? c.canonical!
+                                                                .pendingStatus
                                                             : 'Attached to Hermes'),
                                                   ),
                                                 ),
@@ -1223,8 +1230,8 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                 ? 'Queued · Kept only while Saathi stays open.'
                                                 : (c.canonicalQueueSaving ||
                                                         c.unsavedChanges
-                                                    ? 'Queued · Waiting to save. Keep Saathi open.'
-                                                    : 'Queued · Saved for this Hermes session.'),
+                                                    ? 'Waiting on this device · Saving before send.'
+                                                    : 'Waiting on this device · Not yet sent to Hermes.'),
                                             style: TextStyle(fontSize: 12),
                                           ),
                                         if (c.queueStatus != null)
@@ -1292,7 +1299,9 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                         for (final item in c.outbox)
                                           ListTile(
                                             contentPadding: EdgeInsets.zero,
-                                            title: const Text('Queued'),
+                                            title: Text(c.canonical == null
+                                                ? 'Queued'
+                                                : 'Not yet sent'),
                                             subtitle: Text(
                                               item.text,
                                               maxLines: 2,
@@ -1399,7 +1408,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                         children: [
                                           Expanded(
                                             child: Text(
-                                              'Run: ${c.currentRun!.snapshot.status}',
+                                              c.pendingStatus,
                                               maxLines: 1,
                                               overflow: TextOverflow.ellipsis,
                                             ),

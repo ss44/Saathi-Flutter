@@ -172,6 +172,41 @@ Future<(ChatController, NativeHost, GateSecrets)> setup() async {
 }
 
 void main() {
+  test('accepted canonical input thinks immediately while device journal saves',
+      () async {
+    final (c, host, secrets) = await setup();
+    secrets.gatePrefix = 'gateway.fifo';
+    final gate = secrets.gate = Completer<void>();
+    try {
+      expect(c.submit('first'), isTrue);
+      expect(c.showPendingThinking, isTrue);
+      expect(c.pendingStatus, 'Preparing your message');
+      expect(
+          host.requests.where((r) => r['method'] == 'prompt.submit'), isEmpty);
+    } finally {
+      gate.complete();
+      final deadline = Stopwatch()..start();
+      while ((c.canonical!.client.run?.state != GatewayRunState.running ||
+              c.busy) &&
+          deadline.elapsed < const Duration(seconds: 3)) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+      expect(c.canonical!.client.run?.state, GatewayRunState.running);
+      expect(c.busy, isFalse,
+          reason:
+              'Settle admitted dispatch before closing the controlled host');
+    }
+  });
+  test('confirmed canonical completion stops thinking before snapshot storage',
+      () async {
+    final (c, host, _) = await setup();
+    await c.send('first');
+    host.terminal = true;
+    await c.canonical!.refresh();
+    expect(c.runPending, isTrue,
+        reason: 'durable snapshot save still gates followers');
+    expect(c.showPendingThinking, isFalse);
+  });
   test(
       'canonical completion belongs to original A and organization while B is selected',
       () async {

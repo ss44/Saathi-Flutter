@@ -19,6 +19,8 @@ class _BusyThinkingState extends State<BusyThinking>
       ThinkingShuffleBag(visibleThinkingPhrases, random: widget.random);
   late String _quip = _bag.next();
   Timer? _timer;
+  Timer? _loader;
+  double _turns = 0;
   bool _reduced = false;
   bool _foreground = true;
 
@@ -51,18 +53,26 @@ class _BusyThinkingState extends State<BusyThinking>
   }
 
   void _syncTimer() {
-    _timer?.cancel();
-    _timer = null;
-    if (widget.busy && _foreground && !_reduced) {
-      _timer = Timer.periodic(const Duration(seconds: 8), (_) {
-        setState(() => _quip = _bag.next());
-      });
+    if (!widget.busy || !_foreground || _reduced) {
+      _timer?.cancel();
+      _timer = null;
+      _loader?.cancel();
+      _loader = null;
+      return;
     }
+    // Native status/stream rebuilds must not restart the phrase cadence.
+    _loader ??= Timer.periodic(const Duration(milliseconds: 800), (_) {
+      setState(() => _turns += .5);
+    });
+    _timer ??= Timer.periodic(const Duration(seconds: 8), (_) {
+      setState(() => _quip = _bag.next());
+    });
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _loader?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -77,7 +87,18 @@ class _BusyThinkingState extends State<BusyThinking>
           child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.hourglass_empty_rounded, size: 18),
+          if (_reduced || !_foreground)
+            const Icon(Icons.hourglass_empty_rounded, size: 18)
+          else
+            AnimatedRotation(
+              key: const Key('thinking-loader'),
+              turns: _turns,
+              duration: const Duration(milliseconds: 500),
+              child: const SizedBox.square(
+                dimension: 18,
+                child: CircularProgressIndicator(value: .7, strokeWidth: 2),
+              ),
+            ),
           const SizedBox(width: 12),
           Expanded(
               child: Column(

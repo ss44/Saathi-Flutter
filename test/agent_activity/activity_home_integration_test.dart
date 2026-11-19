@@ -54,13 +54,15 @@ void main() {
           paths.add(r.uri.path);
           if (r.uri.path.endsWith('/events')) {
             expect(
-                r.headers.value('Last-Event-ID'), streams.isEmpty ? null : '1');
+                r.headers.value('Last-Event-ID'), streams.isEmpty ? null : '2');
             r.response.bufferOutput = false;
             r.response.headers.contentType =
                 ContentType('text', 'event-stream');
             streams.add(r.response);
             r.response.write(
                 'id: 1\ndata: {"event":"subagent.start","run_id":"run_1","seq":1,"subagent_id":"child","child_session_id":"session_child","goal":"Inspect files"}\n\n');
+            r.response.write(
+                'id: 2\ndata: {"event":"tool.started","run_id":"run_1","tool":"search","preview":"PRIVATE arguments"}\n\n');
             await r.response.flush();
             return;
           }
@@ -147,6 +149,10 @@ void main() {
       }
       await t.pump();
       expect(find.byType(AgentActivityStrip), findsOneWidget);
+      if (!approval) {
+        expect(find.text('Using search'), findsOneWidget);
+        expect(find.textContaining('PRIVATE arguments'), findsNothing);
+      }
       expect(find.text(approval ? 'Needs your attention' : 'Agent activity'),
           findsOneWidget);
       expect(

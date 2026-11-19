@@ -20,8 +20,53 @@ Future<void> settle() async {
 }
 
 void main() {
-  for (final pause in ['background', 'switch']) {
-    test('$pause pause survives authoritative native completion', () async {
+  for (final explicit in [false, true]) {
+    test(
+        'recovered reply releases safe followers without extra Resume; explicit=$explicit',
+        () async {
+      var posts = 0;
+      var unavailable = true;
+      final c = await setup(FailingJournal(), (r) async {
+        if (r.url.path.endsWith('capabilities')) {
+          return http.Response(jsonEncode(capabilities), 200);
+        }
+        if (r.method == 'POST') {
+          posts++;
+          return http.Response(
+              jsonEncode({'run_id': 'r$posts', 'status': 'started'}), 202);
+        }
+        if (unavailable) return http.Response('{}', 503);
+        return http.Response(
+            jsonEncode({
+              'run_id': r.url.path.split('/').last,
+              'status': 'completed',
+              'output': 'actual'
+            }),
+            200);
+      });
+      addTearDown(c.dispose);
+      c.submit('first');
+      c.submit('second');
+      await settle();
+      for (var i = 0; i < 3; i++) {
+        await c.checkRunStatus();
+      }
+      expect(posts, 1);
+      if (explicit) c.pauseQueue('Paused by you');
+      unavailable = false;
+      await c.checkRunStatus();
+      await settle();
+      if (explicit) {
+        expect(posts, 1);
+        expect(c.queueStatus, 'Paused by you');
+      } else {
+        expect(posts, 2);
+        expect(c.queueStatus, isNull);
+      }
+    });
+  }
+  for (final pause in ['background', 'switch', 'explicit']) {
+    test('$pause policy after authoritative native completion', () async {
       var posts = 0;
       var complete = false;
       final c = await setup(FailingJournal(), (r) async {
@@ -46,7 +91,11 @@ void main() {
       c.submit('first');
       c.submit('second');
       await settle();
-      if (pause == 'background') {
+      if (pause == 'explicit') {
+        c.pauseQueue('Paused by you');
+        c.setQueueBackground(true);
+        c.setQueueBackground(false);
+      } else if (pause == 'background') {
         c.setQueueBackground(true);
         c.setQueueBackground(false);
       } else {
@@ -59,71 +108,95 @@ void main() {
       complete = true;
       await c.checkRunStatus();
       await settle();
-      expect(posts, 1);
-      expect(c.canResumeQueue, true);
-      c.resumeQueue();
-      await settle();
-      expect(posts, 2);
+      if (pause == 'background') {
+        expect(posts, 2,
+            reason:
+                'foreground recovery continues previously authorized unsent input');
+        expect(c.queueStatus, isNull);
+      } else {
+        expect(posts, 1);
+        expect(c.canResumeQueue, true);
+        c.resumeQueue();
+        await settle();
+        expect(posts, 2);
+      }
     });
   }
   for (final failure in ['history', 'journal']) {
-    test(
-        '$failure failure holds native followers until save and explicit Resume',
-        () async {
-      final secrets = ReconcileSecrets();
-      var posts = 0;
-      var complete = false;
-      Future<http.Response> handler(http.Request r) async {
-        if (r.url.path.endsWith('capabilities')) {
-          return http.Response(jsonEncode(capabilities), 200);
-        }
-        if (r.method == 'POST') {
-          posts++;
-          return http.Response(
-              jsonEncode({'run_id': 'r$posts', 'status': 'started'}), 202);
-        }
-        return http.Response(
-            jsonEncode({
-              'run_id': r.url.path.split('/').last,
-              'status': complete ? 'completed' : 'running',
-              if (complete) 'output': 'actual'
-            }),
-            200);
-      }
+    for (final explicit in [false, true]) {
+      for (final exhausted in [false, true]) {
+        test(
+            '$failure failure holds native followers until save, preserves explicit pause=$explicit, exhausted=$exhausted',
+            () async {
+          final secrets = ReconcileSecrets();
+          var posts = 0;
+          var complete = false;
+          var unavailable = exhausted;
+          Future<http.Response> handler(http.Request r) async {
+            if (r.url.path.endsWith('capabilities')) {
+              return http.Response(jsonEncode(capabilities), 200);
+            }
+            if (r.method != 'POST' && unavailable) {
+              return http.Response('{}', 503);
+            }
+            if (r.method == 'POST') {
+              posts++;
+              return http.Response(
+                  jsonEncode({'run_id': 'r$posts', 'status': 'started'}), 202);
+            }
+            return http.Response(
+                jsonEncode({
+                  'run_id': r.url.path.split('/').last,
+                  'status': complete ? 'completed' : 'running',
+                  if (complete) 'output': 'actual'
+                }),
+                200);
+          }
 
-      final initial = await setup(secrets, handler);
-      final store = FailingHistory(initial.store)..fail = false;
-      initial.dispose();
-      final c = ChatController(store,
-          runClientFactory: (root, key) =>
-              RunClient(root, key, client: MockClient(handler)));
-      await c.load();
-      addTearDown(c.dispose);
-      c.submit('first');
-      c.submit('second');
-      c.submit('third');
-      await settle();
-      expect(posts, 1);
-      if (failure == 'history') {
-        store.fail = true;
-      } else {
-        secrets.failCommit = true;
+          final initial = await setup(secrets, handler);
+          final store = FailingHistory(initial.store)..fail = false;
+          initial.dispose();
+          final c = ChatController(store,
+              runClientFactory: (root, key) =>
+                  RunClient(root, key, client: MockClient(handler)));
+          await c.load();
+          addTearDown(c.dispose);
+          c.submit('first');
+          c.submit('second');
+          c.submit('third');
+          await settle();
+          expect(posts, 1);
+          if (exhausted) {
+            for (var i = 0; i < 3; i++) {
+              await c.checkRunStatus();
+            }
+            unavailable = false;
+          }
+          if (explicit) c.pauseQueue('Paused by you');
+          if (failure == 'history') {
+            store.fail = true;
+          } else {
+            secrets.failCommit = true;
+          }
+          complete = true;
+          await c.checkRunStatus();
+          expect(c.unsavedChanges, true);
+          expect(c.queueStatus, isNotNull);
+          expect(posts, 1);
+          store.fail = false;
+          secrets.failCommit = false;
+          await c.retrySave();
+          await settle();
+          if (explicit) {
+            expect(posts, 1);
+            expect(c.queueStatus, 'Paused by you');
+            c.resumeQueue();
+            await settle();
+          }
+          expect(posts, 3);
+        });
       }
-      complete = true;
-      await c.checkRunStatus();
-      expect(c.unsavedChanges, true);
-      expect(c.queueStatus, isNotNull);
-      expect(posts, 1);
-      store.fail = false;
-      secrets.failCommit = false;
-      await c.retrySave();
-      await settle();
-      expect(posts, 1);
-      expect(c.canResumeQueue, true);
-      c.resumeQueue();
-      await settle();
-      expect(posts, 3);
-    });
+    }
   }
   for (final state in ['unknown', 'failed', 'cancelled', 'interrupted']) {
     test('$state visibly pauses native followers', () async {

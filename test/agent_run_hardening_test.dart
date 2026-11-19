@@ -22,6 +22,13 @@ class FailingHistory extends SaathiStore {
 
 class FailingJournal extends MemorySecrets {
   bool fail = false;
+  final readIds = <String>[];
+  @override
+  Future<String?> read(String id) async {
+    readIds.add(id);
+    return super.read(id);
+  }
+
   @override
   Future<void> write(String id, String value) async {
     if (fail && id.startsWith('run.v1.')) throw StateError('disk');
@@ -146,6 +153,7 @@ void main() {
       () async {
     final secrets = FailingJournal();
     var posts = 0;
+    var gets = 0;
     final c = await setup(secrets, (r) async {
       if (r.url.path.endsWith('capabilities')) {
         return http.Response(jsonEncode(capabilities), 200);
@@ -154,6 +162,7 @@ void main() {
         posts++;
         return http.Response('{"run_id":"r","status":"started"}', 202);
       }
+      gets++;
       return http.Response('{"run_id":"r","status":"running"}', 200);
     });
     await c.send('original');
@@ -166,10 +175,19 @@ void main() {
     final loaded = await c.store.load();
     expect(loaded.connections.single['authorityEpoch'],
         c.connections.single['authorityEpoch']);
+    secrets.readIds.clear();
+    gets = 0;
     c.pauseRuns(false);
     await c.checkRunStatus();
+    await c.checkRunStatus();
+    expect(secrets.readIds, isEmpty,
+        reason:
+            'A replacement connection cannot lend credentials to an old run');
+    expect(gets, 0);
     expect(posts, 1);
-    expect(c.error, isNotNull);
+    expect(c.error, contains('removed or replaced connection'));
+    expect(c.runObservationProblem, contains('removed or replaced connection'));
+    expect(c.showPendingThinking, isFalse);
     c.dispose();
   });
   test('terminal GET journal failure retains actual answer and save-only retry',

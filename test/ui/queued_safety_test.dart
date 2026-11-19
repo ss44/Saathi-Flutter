@@ -228,23 +228,31 @@ void main() {
     await tick();
     expect(replies, isEmpty);
   });
-  test('background return requires explicit resume', () async {
-    c.submit('First');
-    c.submit('Second');
-    await tick();
-    c.setQueueBackground(true);
-    await tick();
-    complete(0);
-    await tick();
-    c.setQueueBackground(false);
-    await tick();
-    expect(replies.length, 1);
-    c.resumeQueue();
-    await tick();
-    expect(replies.length, 2);
-    complete(1);
-    await tick();
-  });
+  for (final explicitPause in [false, true]) {
+    test('background return preserves deliberate pause=$explicitPause',
+        () async {
+      c.submit('First');
+      c.submit('Second');
+      await tick();
+      if (explicitPause) c.pauseQueue('Paused by you');
+      c.setQueueBackground(true);
+      await tick();
+      complete(0);
+      await tick();
+      expect(replies.length, 1, reason: 'Never send followers in background');
+      c.setQueueBackground(false);
+      await tick();
+      if (explicitPause) {
+        expect(replies.length, 1);
+        expect(c.queueStatus, 'Paused by you');
+        c.resumeQueue();
+        await tick();
+      }
+      expect(replies.length, 2);
+      complete(1);
+      await tick();
+    });
+  }
   test('deleted source is read-only and never drains held followers', () async {
     c.submit('First');
     c.submit('Held');

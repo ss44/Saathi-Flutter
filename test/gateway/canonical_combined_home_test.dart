@@ -190,6 +190,21 @@ void main() {
               await tester.tap(find.text('Interrupt, then queue draft'));
               await settle();
               expect(c.outbox, hasLength(1));
+              expect(c.canonicalQueueSaving, isFalse,
+                  reason:
+                      'Queue save must settle before its saved-state label');
+              expect(c.unsavedChanges, isFalse,
+                  reason: 'Queue label must not conceal a storage failure');
+              expect(c.canonical, isNotNull);
+              await tester.scrollUntilVisible(
+                  find.text('Waiting on this device · Not yet sent to Hermes.'),
+                  60,
+                  scrollable: find.descendant(
+                      of: find.byKey(const Key('chat-feedback')),
+                      matching: find.byType(Scrollable)));
+              expect(
+                  find.text('Waiting on this device · Not yet sent to Hermes.'),
+                  findsOneWidget);
               expect(c.runPending, isTrue,
                   reason: 'Stop ACK is not terminal proof');
               expect(host.requests.where((r) => r['method'] == 'prompt.submit'),

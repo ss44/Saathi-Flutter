@@ -109,6 +109,67 @@ void main() {
     expect(await client.decide(prompt, 'always'), isTrue,
         reason: 'The native advertised choice vocabulary is preserved');
   });
+
+  for (final outcome in ['completed', 'failed']) {
+    test(
+        'lost acknowledgement reconciles exact original input without a resend: $outcome',
+        () async {
+      final fixture = Fixture();
+      await fixture.start();
+      fixture.dropSubmitAck = true;
+      Map<String, dynamic> receipt() => {
+            'admission_id': 'recovered',
+            'ref': {'session_id': 'chat', 'profile_id': 'profile'},
+            'authority_epoch': 3,
+            'execution_generation': 4,
+            'status': 'terminal',
+            'outcome': outcome,
+          };
+      fixture.respond = (r) {
+        final submits =
+            fixture.requests.where((r) => r['method'] == 'prompt.submit');
+        return r['method'] == 'prompt.receipt'
+            ? receipt()
+            : {
+                ...snapshot(),
+                'pending': [
+                  if (submits.isNotEmpty)
+                    {
+                      ...receipt(),
+                      'input_id': submits.single['params']['input_id'],
+                    }
+                ],
+              };
+      };
+      final chat = CanonicalChat(
+          HermesGatewayClient(
+              requestTimeout: const Duration(milliseconds: 100),
+              grantProvider: () async => fixture.grant()),
+          MemorySecrets(),
+          source: 'source',
+          isCurrent: () => true);
+      addTearDown(() async {
+        await chat.close();
+        await fixture.close();
+      });
+      await chat.connect();
+      await chat.attach('chat');
+      await chat.send('hello');
+      expect(chat.problem, isNull);
+      expect(chat.pending, isTrue, reason: 'snapshot must still be saved');
+      await chat.markSnapshotSaved();
+      expect(chat.pending, isFalse);
+      if (outcome == 'failed') {
+        expect(chat.problem,
+            'The server could not finish this reply. Check the session before continuing.');
+      }
+      expect(fixture.requests.where((r) => r['method'] == 'prompt.submit'),
+          hasLength(1));
+      expect(fixture.requests.where((r) => r['method'] == 'prompt.receipt'),
+          hasLength(1));
+    });
+  }
+
   test(
       'selection revokes writes permanently but original-source observation can reconcile',
       () async {
@@ -168,7 +229,9 @@ void main() {
     await chat.attach('chat');
     await expectLater(
         chat.send('same words'), throwsA(isA<GatewayException>()));
-    inputId = fixture.requests.last['params']['input_id'] as String;
+    inputId = fixture.requests
+        .where((r) => r['method'] == 'prompt.submit')
+        .single['params']['input_id'] as String;
     expect(await chat.refresh(), isFalse);
     expect(chat.problem, contains('landed'));
     expect(chat.pending, isTrue);
@@ -388,7 +451,9 @@ void main() {
     await first.attach('chat');
     await expectLater(first.send('same text is not attribution'),
         throwsA(isA<GatewayException>()));
-    input = fixture.requests.last['params']['input_id'] as String;
+    input = fixture.requests
+        .where((r) => r['method'] == 'prompt.submit')
+        .single['params']['input_id'] as String;
     await first.close();
     final recovered = owner();
     addTearDown(() async {

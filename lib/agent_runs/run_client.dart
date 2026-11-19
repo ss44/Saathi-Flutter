@@ -531,6 +531,12 @@ class RunClient {
             data['session_id'] != op.sessionId)) {
       throw StateError('Run status unavailable');
     }
+    // Only a recognized, explicit lifecycle observation can replace the last
+    // valid snapshot. Missing status is not the server's explicit unknown state.
+    if (data['status'] is! String ||
+        RunSnapshot(data).state == RunState.unrecognized) {
+      throw const FormatException('Invalid run status observation');
+    }
     RunLedger._validateSnapshot(data);
     // A terminal poll snapshot cannot be rolled back by delayed status updates.
     if (!op.snapshot.terminal) op.data['snapshot'] = data;
@@ -648,11 +654,19 @@ class RunClient {
     return (code, data);
   }
 
+  /// Reports each validated status read even if the resolution later conflicts.
+  /// [onObserved] never represents acknowledgement of the control POST.
   Future<void> resolveUnknown(RunOperation op, RunLedger ledger,
       {required bool acknowledgedSideEffects,
-      bool Function()? isCurrent}) async {
+      bool Function()? isCurrent,
+      Future<void> Function()? onObserved}) async {
     bind(op);
-    await status(op, ledger, isCurrent: isCurrent);
+    Future<void> observe() async {
+      await status(op, ledger, isCurrent: isCurrent);
+      await onObserved?.call();
+    }
+
+    await observe();
     if (isCurrent != null && !isCurrent()) throw StateError('Stale run');
     final s = op.snapshot;
     if (!acknowledgedSideEffects ||
@@ -670,9 +684,9 @@ class RunClient {
         }));
     if (isCurrent != null && !isCurrent()) throw StateError('Stale run');
     if (code != 200) {
-      if (code == 409) await status(op, ledger, isCurrent: isCurrent);
+      if (code == 409) await observe();
       throw StateError('Unknown resolution changed; check status');
     }
-    await status(op, ledger, isCurrent: isCurrent);
+    await observe();
   }
 }
