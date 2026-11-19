@@ -20,6 +20,7 @@ import 'package:flutter/semantics.dart';
 
 import 'transcript_latest.dart';
 import 'local_history_search.dart';
+import 'transcript_presentation.dart';
 import '../update_host.dart';
 
 import 'package:flutter/services.dart';
@@ -1012,76 +1013,86 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                               for (var i = 0;
                                                   i < session.messages.length;
                                                   i++)
-                                                KeyedSubtree(
-                                                  key: messageKey(session, i),
-                                                  child: MessageView(
-                                                    key: ValueKey(
-                                                        '${session.id}-$i'),
-                                                    text: session
-                                                        .messages[i].content,
-                                                    user: session
-                                                            .messages[i].role ==
-                                                        'user',
-                                                    usage: ReportedUsage
-                                                        .fromMetadata(
-                                                      session
-                                                          .messages[i].metadata,
-                                                    ),
-                                                    contextMetadata:
-                                                        ConversationContextMetadata(
-                                                      serverOwned:
-                                                          c.personaPolicy(
-                                                                c.identityOf(
-                                                                    session),
-                                                              ) ==
-                                                              PersonaEditPolicy
-                                                                  .serverOwned,
-                                                      retainedMessages: session
-                                                          .messages.length,
-                                                    ),
-                                                    answerBuilder: (body) =>
-                                                        ForegroundReplyVisibility(
-                                                      key: ValueKey((
-                                                        c.identityOf(session),
-                                                        session.messages[i].id,
-                                                      )),
-                                                      replyIdentity: (
-                                                        c.identityOf(session),
-                                                        session.messages[i].id,
+                                                if (showsHistoryBubble(
+                                                    session.messages[i]))
+                                                  KeyedSubtree(
+                                                    key: messageKey(session, i),
+                                                    child: MessageView(
+                                                      key: ValueKey(
+                                                          '${session.id}-$i'),
+                                                      activityText:
+                                                          precedingHistoryActivity(
+                                                              session.messages,
+                                                              i),
+                                                      text: session
+                                                          .messages[i].content,
+                                                      user: session.messages[i]
+                                                              .role ==
+                                                          'user',
+                                                      usage: ReportedUsage
+                                                          .fromMetadata(
+                                                        session.messages[i]
+                                                            .metadata,
                                                       ),
-                                                      enabled: !(wide &&
-                                                              desktopSettings) &&
-                                                          !(drawerOpen &&
-                                                              !wide) &&
-                                                          !drawerDragging &&
-                                                          identical(
-                                                            c.current,
-                                                            session,
-                                                          ) &&
-                                                          session.messages[i]
-                                                                  .id !=
-                                                              null &&
-                                                          c.organization
-                                                                      .entry(
-                                                                        c.identityOf(
-                                                                          session,
-                                                                        ),
-                                                                      )
-                                                                      .completions[
-                                                                  session
-                                                                      .messages[
-                                                                          i]
-                                                                      .id] ==
-                                                              false,
-                                                      onVisible: () =>
-                                                          c.replyVisible(
-                                                        session,
-                                                        session.messages[i].id!,
+                                                      contextMetadata:
+                                                          ConversationContextMetadata(
+                                                        serverOwned: c
+                                                                .personaPolicy(
+                                                              c.identityOf(
+                                                                  session),
+                                                            ) ==
+                                                            PersonaEditPolicy
+                                                                .serverOwned,
+                                                        retainedMessages:
+                                                            session.messages
+                                                                .length,
                                                       ),
-                                                      child: body,
+                                                      answerBuilder: (body) =>
+                                                          ForegroundReplyVisibility(
+                                                        key: ValueKey((
+                                                          c.identityOf(session),
+                                                          session
+                                                              .messages[i].id,
+                                                        )),
+                                                        replyIdentity: (
+                                                          c.identityOf(session),
+                                                          session
+                                                              .messages[i].id,
+                                                        ),
+                                                        enabled: !(wide &&
+                                                                desktopSettings) &&
+                                                            !(drawerOpen &&
+                                                                !wide) &&
+                                                            !drawerDragging &&
+                                                            identical(
+                                                              c.current,
+                                                              session,
+                                                            ) &&
+                                                            session.messages[i]
+                                                                    .id !=
+                                                                null &&
+                                                            c.organization
+                                                                        .entry(
+                                                                          c.identityOf(
+                                                                            session,
+                                                                          ),
+                                                                        )
+                                                                        .completions[
+                                                                    session
+                                                                        .messages[
+                                                                            i]
+                                                                        .id] ==
+                                                                false,
+                                                        onVisible: () =>
+                                                            c.replyVisible(
+                                                          session,
+                                                          session
+                                                              .messages[i].id!,
+                                                        ),
+                                                        child: body,
+                                                      ),
                                                     ),
                                                   ),
-                                                ),
                                               if (c.pendingText != null)
                                                 MessageView(
                                                   text: c.pendingText!,
@@ -1562,12 +1573,14 @@ class MessageView extends StatefulWidget {
     super.key,
     required this.text,
     required this.user,
+    this.activityText,
     this.answerBuilder,
     this.usage,
     this.contextMetadata,
   });
   final String text;
   final bool user;
+  final String? activityText;
   final Widget Function(Widget)? answerBuilder;
   final ReportedUsage? usage;
   final ConversationContextMetadata? contextMetadata;
@@ -1594,50 +1607,51 @@ class _MessageViewState extends State<MessageView> {
   }
 
   @override
-  Widget build(BuildContext context) => GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onLongPress: copyMessage,
-        onHorizontalDragEnd:
-            widget.user ? null : (_) => setState(() => activity = !activity),
-        child: Padding(
-          padding: const EdgeInsets.only(bottom: 28),
-          child: Align(
-            alignment:
-                widget.user ? Alignment.centerRight : Alignment.centerLeft,
-            child: Container(
-              constraints: const BoxConstraints(maxWidth: 720),
-              padding: widget.user
-                  ? const EdgeInsets.symmetric(horizontal: 18, vertical: 14)
-                  : EdgeInsets.zero,
-              decoration: widget.user
-                  ? BoxDecoration(
-                      color: const Color(0xFFE3EBE6),
-                      borderRadius: BorderRadius.circular(20),
-                    )
-                  : null,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (!widget.user) ...[
-                    const Text(
-                      'Saathi',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF3E6559),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                  ],
-                  if (widget.user)
-                    Text(
-                      widget.text,
-                      style: const TextStyle(fontSize: 17, height: 1.45),
-                    )
-                  else ...[
-                    if (widget.answerBuilder case final wrap?)
-                      wrap(
+  Widget build(BuildContext context) => Semantics(
+        container: true,
+        label: widget.user ? 'Your message' : 'Assistant message',
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onLongPress: copyMessage,
+          onHorizontalDragEnd:
+              widget.user ? null : (_) => setState(() => activity = !activity),
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 28),
+            child: Align(
+              alignment:
+                  widget.user ? Alignment.centerRight : Alignment.centerLeft,
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 720),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                decoration: BoxDecoration(
+                  color: widget.user
+                      ? Theme.of(context).colorScheme.secondaryContainer
+                      : Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (widget.user)
+                      Text(
+                        widget.text,
+                        style: const TextStyle(fontSize: 17, height: 1.45),
+                      )
+                    else ...[
+                      if (widget.answerBuilder case final wrap?)
+                        wrap(
+                          MarkdownBody(
+                            data: widget.text,
+                            imageBuilder: safeMarkdownImageBuilder,
+                            selectable: false,
+                            styleSheet: MarkdownStyleSheet(
+                              p: const TextStyle(fontSize: 18, height: 1.5),
+                            ),
+                          ),
+                        )
+                      else
                         MarkdownBody(
                           data: widget.text,
                           imageBuilder: safeMarkdownImageBuilder,
@@ -1646,31 +1660,27 @@ class _MessageViewState extends State<MessageView> {
                             p: const TextStyle(fontSize: 18, height: 1.5),
                           ),
                         ),
-                      )
-                    else
-                      MarkdownBody(
-                        data: widget.text,
-                        imageBuilder: safeMarkdownImageBuilder,
-                        selectable: false,
-                        styleSheet: MarkdownStyleSheet(
-                          p: const TextStyle(fontSize: 18, height: 1.5),
+                      if (widget.usage case final usage?)
+                        ReportedUsageLine(
+                          usage: usage,
+                          context: widget.contextMetadata,
+                        ),
+                    ],
+                    if (activity && !widget.user)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 14),
+                        child: Text(
+                          widget.activityText ??
+                              'Activity · Response received\nOnly observable status is shown. No private reasoning.',
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant),
                         ),
                       ),
-                    if (widget.usage case final usage?)
-                      ReportedUsageLine(
-                        usage: usage,
-                        context: widget.contextMetadata,
-                      ),
                   ],
-                  if (activity && !widget.user)
-                    const Padding(
-                      padding: EdgeInsets.only(top: 14),
-                      child: Text(
-                        'Activity · Response received\nOnly observable status is shown. No private reasoning.',
-                        style: TextStyle(fontSize: 12, color: muted),
-                      ),
-                    ),
-                ],
+                ),
               ),
             ),
           ),

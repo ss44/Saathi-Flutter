@@ -32,6 +32,8 @@ Import `package:saathi/gateway/hermes_gateway.dart`. Native Dart (`dart:io`), no
 - Native approval retains the advertised `command` separately from descriptive text. Affirmative choices require a nonempty, bounded, reviewable command preview; missing, raw-JSON, control-character or credential-like previews disable approval while an advertised denial remains available. This does not change the native advertised choice vocabulary or request body.
 - Canonical live preview retains at most 256 Ki UTF-16 code units. Once that budget would be exceeded, later deltas are omitted with an explicit preview-limit notice until authoritative reconciliation clears the preview. Receipt/snapshot recovery remains active and never resends input. Ordinary Stop exposes a synchronous UI callback to pause queued followers before requesting interruption; explicit interrupt-then-queue remains a distinct action.
 
+Structured transcript image/image_url blocks project to a safe blocked-image placeholder before empty-row filtering, in both snapshot and cursor-paged history. Image URLs, local paths, inline bytes and private reasoning blocks are not fetched or retained by this projection. Canonical row identity and typed public tool activity remain intact; no attachment preview or download capability is added.
+
 GatewayRunState: queued/running/complete/failed/cancelled/unknown. Events from another admission or owner generation cannot settle this client's run. `owned: false` is observation, not acknowledgement of a local send. Message final text is a replacement/final body, not another delta to append.
 
 ## Authentication/bootstrap boundary (important)
