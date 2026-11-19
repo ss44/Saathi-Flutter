@@ -82,13 +82,16 @@ class QueuedFollowup {
   final Map<String, dynamic> connection;
   final CapturedInstructions captured;
   final String replyId;
+  final String model;
   QueuedFollowup(
     this.text,
     this.session,
     this.connection, {
     CapturedInstructions? captured,
     String? replyId,
-  })  : captured =
+    String? model,
+  })  : model = model ?? session.model,
+        captured =
             captured ?? CapturedInstructions(null, 0, session.systemPrompt),
         replyId = replyId ?? 'reply-${runIdentity()}';
 
@@ -98,7 +101,7 @@ class QueuedFollowup {
         'connectionRevision': connection['authorityEpoch'],
         'connectionType': connection['type'],
         'connectionUrl': connection['url'],
-        'model': session.model,
+        'model': model,
         'upstreamProvider': session.upstreamProvider,
         'text': text,
         'replyId': replyId,
@@ -176,7 +179,7 @@ class ChatController extends ChangeNotifier {
     }
     return session.remoteSessionId != null ||
             runs.containsKey(session.id) ||
-            ['hermes', 'openclaw'].contains(connection['type'])
+            !['openai', 'anthropic', 'gemini'].contains(connection['type'])
         ? PersonaEditPolicy.serverOwned
         : PersonaEditPolicy.localInstructions;
   }
@@ -198,6 +201,59 @@ class ChatController extends ChangeNotifier {
       return 'Wait for accepted and queued work before changing this persona.';
     }
     return null;
+  }
+
+  /// The native adapter never consumes app-local model overrides.
+  String replyModel(ChatSession session) =>
+      personaPolicy(identityOf(session)) == PersonaEditPolicy.localInstructions
+          ? organization.entry(identityOf(session)).replyModel ?? session.model
+          : session.model;
+
+  String? chatSettingsRestriction(ChatSession session) {
+    if (_disposed || _loadFailed || loading || !sessions.contains(session)) {
+      return 'The original conversation is unavailable.';
+    }
+    if (personaPolicy(identityOf(session)) !=
+        PersonaEditPolicy.localInstructions) {
+      return 'This connection has no verified contract for changing an existing server conversation’s model, persona or system instructions. Server values are not available here. Nothing will be changed on the server.';
+    }
+    if (changingConnection || unsavedChanges) {
+      return 'Finish connection changes or recover unsaved replies first.';
+    }
+    if (_preparedInputs.containsKey(session.id)) {
+      return 'Resolve accepted or uncertain input before changing chat settings.';
+    }
+    return pendingPersonaReason(identityOf(session));
+  }
+
+  /// Save only future direct replies. Existing work and connection ownership are
+  /// immutable; native session mutation requires a separate verified adapter API.
+  Future<void> saveChatSettings(
+    ChatSession session, {
+    required Map<String, dynamic>? originalConnection,
+    required int selection,
+    required String model,
+    required String instructions,
+    required String? personaId,
+  }) async {
+    if (selection != selectionGeneration || !identical(current, session)) {
+      throw StateError('The conversation changed. Reopen chat settings.');
+    }
+    await organization.saveChatSettings(
+      identityOf(session),
+      replyModel: model,
+      instructions: instructions,
+      personaId: personaId,
+      restriction: () {
+        // Once Save is accepted, recovery belongs to this original conversation,
+        // not whichever chat is selected when the user retries its storage write.
+        if (originalConnection == null ||
+            !isCurrentConnection(originalConnection)) {
+          return 'The original connection changed. Recover its settings before sending.';
+        }
+        return chatSettingsRestriction(session);
+      },
+    );
   }
 
   ConversationWorkState workState(ChatSession session) {
@@ -434,7 +490,7 @@ class ChatController extends ChangeNotifier {
           row['connectionRevision'] != connection['authorityEpoch'] ||
           row['connectionType'] != connection['type'] ||
           row['connectionUrl'] != connection['url'] ||
-          row['model'] != session.model ||
+          row['model'] != replyModel(session) ||
           row['upstreamProvider'] != session.upstreamProvider;
       final item = QueuedFollowup(
         row['text'] as String,
@@ -447,6 +503,7 @@ class ChatController extends ChangeNotifier {
                 'url': row['connectionUrl'],
               }
             : connection,
+        model: row['model'] as String,
         replyId: row['replyId'] as String,
         captured: CapturedInstructions(
           row['personaId'] as String?,
@@ -600,6 +657,7 @@ class ChatController extends ChangeNotifier {
         text,
         session,
         connection,
+        model: replyModel(session),
         captured: organization.captureInstructions(
           identityOf(session),
           fallback: session.systemPrompt,
@@ -1977,8 +2035,16 @@ class ChatController extends ChangeNotifier {
   }
 
   bool changingConnection = false;
+  // Accepted detail edits retain an original-source validator for storage-only
+  // retry. Keep that source intact through both the write and uncertain rollback.
   bool get canChangeConnections =>
-      !_disposed && !loading && !busy && !changingConnection && !_loadFailed;
+      !_disposed &&
+      !loading &&
+      !busy &&
+      !changingConnection &&
+      !_loadFailed &&
+      !organization.saving &&
+      !organization.hasUnsavedChanges;
   void _failClosed() {
     _loadFailed = true;
     error =
@@ -1997,12 +2063,14 @@ class ChatController extends ChangeNotifier {
       current != null &&
           !connections.any((c) => c['id'] == current!.connectionId);
 
-  void _checkMutation(String id) {
+  void _checkMutation(String id, {bool changesConnection = true}) {
     if (_disposed ||
         loading ||
         busy ||
         changingConnection ||
         _loadFailed ||
+        (changesConnection &&
+            (organization.saving || organization.hasUnsavedChanges)) ||
         !connections.any((c) => c['id'] == id)) {
       throw StateError('Connection unavailable or work in progress');
     }
@@ -2106,7 +2174,8 @@ class ChatController extends ChangeNotifier {
     if (upstreamProvider != null && !isCurrentConnection(c)) {
       throw StateError('Stale connection');
     }
-    _checkMutation(c['id'] as String);
+    // A new chat leaves the accepted edit's original source/session intact.
+    _checkMutation(c['id'] as String, changesConnection: false);
     // Starting a new-chat transition spends native input/control authority even
     // when its subsequent history write fails and the old chat remains visible.
     if (identical(current, _canonicalSession)) _canonical?.revokeInput();
@@ -2223,7 +2292,16 @@ class ChatController extends ChangeNotifier {
     }
   }
 
+  bool get canDeleteConversation =>
+      !busy &&
+      current != null &&
+      !organization.saving &&
+      !organization.hasUnsavedChanges;
+
   Future<void> clear() async {
+    if (organization.saving || organization.hasUnsavedChanges) {
+      throw StateError('Save or recover conversation details before deleting');
+    }
     if (busy || current == null) return;
     // A fresh ID also clears any backend-owned state; never re-use a cleared thread.
     final old = current!;
@@ -2315,6 +2393,7 @@ class ChatController extends ChangeNotifier {
             text,
             session,
             connection,
+            model: replyModel(session),
             captured: organization.captureInstructions(
               identityOf(session),
               fallback: session.systemPrompt,
@@ -2363,7 +2442,7 @@ class ChatController extends ChangeNotifier {
       core.setSystemPrompt(permission.source.captured.instructions);
       final selected = ModelInfo(
         providerId: session.connectionId,
-        name: session.model,
+        name: permission.source.model,
         upstreamProvider: session.upstreamProvider,
       );
       core.registerModel(selected);

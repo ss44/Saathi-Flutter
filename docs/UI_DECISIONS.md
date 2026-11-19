@@ -7,7 +7,7 @@ Saathi is an independent Flutter app, not a QML port or DMS frontend. The origin
 | Identity | A familiar personal companion | Saathi spelling, independent launcher/package, no Hermes-only identity |
 | Navigation | Conversation first, provider choice nearby | Narrow windows use mobile routes and a conversation drawer; wide windows use a far-left Chats/Settings rail, persistent chat list and active conversation pane |
 | Providers | Multiple named instances; OpenAI-compatible, Anthropic, Gemini; model discovery/manual IDs | Separate Dart adapters; no QML global state or false claim that all backends expose the same capabilities |
-| Context | System prompt and bounded direct-model context | Conversation keeps its original connection/model/prompt; no silent rerouting of a transcript |
+| Context | System prompt and bounded direct-model context | Conversation keeps its original connection; direct reply model/instructions change only after explicit per-chat Save, never by rerouting history |
 | Local sessions | Persistent conversations, new/delete/switch | Connection-bound sessions rather than one shared global history; credentials never stored in session JSON |
 | Remote sessions | Continue API-owned Hermes sessions or explicitly attach Desktop/CLI sessions with a trusted host invitation, sending only new input | Native attachment requires operator-provided reachable WSS and fresh grants; never transplant foreign history through REST |
 | Chat display | Readable messages, markdown, minimal chrome | Empty genuine startup instead of a permanent demo transcript |
@@ -90,6 +90,30 @@ Both speakers use theme-derived bubbles (user right, assistant left). The UI doe
 A newly settled empty answer remains an explicit conversation-owned outcome, not a successful reply bubble or completion notification. Direct, native Runs and canonical storage retries cannot erase that outcome or resend inference; canonical emptiness is established only from the settled original input and typed answer rows. Imported historical blanks do not create errors. The outcome is retained for the current controller lifetime; historical blanks alone are not reclassified as failed work after restart.
 
 `test/ui/transcript_presentation_test.dart` covers mixed history, raw pagination, safe image-only placeholders, exact Markdown copy, real swipe gestures and 360px/390px 2× text in both brightness modes. The independent outcome, native-image and Runs-outcome tests cover snapshot/journal storage failure and retry, no duplicate submission, typed activity and completion accounting. Existing adaptive-workspace, streaming scroll-ownership and native combined-home regressions remain separate gates.
+
+## Desktop conversation settings
+
+On Linux, macOS and Windows in the wide workspace, **Chat settings** opens a
+right-hand panel beside the current transcript. The conversation list stays
+mounted but is temporarily hidden to leave room for the conversation. Application
+Settings remains in the left rail; Enhance retains its separate destination.
+Compact windows and mobile platforms keep their existing navigation; #73's mobile
+interaction remains unspecified.
+
+For direct OpenAI-compatible, Anthropic and Gemini chats, Save commits a manual
+reply-model ID, a reusable persona selection and chat-specific instructions in one
+metadata write. Selecting a shared persona uses its instructions without editing
+that shared role; selecting **This chat’s instructions** enables chat-only text.
+Changes apply only to future inputs on the original connection. Accepted, queued,
+uncertain and unsaved work blocks edits, and each accepted direct input captures
+its effective model and instructions for persistence/recovery. Cancel never saves.
+
+Native conversations are read-only in this panel: saved model/instruction values
+are not asserted to be the current server configuration. The shipped adapters
+have no verified existing-session model/persona/system-instruction mutation
+contract. No global server configuration is changed, history replayed, session
+replaced or inference started by opening or saving settings. Native mutation and
+deployed-server/device acceptance remain separate work.
 
 ## Layout verification
 Wide windows at least 1,000 logical pixels use the persistent workspace when there is also room for the current text scale (at least 720 times the scaled unit size). The chat list stays 300px wide beside the navigation rail; conversation content is capped at 960px. Settings opens inside the workspace without replacing the conversation or its draft. Resizing back to compact navigation preserves the composer. Remote history continues to open as a separate read-only route, not as a local conversation or replayed input.
