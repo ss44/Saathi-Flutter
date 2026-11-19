@@ -95,12 +95,13 @@ void main() {
         i++) {
       await network();
     }
-    await tester.tap(find.text('Continue conversation'));
-    await network();
+    expect(find.text('Continue conversation'), findsNothing);
     for (var i = 0; i < 40 && controller.current == null; i++) {
       await network();
     }
     expect(controller.current!.remoteSessionId, 'external_chat');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('composer')).hitTestable(), findsOneWidget);
     await tester.enterText(find.byKey(const Key('composer')), 'New input');
     await tester.pump();
     await tester.tap(find.byTooltip('Send'));

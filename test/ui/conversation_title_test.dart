@@ -11,6 +11,8 @@ import 'package:saathi/ui/chat_home.dart';
 import 'package:saathi/ui/remote_sessions.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'remote_history_test_driver.dart';
+
 Finder appBarText(String text) =>
     find.descendant(of: find.byType(AppBar), matching: find.text(text));
 
@@ -116,7 +118,14 @@ void main() {
       tester.view.physicalSize = Size(width, 844);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
-      final client = MockClient((_) async => http.Response('{"data":[]}', 200));
+      final requests = <http.Request>[];
+      final client = MockClient((request) async {
+        requests.add(request);
+        return http.Response(
+            '{"session_id":"remote","data":[{"role":"assistant",'
+            '"content":"Original remote history"}],"pagination":{"has_more":false}}',
+            200);
+      });
       final c = await controller(coreFactory: () => SaathiCore(client: client));
       final connection = <String, dynamic>{
         'id': 'source',
@@ -140,6 +149,16 @@ void main() {
               connection: connection,
               session: RemoteSession({'id': 'remote', 'title': title})))));
       await tester.pumpAndSettle();
+      await revealRemoteHistory(tester,
+          sessionId: 'remote',
+          connection: connection,
+          content: 'Original remote history');
+      expect(requests, hasLength(1));
+      expect(requests.single.method, 'GET');
+      expect(requests.single.url.host, 'example.test');
+      expect(requests.single.url.path, '/api/sessions/remote/messages');
+      expect(c.current, isNull);
+      expect(c.sessions, isEmpty);
       final text = appBarText(title);
       expect(tester.widget<Text>(text).maxLines, 1);
       expect(tester.widget<Text>(text).overflow, TextOverflow.ellipsis);
@@ -153,6 +172,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(RemoteHistoryPage), findsNothing);
       expect(appBarText('New conversation'), findsOneWidget);
+      expect(c.current, isNull);
+      expect(c.sessions, isEmpty);
+      expect(requests, hasLength(1));
       await tester.pumpWidget(const SizedBox());
       c.dispose();
       client.close();

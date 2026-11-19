@@ -72,7 +72,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 100));
     });
     await tester.pumpAndSettle();
-    expect(find.textContaining('Read-only'), findsWidgets);
+    expect(find.text('Gateway connection required'), findsOneWidget);
     expect(find.text('Visible answer'), findsOneWidget);
     expect(find.textContaining('PRIVATE'), findsNothing);
     expect(find.byKey(const Key('composer')), findsNothing);

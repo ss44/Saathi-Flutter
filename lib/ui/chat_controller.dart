@@ -141,6 +141,11 @@ class ScopedRunSnapshot {
   bool isObservable() => _isObservable();
 }
 
+/// Safe client-side explanation; never includes a raw backend error body.
+class RemoteContinuationUnavailable extends StateError {
+  RemoteContinuationUnavailable(super.message);
+}
+
 class ChatController extends ChangeNotifier {
   late final ChatOrganization organization;
   ChatSession? _dispatchingSession;
@@ -1409,14 +1414,36 @@ class ChatController extends ChangeNotifier {
     return owner.sessions();
   }
 
-  Future<void> attachCanonical(GatewaySession remote) async {
+  Future<void> attachCanonical(
+    GatewaySession remote, {
+    ChatSession? expectedSession,
+    bool Function()? isOwnerCurrent,
+  }) async {
     final owner = _canonical;
     final connection = _canonicalConnection;
-    if (owner == null || connection == null || !owner.connected) {
+    final selection = selectionGeneration;
+    bool valid() =>
+        (isOwnerCurrent?.call() ?? true) &&
+        selection == selectionGeneration &&
+        identical(owner, _canonical) &&
+        connection != null &&
+        isCurrentConnection(connection);
+    if (owner == null || connection == null || !owner.connected || !valid()) {
       throw StateError('Connect first');
     }
+    if (expectedSession != null &&
+        (!sessions.contains(expectedSession) ||
+            expectedSession.connectionId != connection['id'] ||
+            expectedSession.remoteSessionId != remote.id ||
+            expectedSession.canonicalProfileId == null ||
+            expectedSession.canonicalProfileId != owner.client.profileId)) {
+      throw StateError('Original native profile and session required');
+    }
     await owner.attach(remote.id);
-    if (!owner.connected || !isCurrentConnection(connection)) {
+    if (!owner.connected || !valid()) {
+      // Resume changed the transport attachment. Never leave it writable (or
+      // observable as the old local chat) after its navigation owner was revoked.
+      owner.suspend();
       throw StateError('Source revoked');
     }
     final id = owner.snapshot!.sessionId;
@@ -1468,7 +1495,19 @@ class ChatController extends ChangeNotifier {
             'Restored input is held. Choose Resume after the original work is reconciled.';
       }
     }
+    final attachedSelection = selectionGeneration;
     await refreshCanonical();
+    // Persistence accepted before dismissal must finish, but cannot restore the
+    // old route's navigation/input authority (including selection round trips).
+    if (!(isOwnerCurrent?.call() ?? true) ||
+        attachedSelection != selectionGeneration ||
+        !identical(current, session) ||
+        !identical(owner, _canonical) ||
+        !isCurrentConnection(connection) ||
+        !owner.connected) {
+      owner.suspend();
+      throw StateError('Attachment owner revoked');
+    }
   }
 
   /// Authoritative original-session resync; no transcript is uploaded to HTTP chat.
@@ -1603,6 +1642,9 @@ class ChatController extends ChangeNotifier {
     bool Function()? isOwnerCurrent,
   }) async {
     if (busy ||
+        unsavedChanges ||
+        changingConnection ||
+        _loadFailed ||
         attachingRemote ||
         _runsPaused ||
         !isCurrentConnection(connection) ||
@@ -1610,11 +1652,23 @@ class ChatController extends ChangeNotifier {
       throw StateError('This session requires canonical gateway attachment');
     }
     final generation = _runsGeneration;
+    final mutation = _canonicalMutationEpoch;
     final selected = current;
     final selection = selectionGeneration;
+    final existing = sessions
+        .where((s) =>
+            s.connectionId == connection['id'] &&
+            s.remoteSessionId == remote.id)
+        .firstOrNull;
+    final before = existing == null ? null : [...existing.messages];
+    final wasIdle = existing != null && _canRefreshRemoteHistory(existing);
     bool valid() =>
         !_disposed &&
         !_runsPaused &&
+        !unsavedChanges &&
+        !_loadFailed &&
+        !changingConnection &&
+        mutation == _canonicalMutationEpoch &&
         (isOwnerCurrent?.call() ?? true) &&
         identical(current, selected) &&
         selection == selectionGeneration &&
@@ -1628,35 +1682,93 @@ class ChatController extends ChangeNotifier {
       core = await coreFor(connection);
       if (!valid()) throw StateError('Connection changed');
       client = await _runClient(connection, isCurrent: valid);
-      if (!await client.discover() || !valid()) {
-        throw StateError('Native continuation unavailable');
+      final supported = await client.discover();
+      if (!valid()) throw StateError('Connection changed');
+      if (!supported) {
+        throw RemoteContinuationUnavailable(
+            'This server does not advertise safe native Runs continuation. Ask its operator to enable or upgrade Runs support, then try again. Nothing was sent.');
       }
-      final page = await core.loadRemoteHistory(
-        connection['id'] as String,
-        remote.id,
-      );
-      if (!valid() || page.sessionId != remote.id) {
-        throw StateError('Session identity changed');
+      // Offset advancement uses raw rows, including hidden/tool-only pages.
+      // Never present the first page as a complete conversation.
+      final rows = <Map<String, dynamic>>[];
+      final seen = <Object>{};
+      var offset = 0;
+      for (var pages = 0;; pages++) {
+        if (pages == 256) {
+          throw StateError('History exceeds the bounded attachment window');
+        }
+        final page = await core.loadRemoteHistory(
+          connection['id'] as String,
+          remote.id,
+          offset: offset,
+        );
+        if (!valid() || page.sessionId != remote.id) {
+          throw StateError('Session identity changed');
+        }
+        final pagination = page.pagination;
+        final returned = pagination['returned'] as int? ?? page.messages.length;
+        final limit = pagination['limit'] as int? ?? 100;
+        if ((pagination['offset'] ?? offset) != offset ||
+            returned != page.messages.length ||
+            limit <= 0 ||
+            limit > 100 ||
+            returned > limit) {
+          throw StateError('Invalid history pagination');
+        }
+        for (final row in page.messages) {
+          final id = row['id'];
+          if (id is! String && id is! int || seen.add(id!)) rows.add(row);
+        }
+        offset += returned;
+        final more = pagination['has_more'];
+        if (returned == 0 || (more is bool ? !more : returned < limit)) break;
       }
-      final existing = sessions
-          .where(
-            (s) =>
-                s.connectionId == connection['id'] &&
-                s.remoteSessionId == page.sessionId,
-          )
-          .firstOrNull;
       if (existing != null) {
+        if (!sessions.contains(existing)) {
+          throw StateError('Original conversation removed');
+        }
+        final history = rows.map(projectRemoteHistory).nonNulls.toList();
+        // Import only a proven extension of the unchanged, idle transcript.
+        // Keep existing objects/IDs and completion metadata; a stale or divergent
+        // snapshot cannot erase local answers, accepted input or uncertainty.
+        final unchangedIdle = wasIdle &&
+            _canRefreshRemoteHistory(existing) &&
+            listEquals(before, existing.messages);
+        if (wasIdle && !unchangedIdle) {
+          throw RemoteContinuationUnavailable(
+              'Your local conversation changed while checking the server. No history was replaced and nothing was sent by opening it. Return to the conversation to review pending work, then try connecting again.');
+        }
+        final exactPrefix = history.length >= existing.messages.length &&
+            Iterable<int>.generate(existing.messages.length).every((i) =>
+                existing.messages[i].role == history[i].role &&
+                existing.messages[i].content == history[i].content);
+        if (unchangedIdle && !exactPrefix) {
+          throw RemoteContinuationUnavailable(
+              'This conversation changed on the server in a way that cannot be safely combined with your saved history. Your local messages have been kept; nothing was sent. Review the changes on the original host, then try connecting again.');
+        }
+        if (unchangedIdle && history.length > existing.messages.length) {
+          existing.messages.addAll(history.skip(existing.messages.length));
+          try {
+            await persist();
+          } catch (_) {
+            unsavedChanges = true;
+            error =
+                'Updated history could not be saved. Try saving again; nothing was sent.';
+            rethrow;
+          }
+        }
+        if (!valid()) throw StateError('Session attachment revoked');
         select(existing);
         return;
       }
       final session = ChatSession(
         id: 'remote_${runIdentity()}',
         connectionId: connection['id'] as String,
-        remoteSessionId: page.sessionId,
+        remoteSessionId: remote.id,
         remoteTitle: remote.title,
         model: remote.data['model'] as String? ?? 'Server model',
         upstreamProvider: remote.data['provider'] as String?,
-        messages: page.messages.map(projectRemoteHistory).nonNulls.toList(),
+        messages: rows.map(projectRemoteHistory).nonNulls.toList(),
       );
       sessions.add(session);
       try {
@@ -1676,6 +1788,14 @@ class ChatController extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  bool _canRefreshRemoteHistory(ChatSession session) =>
+      !identical(_dispatchingSession, session) &&
+      !identical(_preparing?.source.session, session) &&
+      !_outbox.any((item) => identical(item.session, session)) &&
+      !_uncertain.containsKey(session) &&
+      !_preparedInputs.containsKey(session.id) &&
+      (runs[session.id] == null || runs[session.id]!.committed);
 
   Future<AgentControlsController?> openRunControls({
     required bool Function() isOwnerCurrent,

@@ -164,14 +164,10 @@ void main() {
       await network();
       await tester.tap(find.text('External chat'));
       await network();
-      await tester.scrollUntilVisible(find.text('Continue conversation'), 100,
-          scrollable: find.byType(Scrollable).last);
-      if (compact) {
-        await tester.drag(find.byType(ListView).last, const Offset(0, -180));
-        await tester.pump();
-      }
-      await tester.tap(find.text('Continue conversation'));
-      await network();
+      await tester.pumpAndSettle();
+      expect(find.text('Continue conversation'), findsNothing);
+      expect(fixture.submissions, 0,
+          reason: 'Opening must never submit or replay input');
       expect(c.current!.remoteSessionId, 'external_chat');
       await tester.enterText(find.byKey(const Key('composer')), 'New input');
       await tester.pump();
