@@ -56,16 +56,17 @@ class AdaptiveChatShell extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               NavigationRail(
-                backgroundColor: const Color(0xFFE9EDE7),
+                backgroundColor: Theme.of(context).colorScheme.surfaceContainer,
                 minWidth: 80,
                 labelType: NavigationRailLabelType.all,
                 selectedIndex: showSettings ? 1 : 0,
                 onDestinationSelected: (index) => onSettingsChanged(index == 1),
-                leading: const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 20),
+                leading: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 20),
                   child: Tooltip(
                     message: 'Saathi',
-                    child: Icon(Icons.spa_outlined, color: Color(0xFF3E6559)),
+                    child: Icon(Icons.spa_outlined,
+                        color: Theme.of(context).colorScheme.primary),
                   ),
                 ),
                 destinations: const [
