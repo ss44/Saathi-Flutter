@@ -870,7 +870,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                   if (!wide) Navigator.pop(context);
                                   Navigator.push(
                                     context,
-                                    MaterialPageRoute<void>(
+                                    CanonicalConnectionRoute<void>(
                                       builder: (_) => CanonicalConnectionPage(
                                           controller: c),
                                     ),
@@ -1313,7 +1313,40 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                               child: const Text('Cancel'),
                                             ),
                                           ),
-                                        if (c.readOnly)
+                                        if (c.readOnly &&
+                                            names.firstOrNull?['type'] ==
+                                                'hermesGateway') ...[
+                                          Padding(
+                                            padding: const EdgeInsets.all(16),
+                                            child: Text(session
+                                                        ?.canonicalProfileId ==
+                                                    null
+                                                ? 'This saved conversation has no verified host profile. Connect through Hermes Desktop / CLI and select the authorized session. Its old history will not be reassigned.'
+                                                : 'Reconnect to this conversation’s original Hermes host with a fresh invite. Nothing will be resent.'),
+                                          ),
+                                          if (session?.canonicalProfileId !=
+                                              null)
+                                            TextButton(
+                                              onPressed: !c.canChangeConnections
+                                                  ? null
+                                                  : () => Navigator.push(
+                                                        context,
+                                                        CanonicalConnectionRoute<
+                                                                void>(
+                                                            builder: (_) =>
+                                                                CanonicalConnectionPage(
+                                                                  controller: c,
+                                                                  connection:
+                                                                      names
+                                                                          .first,
+                                                                  targetSession:
+                                                                      session,
+                                                                )),
+                                                      ),
+                                              child: const Text(
+                                                  'Reconnect to original host'),
+                                            ),
+                                        ] else if (c.readOnly)
                                           const Padding(
                                             padding: EdgeInsets.all(16),
                                             child: Text(

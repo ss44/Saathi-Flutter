@@ -37,7 +37,7 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
     if (action == 'Edit' && c['type'] == 'hermesGateway') {
       await Navigator.push(
           context,
-          MaterialPageRoute<void>(
+          CanonicalConnectionRoute<void>(
               builder: (_) => CanonicalConnectionPage(
                   controller: controller, connection: c)));
       return;

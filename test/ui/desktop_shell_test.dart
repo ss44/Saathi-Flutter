@@ -240,8 +240,7 @@ void main() {
         reason: 'requests=${requests.map((r) => r.url)}');
     await t.tap(find.text('Remote fixture'));
     await network();
-    await t.tap(find.text('Continue conversation'));
-    await network();
+    expect(find.text('Continue conversation'), findsNothing);
     expect(c.current?.remoteSessionId, 'external');
     expect(find.byKey(const Key('composer')).hitTestable(), findsOneWidget);
     expect(requests.every((request) => request.method == 'GET'), isTrue);

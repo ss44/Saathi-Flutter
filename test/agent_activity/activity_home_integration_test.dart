@@ -11,6 +11,7 @@ import 'package:saathi/ui/chat_controller.dart';
 import 'package:saathi/ui/chat_home.dart';
 import 'package:saathi/agent_activity/activity_strip.dart';
 import '../agent_runs_test.dart' show capabilities;
+import '../ui/remote_history_test_driver.dart';
 
 class _RealHttp extends HttpOverrides {}
 
@@ -68,6 +69,7 @@ void main() {
           }
           r.response.headers.contentType = ContentType.json;
           if (r.uri.path == '/api/sessions/session_child/messages') {
+            expectSync(r.method, 'GET');
             r.response.write(
                 '{"session_id":"session_child","data":[{"role":"assistant","content":"Public child result"}],"pagination":{"returned":1,"limit":100}}');
           } else if (r.uri.path.endsWith('capabilities')) {
@@ -239,20 +241,29 @@ void main() {
       expect(find.text('Inspect files'), findsOneWidget,
           reason: 'read-only old run survives later turns');
       c.runs[c.current!.id] = old;
+      final originalChat = c.current!;
+      final originalSource = c.connections.single;
+      final originalMessages = originalChat.messages.toList();
+      final originalPosts = posts.toList();
       await t.tap(find.text('Inspect files'));
-      for (var i = 0; i < 12; i++) {
-        await t.pump(const Duration(milliseconds: 50));
-        await t.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 30)));
-      }
-      expect(paths, contains('/api/sessions/session_child/messages'));
-      await t.drag(find.byType(ListView).last, const Offset(0, -500));
-      await t.pumpAndSettle();
-      expect(find.text('Public child result'), findsOneWidget);
+      await revealRemoteHistory(t,
+          sessionId: 'session_child',
+          connection: originalSource,
+          content: 'Public child result');
+      expect(paths.where((p) => p == '/api/sessions/session_child/messages'),
+          hasLength(1));
+      expect(find.text('Public child result').hitTestable(), findsOneWidget);
+      expect(c.current, same(originalChat));
+      expect(c.connections.single, same(originalSource));
+      expect(originalChat.messages, originalMessages);
+      expect(posts, originalPosts);
       expect(find.byKey(const Key('composer')), findsNothing);
       await t.pageBack();
       await t.pumpAndSettle();
-      final originalChat = c.current!;
+      expect(c.current, same(originalChat));
+      expect(c.connections.single, same(originalSource));
+      expect(originalChat.messages, originalMessages);
+      expect(posts, originalPosts);
       await t.tap(find.text('Agent activity'));
       await t.pumpAndSettle();
       final otherChat =
