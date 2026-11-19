@@ -84,14 +84,24 @@ void main() {
                   viewInsets: const EdgeInsets.only(bottom: 280)),
               child: child!),
           home: ChatHome(controller: c)));
-      await tester.tap(find.byTooltip('Chat prompt optimizer'));
+      await tester.tap(find.byTooltip('Settings'));
       await tester.pumpAndSettle();
-      expect(find.text('Inheriting global setting'), findsOneWidget);
-      await Scrollable.ensureVisible(
-          tester.element(find.text('Second connection')),
+      await tester.scrollUntilVisible(find.text('Chat prompt optimizer'), 200);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Chat prompt optimizer'));
+      await tester.pumpAndSettle();
+      expect(
+          find.descendant(
+              of: find.byType(AlertDialog),
+              matching: find.text('Inheriting global setting')),
+          findsOneWidget);
+      final secondConnection = find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.text('Second connection'));
+      await Scrollable.ensureVisible(tester.element(secondConnection),
           alignment: .5);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Second connection'));
+      await tester.tap(secondConnection);
       await fixture.flush(tester);
       await Scrollable.ensureVisible(tester.element(find.text('same-model')),
           alignment: .5);
@@ -107,9 +117,13 @@ void main() {
       expect(c.current!.model, 'test');
       expect(requests.single.url.port, 9998);
       expect(requests.single.method, 'GET');
-      await tester.tap(find.byTooltip('Chat prompt optimizer'));
+      await tester.tap(find.text('Chat prompt optimizer'));
       await tester.pumpAndSettle();
-      expect(find.text('Override for this chat'), findsOneWidget);
+      expect(
+          find.descendant(
+              of: find.byType(AlertDialog),
+              matching: find.text('Override for this chat')),
+          findsOneWidget);
       expect(find.text('Selected: Second connection · same-model'),
           findsOneWidget);
       await Scrollable.ensureVisible(

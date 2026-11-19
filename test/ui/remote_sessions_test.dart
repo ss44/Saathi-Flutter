@@ -58,7 +58,7 @@ void main() {
     await tester.pumpWidget(
         SaathiApp(store: store, coreFactory: () => SaathiCore(client: client)));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Connection settings'));
+    await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
     await tester.runAsync(() async {
       await tester.tap(find.byTooltip('Browse remote sessions'));

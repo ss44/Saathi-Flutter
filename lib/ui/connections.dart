@@ -29,6 +29,7 @@ class ConnectionsPage extends StatefulWidget {
 
 class _ConnectionsPageState extends State<ConnectionsPage> {
   ChatController get controller => widget.controller;
+  late final chat = controller.current;
   String? opened;
   Future<void> action(Map<String, dynamic> c, String action) async {
     setState(() => opened = null);
@@ -79,119 +80,155 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
   Widget build(BuildContext context) => Scaffold(
       appBar: AppBar(
           automaticallyImplyLeading: !widget.embedded,
-          title: Text(widget.embedded ? 'Settings' : 'Connections'),
-          actions: [
-            OptimizerSettingsButton(controller: controller),
-            if (controller.notifications != null)
-              NotificationSettingsButton(
-                  notifications: controller.notifications!),
-            const UpdateSettingsButton()
-          ]),
+          title: const Text('Settings')),
       body: ListenableBuilder(
           listenable: controller,
-          builder: (context, _) =>
-              ListView(padding: const EdgeInsets.all(20), children: [
-                const Text('Your models, your connections',
-                    style:
-                        TextStyle(fontSize: 24, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 12),
-                const Text(
-                    'Keys are held in platform secure storage. Chat history is stored on this device. Existing conversations stay bound to their original connection.'),
-                const SizedBox(height: 20),
-                for (final c in controller.connections)
-                  GestureDetector(
-                      onHorizontalDragUpdate: (d) {
-                        if (d.delta.dx < -2) setState(() => opened = c['id']);
-                        if (d.delta.dx > 2) setState(() => opened = null);
-                      },
-                      child: ClipRect(
-                          child: Stack(
-                              alignment: Alignment.centerRight,
-                              children: [
-                            if (opened == c['id'])
-                              SizedBox(
-                                  width: 160,
-                                  child: Row(children: [
-                                    for (final a in ['Edit', 'Delete'])
-                                      Expanded(
-                                          child: IconButton(
-                                              tooltip: a,
-                                              constraints: const BoxConstraints(
-                                                  minWidth: 48, minHeight: 48),
-                                              onPressed: controller
-                                                      .canChangeConnections
-                                                  ? () => action(c, a)
-                                                  : null,
-                                              icon: Icon(
-                                                  a == 'Edit'
-                                                      ? Icons.edit_outlined
-                                                      : Icons.delete_outline,
-                                                  semanticLabel: a)))
-                                  ])),
-                            TweenAnimationBuilder<double>(
-                                key: ValueKey('slide-${c['id']}'),
-                                duration: const Duration(milliseconds: 180),
-                                tween: Tween(
-                                    begin: 0,
-                                    end: opened == c['id'] ? -160 : 0),
-                                builder: (_, x, child) => Transform.translate(
-                                    offset: Offset(x, 0), child: child),
-                                child: Material(
-                                    color: Theme.of(context)
-                                        .scaffoldBackgroundColor,
-                                    child: ListTile(
-                                        contentPadding: EdgeInsets.zero,
-                                        leading: const Icon(Icons.dns_outlined),
-                                        title: Text(c['name']),
-                                        trailing: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              if (c['type'] == 'hermes')
-                                                IconButton(
-                                                    tooltip:
-                                                        'Browse remote sessions',
-                                                    icon: const Icon(
-                                                        Icons.cloud_outlined),
-                                                    onPressed: () => Navigator.push(
-                                                        context,
-                                                        MaterialPageRoute<void>(
-                                                            builder: (_) =>
-                                                                RemoteSessionsPage(
+          builder: (context, _) => SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              // Keep every settings section in keyboard focus traversal.
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const _SettingsHeading('Connections'),
+                    const SizedBox(height: 12),
+                    const Text(
+                        'Keys are held in platform secure storage. Chat history is stored on this device. Existing conversations stay bound to their original connection.'),
+                    const SizedBox(height: 20),
+                    for (final c in controller.connections)
+                      GestureDetector(
+                          onHorizontalDragUpdate: (d) {
+                            if (d.delta.dx < -2) {
+                              setState(() => opened = c['id']);
+                            }
+                            if (d.delta.dx > 2) setState(() => opened = null);
+                          },
+                          child: ClipRect(
+                              child: Stack(
+                                  alignment: Alignment.centerRight,
+                                  children: [
+                                if (opened == c['id'])
+                                  SizedBox(
+                                      width: 160,
+                                      child: Row(children: [
+                                        for (final a in ['Edit', 'Delete'])
+                                          Expanded(
+                                              child: IconButton(
+                                                  tooltip: a,
+                                                  constraints:
+                                                      const BoxConstraints(
+                                                          minWidth: 48,
+                                                          minHeight: 48),
+                                                  onPressed: controller
+                                                          .canChangeConnections
+                                                      ? () => action(c, a)
+                                                      : null,
+                                                  icon: Icon(
+                                                      a == 'Edit'
+                                                          ? Icons.edit_outlined
+                                                          : Icons
+                                                              .delete_outline,
+                                                      semanticLabel: a)))
+                                      ])),
+                                TweenAnimationBuilder<double>(
+                                    key: ValueKey('slide-${c['id']}'),
+                                    duration: const Duration(milliseconds: 180),
+                                    tween: Tween(
+                                        begin: 0,
+                                        end: opened == c['id'] ? -160 : 0),
+                                    builder: (_, x, child) =>
+                                        Transform.translate(
+                                            offset: Offset(x, 0), child: child),
+                                    child: Material(
+                                        color: Theme.of(context)
+                                            .scaffoldBackgroundColor,
+                                        child: ListTile(
+                                            contentPadding: EdgeInsets.zero,
+                                            leading:
+                                                const Icon(Icons.dns_outlined),
+                                            title: Text(c['name']),
+                                            trailing: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  if (c['type'] == 'hermes')
+                                                    IconButton(
+                                                        tooltip:
+                                                            'Browse remote sessions',
+                                                        icon: const Icon(Icons
+                                                            .cloud_outlined),
+                                                        onPressed: () => Navigator.push(
+                                                            context,
+                                                            MaterialPageRoute<
+                                                                    void>(
+                                                                builder: (_) => RemoteSessionsPage(
                                                                     controller:
                                                                         controller,
                                                                     connection:
                                                                         c)))),
-                                              PopupMenuButton<String>(
-                                                  tooltip: 'Connection actions',
-                                                  enabled: controller
-                                                      .canChangeConnections,
-                                                  onSelected: (a) =>
-                                                      action(c, a),
-                                                  itemBuilder: (_) => [
-                                                        for (final a in [
-                                                          'Edit',
-                                                          'Delete'
-                                                        ])
-                                                          PopupMenuItem(
-                                                              value: a,
-                                                              child: Text(a))
-                                                      ]),
-                                            ]),
-                                        subtitle: Text(
-                                            '${providerLabels[c['type']]} · ${c['url']}')))),
-                          ]))),
-                const SizedBox(height: 16),
-                FilledButton.icon(
-                    onPressed: !controller.canChangeConnections
-                        ? null
-                        : () => Navigator.push(
-                            context,
-                            MaterialPageRoute<void>(
-                                builder: (_) =>
-                                    AddConnectionPage(controller: controller))),
-                    icon: const Icon(Icons.add),
-                    label: const Text('Add connection')),
-              ])));
+                                                  PopupMenuButton<String>(
+                                                      tooltip:
+                                                          'Connection actions',
+                                                      enabled: controller
+                                                          .canChangeConnections,
+                                                      onSelected: (a) =>
+                                                          action(c, a),
+                                                      itemBuilder: (_) => [
+                                                            for (final a in [
+                                                              'Edit',
+                                                              'Delete'
+                                                            ])
+                                                              PopupMenuItem(
+                                                                  value: a,
+                                                                  child:
+                                                                      Text(a))
+                                                          ]),
+                                                ]),
+                                            subtitle: Text(
+                                                '${providerLabels[c['type']]} · ${c['url']}')))),
+                              ]))),
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                        onPressed: !controller.canChangeConnections
+                            ? null
+                            : () => Navigator.push(
+                                context,
+                                MaterialPageRoute<void>(
+                                    builder: (_) => AddConnectionPage(
+                                        controller: controller))),
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add connection')),
+                    const SizedBox(height: 24),
+                    const _SettingsHeading('Application'),
+                    const Text(
+                        'Defaults and preferences for Saathi on this device.'),
+                    OptimizerSettingsButton(
+                        controller: controller, asTile: true),
+                    if (controller.notifications != null)
+                      NotificationSettingsButton(
+                          notifications: controller.notifications!,
+                          asTile: true),
+                    const UpdateSettingsButton(asTile: true),
+                    if (chat != null &&
+                        identical(chat, controller.current)) ...[
+                      const SizedBox(height: 24),
+                      const _SettingsHeading('Current conversation'),
+                      Text(controller.displayTitle(chat!)),
+                      const Text(
+                          'Only this conversation. Its response model, connection and instructions are unchanged.'),
+                      OptimizerSettingsButton(
+                          controller: controller, chat: chat, asTile: true),
+                    ],
+                  ]))));
+}
+
+class _SettingsHeading extends StatelessWidget {
+  const _SettingsHeading(this.title);
+  final String title;
+  @override
+  Widget build(BuildContext context) => Semantics(
+      header: true,
+      child: Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Text(title, style: Theme.of(context).textTheme.titleLarge)));
 }
 
 class AddConnectionPage extends StatefulWidget {

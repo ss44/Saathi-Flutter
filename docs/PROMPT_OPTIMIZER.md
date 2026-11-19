@@ -9,8 +9,9 @@ releasing/sliding a hold or dismissing the group does not send or alter the draf
 A fresh Enhance activation opens review. Outside tap, Close, Back and Escape
 only dismiss; keyboard focus starts at Enhance and Tab reaches Close.
 
-Set **Global prompt optimizer** in Connections. **Chat prompt optimizer** in the
-conversation toolbar chooses a chat override or **Inherit global setting**.
+Open **Settings** from compact navigation or the desktop rail. Under **Application**, set
+**Global prompt optimizer**. Under **Current conversation**, **Chat prompt
+optimizer** chooses a chat override or **Inherit global setting**.
 Settings are separate from the response model and resolve override → global.
 There is no implicit response-model default or automatic replacement.
 
@@ -45,7 +46,10 @@ None of these actions sends a conversation message.
 The extension owns no response-model, chat-history or transport mutations. It
 persists a separate `saathi.optimizer.v1` preferences document containing a global
 tuple and chat-ID-to-tuple overrides. Runtime values change only after successful
-storage. Save attempts and completion replace an opaque authority revision.
+storage. Failed writes compensate the exact previous raw preference (including
+absence), because the plugin can mutate its cache before storage acknowledges a
+write. Compensation failures remain errors, not successful saves. Save attempts
+and completion replace an opaque authority revision.
 
 `PromptOptimizer(controller:, composer:, triggerBuilder:)` retains review/Undo
 ownership while ChatHome supplies the Send/menu trigger. Its default trigger is
@@ -56,9 +60,11 @@ lifecycle generation, and owner mounting revoke asynchronous work. A revoked
 source/selection cannot become valid by changing away and back. Catalog/result
 loading ownership is separate from result authority; a fresh picker can recover.
 
-Shared integration edits are limited to ChatHome's Send trigger and chat-settings
-button, and Connections' global-settings button. No controller, store, or core
-file changes are required. History serialization remains unchanged.
+The unified Settings route presents the global picker under Application and a
+captured current-chat picker under Current conversation. The same dialog and
+persistence contract serves both; `asTile` supplies the settings-row presentation.
+No controller, store, or core file changes are required. History serialization
+remains unchanged.
 
 ## Verification boundaries
 

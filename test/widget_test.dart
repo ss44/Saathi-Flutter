@@ -16,7 +16,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('A little space to think.'), findsOneWidget);
     expect(find.text('Can you help me plan tomorrow?'), findsNothing);
-    await tester.tap(find.byTooltip('Connection settings'));
+    await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add connection'));
     await tester.pumpAndSettle();

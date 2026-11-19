@@ -7,6 +7,7 @@ import 'package:shared_preferences_platform_interface/shared_preferences_platfor
 import 'package:saathi/core/saathi_core.dart';
 import 'package:saathi/storage/saathi_store.dart';
 import 'package:saathi/ui/chat_controller.dart';
+import 'package:saathi/ui/chat_home.dart';
 import 'package:saathi/ui/connections.dart';
 
 const original = <String, dynamic>{
@@ -94,7 +95,10 @@ Future<void> tapFormAction(WidgetTester t, String label) async {
 }
 
 Future<void> openEdit(WidgetTester t, ChatController c) async {
-  await t.pumpWidget(MaterialApp(home: ConnectionsPage(controller: c)));
+  await t.pumpWidget(MaterialApp(home: ChatHome(controller: c)));
+  await t.pumpAndSettle();
+  await t.tap(find.byTooltip('Settings'));
+  await t.pumpAndSettle();
   await t.tap(find.byTooltip('Connection actions'));
   await t.pumpAndSettle();
   await t.tap(find.text('Edit'));

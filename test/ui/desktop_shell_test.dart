@@ -8,6 +8,7 @@ import 'package:saathi/core/saathi_core.dart';
 import 'package:saathi/agent_runs/run_client.dart';
 import 'package:saathi/ui/chat_controller.dart';
 import 'package:saathi/ui/chat_home.dart';
+import 'package:saathi/ui/optimizer_settings.dart';
 
 import 'controller_http_test.dart' show makeStore;
 import '../runtime_flow_test.dart' show runtimeCapabilities;
@@ -75,12 +76,69 @@ void main() {
     await t.tap(find.text('Settings'));
     await t.pumpAndSettle();
     expect(find.byType(NavigationRail), findsOneWidget);
-    expect(find.text('Your models, your connections'), findsOneWidget);
+    expect(find.text('Connections'), findsOneWidget);
     await t.tap(find.text('Chats'));
     await t.pumpAndSettle();
     expect(c.current, same(session));
     expect(t.widget<TextField>(composer).controller!.text,
         'Keep this unsent draft');
+    expect(t.takeException(), isNull);
+  });
+
+  testWidgets('desktop Settings Back returns to chat after detail navigation',
+      (t) async {
+    final c = await open(t, const Size(1440, 900));
+    final session = c.current;
+    final composer = find.byKey(const Key('composer'));
+    await t.enterText(composer, 'Keep draft across settings Back');
+    await t.tap(find.text('Settings'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('Add connection'));
+    await t.pumpAndSettle();
+    await t.pageBack();
+    await t.pumpAndSettle();
+    expect(find.text('Connections'), findsOneWidget);
+    await t.binding.handlePopRoute();
+    await t.pumpAndSettle();
+    expect(composer.hitTestable(), findsOneWidget);
+    expect(c.current, same(session));
+    expect(t.widget<TextField>(composer).controller!.text,
+        'Keep draft across settings Back');
+    expect(t.takeException(), isNull);
+  });
+
+  testWidgets('desktop Settings scopes overrides on each deliberate entry',
+      (t) async {
+    final c = await open(t, const Size(1440, 900));
+    const firstOverride =
+        OptimizerSelection(connectionId: 'desktop', model: 'first-rewrite');
+    const secondOverride =
+        OptimizerSelection(connectionId: 'desktop', model: 'second-rewrite');
+    await c.saveOptimizerSelection(firstOverride, chat: c.sessions.first);
+    await c.saveOptimizerSelection(secondOverride, chat: c.sessions.last);
+    await t.tap(find.text('On this device · first-model'));
+    await t.pumpAndSettle();
+    expect(find.byTooltip('Chat prompt optimizer'), findsNothing);
+    expect(find.byTooltip('Settings'), findsNothing);
+    for (final model in ['first-rewrite', 'second-rewrite']) {
+      await t.tap(find.descendant(
+          of: find.byType(NavigationRail), matching: find.text('Settings')));
+      await t.pumpAndSettle();
+      expect(find.text('Current conversation'), findsOneWidget);
+      final override = find.widgetWithText(ListTile, 'Chat prompt optimizer');
+      await t.ensureVisible(override);
+      await t.tap(override);
+      await t.pumpAndSettle();
+      expect(find.text('Selected: Desktop fixture · $model'), findsOneWidget);
+      await t.tap(find.text('Inherit global setting'));
+      await t.pumpAndSettle();
+      expect(c.optimizerOverride(c.current!), isNull);
+      expect(c.globalOptimizerSelection, isNull);
+      await t.tap(find.text('Chats'));
+      await t.pumpAndSettle();
+      await t.tap(find.text('On this device · second-model'));
+      await t.pumpAndSettle();
+    }
     expect(t.takeException(), isNull);
   });
 

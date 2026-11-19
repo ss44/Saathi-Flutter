@@ -204,11 +204,7 @@ void main() {
       expect(tester.takeException(), isNull);
       final titleRect = tester.getRect(title);
       final navigation = find.byTooltip('Open navigation menu');
-      final actions = [
-        'New conversation',
-        'Connection settings',
-        'Delete conversation'
-      ];
+      final actions = ['New conversation', 'Settings', 'Delete conversation'];
       expect(titleRect.left,
           greaterThanOrEqualTo(tester.getRect(navigation).right));
       for (final tooltip in actions) {

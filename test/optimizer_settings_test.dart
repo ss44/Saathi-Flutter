@@ -45,7 +45,8 @@ void main() {
           200);
     }, catalogFixture: false);
     await tester.pumpWidget(MaterialApp(home: ConnectionsPage(controller: c)));
-    await tester.tap(find.byTooltip('Global prompt optimizer'));
+    await tester.scrollUntilVisible(find.text('Global prompt optimizer'), 200);
+    await tester.tap(find.text('Global prompt optimizer'));
     await tester.pumpAndSettle();
     await tester.tap(find.descendant(
         of: find.byType(AlertDialog), matching: find.text('Direct')));
