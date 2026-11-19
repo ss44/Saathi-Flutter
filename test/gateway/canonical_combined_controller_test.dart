@@ -15,6 +15,10 @@ class NativeHost {
   final sockets = <WebSocket>[];
   final requests = <Map<String, dynamic>>[];
   bool terminal = false;
+  bool creationEnabled = false;
+  bool listFails = false;
+  String profileId = 'profile';
+  Completer<void>? resumeGate;
   String? inputId;
   List<Map<String, dynamic>> prompts = [];
   List<Map<String, dynamic>>? history;
@@ -25,7 +29,7 @@ class NativeHost {
         'protocol': 'hermes-gateway-v1',
         'protocols': ['hermes-gateway-v1', 'hermes-gateway-ticket.${'x' * 43}'],
         'ticket': 'x' * 43,
-        'endpoint': {'profile_id': 'profile', 'instance_id': 'owner'},
+        'endpoint': {'profile_id': profileId, 'instance_id': 'owner'},
       });
   Map<String, dynamic> receipt() => {
         'admission_id': 'run',
@@ -46,26 +50,40 @@ class NativeHost {
       final ws = await WebSocketTransformer.upgrade(r,
           protocolSelector: (_) => 'hermes-gateway-v1');
       sockets.add(ws);
-      ws.listen((raw) {
+      ws.listen((raw) async {
         final r = jsonDecode(raw as String) as Map<String, dynamic>;
         requests.add(r);
+        if (r['method'] == 'session.resume') await resumeGate?.future;
         if (r['method'] == 'prompt.submit') {
           inputId = r['params']['input_id'] as String;
         }
         final value = switch (r['method']) {
           'runtime.describe' => {
-              'profile_id': 'profile',
+              'profile_id': profileId,
               'instance_id': 'owner',
               'authority_epoch': 3,
-              'capabilities': ['durable-admission-v1', 'event-replay-v1']
+              'capabilities': [
+                'durable-admission-v1',
+                'event-replay-v1',
+                if (creationEnabled) 'local-cli-create-v1'
+              ],
+              if (creationEnabled)
+                'session_create': {
+                  'sources': ['gui'],
+                  'parameters': ['request_id', 'source']
+                },
             },
           'session.list' => {
-              'sessions': [
-                {'session_id': 'chat', 'title': 'Native A'}
-              ]
+              'sessions': listFails
+                  ? 'invalid window'
+                  : [
+                      {'session_id': 'chat', 'title': 'Native A'}
+                    ]
             },
           'session.resume' => {
               ...snapshot(),
+              'session_id': r['params']['session_id'],
+              'stored_session_id': r['params']['session_id'],
               'prompts': prompts,
               'messages': history ??
                   [
@@ -90,6 +108,7 @@ class NativeHost {
                       },
                   ]
             },
+          'session.create' => {'session_id': 'new-native'},
           'prompt.submit' || 'prompt.receipt' => receipt(),
           'approval.respond' => (() {
               prompts = [];
@@ -172,6 +191,82 @@ Future<(ChatController, NativeHost, GateSecrets)> setup() async {
 }
 
 void main() {
+  test('delayed native attachment cannot replace a newer selected conversation',
+      () async {
+    final (c, host, _) = await setup();
+    await c.connectCanonical(c.connections.single, host.invite);
+    host.resumeGate = Completer<void>();
+    final attaching = c.attachCanonical(GatewaySession({'session_id': 'chat'}));
+    final assertion = expectLater(attaching, throwsStateError);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    final newer =
+        ChatSession(id: 'newer', connectionId: 'other', model: 'model');
+    c.sessions.add(newer);
+    c.select(newer);
+    host.resumeGate!.complete();
+    await assertion;
+    expect(c.current, same(newer));
+    expect(c.canonicalFor(c.connections.single), isNull);
+  });
+  test(
+      'foreign or malformed creation evidence cannot block native session access',
+      () async {
+    final (c, host, secrets) = await setup();
+    for (final evidence in [
+      '{malformed',
+      jsonEncode(
+          {'profileId': 'foreign', 'requestId': 'old', 'sessionId': 'old-chat'})
+    ]) {
+      await secrets.write('gateway.creation.native', evidence);
+      final rows = await c.connectCanonical(c.connections.single, host.invite);
+      expect(rows, isNotEmpty);
+      expect(c.canonicalFor(c.connections.single)!.creation.canCreate, isFalse);
+      await c.attachCanonical(rows.first, expectedProfileId: 'profile');
+      expect(c.current!.remoteSessionId, 'chat');
+      expect(await secrets.read('gateway.creation.native'), evidence);
+    }
+  });
+  test(
+      'gateway creation adopts and saves native identity without sending history',
+      () async {
+    final (c, host, secrets) = await setup();
+    final original = c.current!;
+    host.creationEnabled = true;
+    await c.connectCanonical(c.connections.single, host.invite);
+    await c.createCanonical(c.connections.single);
+    expect(c.current!.remoteSessionId, 'new-native');
+    expect(c.current!.canonicalProfileId, 'profile');
+    expect(c.canonical!.connected, isTrue);
+    expect(c.sessions, contains(original));
+    expect(host.requests.where((r) => r['method'] == 'session.create'),
+        hasLength(1));
+    expect(host.requests.where((r) => r['method'] == 'prompt.submit'), isEmpty);
+    expect(await secrets.read('gateway.creation.native'), isNull);
+    expect(c.store.preferences.getString('saathi.chats.v1'),
+        contains('new-native'));
+  });
+  test(
+      'wrong-profile reconnect cannot resume or overwrite the original conversation',
+      () async {
+    final (c, host, _) = await setup();
+    final original = c.current!;
+    final before = host.requests.length;
+    await expectLater(
+        c.attachCanonical(GatewaySession({'session_id': 'chat'}),
+            expectedProfileId: 'foreign'),
+        throwsStateError);
+    expect(c.current, same(original));
+    expect(host.requests.length, before);
+  });
+  test('native connection cannot enter direct-model new-session path',
+      () async {
+    final (c, host, _) = await setup();
+    final original = c.current!;
+    await expectLater(c.newSession(c.connections.single, 'model', 'system'),
+        throwsStateError);
+    expect(c.current, same(original));
+    expect(host.requests.where((r) => r['method'] == 'prompt.submit'), isEmpty);
+  });
   test(
       'canonical completion belongs to original A and organization while B is selected',
       () async {

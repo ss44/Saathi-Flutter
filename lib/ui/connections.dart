@@ -12,8 +12,8 @@ const providerLabels = {
   'openai': 'OpenAI-compatible',
   'anthropic': 'Anthropic',
   'gemini': 'Gemini',
-  'hermes': 'Hermes',
-  'hermesGateway': 'Hermes Desktop / CLI',
+  'hermesGateway': 'Hermes',
+  'hermes': 'Hermes REST (legacy)',
   'openclaw': 'OpenClaw'
 };
 
@@ -34,7 +34,8 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
   String? opened;
   Future<void> action(Map<String, dynamic> c, String action) async {
     setState(() => opened = null);
-    if (action == 'Edit' && c['type'] == 'hermesGateway') {
+    if ((action == 'Edit' || action == 'Open gateway') &&
+        c['type'] == 'hermesGateway') {
       await Navigator.push(
           context,
           MaterialPageRoute<void>(
@@ -154,6 +155,18 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                                             trailing: Row(
                                                 mainAxisSize: MainAxisSize.min,
                                                 children: [
+                                                  if (c['type'] ==
+                                                      'hermesGateway')
+                                                    IconButton(
+                                                        tooltip:
+                                                            'Open Hermes gateway',
+                                                        icon: const Icon(Icons
+                                                            .forum_outlined),
+                                                        onPressed: controller
+                                                                .canChangeConnections
+                                                            ? () => action(c,
+                                                                'Open gateway')
+                                                            : null),
                                                   if (c['type'] == 'hermes')
                                                     IconButton(
                                                         tooltip:
@@ -178,7 +191,10 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                                                           action(c, a),
                                                       itemBuilder: (_) => [
                                                             for (final a in [
-                                                              'Edit',
+                                                              c['type'] ==
+                                                                      'hermesGateway'
+                                                                  ? 'Open gateway'
+                                                                  : 'Edit',
                                                               'Delete'
                                                             ])
                                                               PopupMenuItem(
@@ -191,6 +207,17 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                                                 '${providerLabels[c['type']]} · ${c['url']}')))),
                               ]))),
                     const SizedBox(height: 16),
+                    OutlinedButton.icon(
+                        onPressed: !controller.canChangeConnections
+                            ? null
+                            : () => Navigator.push(
+                                context,
+                                MaterialPageRoute<void>(
+                                    builder: (_) => CanonicalConnectionPage(
+                                        controller: controller))),
+                        icon: const Icon(Icons.hub_outlined),
+                        label: const Text('Connect Hermes gateway')),
+                    const SizedBox(height: 8),
                     FilledButton.icon(
                         onPressed: !controller.canChangeConnections
                             ? null
@@ -372,11 +399,25 @@ class _AddConnectionPageState extends State<AddConnectionPage>
                 isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Provider type'),
                 items: providerLabels.entries
-                    .where((entry) => entry.key != 'hermesGateway')
+                    .where((entry) =>
+                        (entry.key != 'hermes' ||
+                            widget.connection?['type'] == 'hermes') &&
+                        (entry.key != 'hermesGateway' ||
+                            widget.connection == null))
                     .map((e) =>
                         DropdownMenuItem(value: e.key, child: Text(e.value)))
                     .toList(),
-                onChanged: (v) => setState(() => type = v!)),
+                onChanged: (v) {
+                  if (v == 'hermesGateway') {
+                    Navigator.pushReplacement(
+                        context,
+                        MaterialPageRoute<void>(
+                            builder: (_) => CanonicalConnectionPage(
+                                controller: widget.controller)));
+                  } else {
+                    setState(() => type = v!);
+                  }
+                }),
             const SizedBox(height: 18),
             TextFormField(
                 controller: url,
@@ -523,8 +564,9 @@ class _NewChatPageState extends State<NewChatPage> {
   void initState() {
     super.initState();
     connection = widget.controller.connections
-        .where((c) => c['type'] != 'hermesGateway')
-        .firstOrNull;
+            .where((c) => c['type'] == 'hermesGateway')
+            .firstOrNull ??
+        widget.controller.connections.firstOrNull;
     catalogGeneration = widget.controller.catalogGeneration;
     widget.controller.addListener(syncController);
   }
@@ -619,7 +661,6 @@ class _NewChatPageState extends State<NewChatPage> {
             isExpanded: true,
             decoration: const InputDecoration(labelText: 'Connection'),
             items: widget.controller.connections
-                .where((c) => c['type'] != 'hermesGateway')
                 .map((c) => DropdownMenuItem<String>(
                     value: c['id'], child: Text(c['name'])))
                 .toList(),
@@ -634,75 +675,92 @@ class _NewChatPageState extends State<NewChatPage> {
                       model.clear();
                       error = null;
                     })),
-        if (connection?['type'] == 'openclaw')
-          const Padding(
-              padding: EdgeInsets.symmetric(vertical: 16),
-              child: Text(
-                  'OpenClaw requires its native gateway. This build cannot discover models or start a conversation on that protocol.')),
-        if (connection?['type'] == 'hermes')
-          const Padding(
-              padding: EdgeInsets.symmetric(vertical: 16),
-              child: Text(
-                  'This starts a new app-owned conversation. To inspect an existing desktop / CLI session, use Browse remote sessions in Connections. Live attachment is not available.')),
-        const SizedBox(height: 16),
-        OutlinedButton.icon(
-            onPressed: connection == null ||
-                    !widget.controller.canDiscoverModels ||
-                    discovering ||
-                    connection?['type'] == 'openclaw'
-                ? null
-                : discover,
-            icon: const Icon(Icons.refresh),
-            label: Text(discovering ? 'Discovering…' : 'Discover models')),
-        if (models.isNotEmpty)
-          DropdownButtonFormField<String>(
-              isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Available models'),
-              items: models
-                  .map((m) =>
-                      DropdownMenuItem(value: m.id, child: Text(m.displayName)))
-                  .toList(),
-              onChanged: (v) => setState(() {
-                    if (!catalogCurrent) return;
-                    selectedModel = models.singleWhere((m) => m.id == v);
-                    model.text = selectedModel!.name;
-                  })),
-        const SizedBox(height: 16),
-        TextField(
-            controller: model,
-            readOnly: connection?['type'] == 'hermes',
-            onChanged: (_) => setState(() {}),
-            decoration: InputDecoration(
-                labelText: 'Model ID',
-                helperText: connection?['type'] == 'hermes'
-                    ? 'Choose a model from this server’s catalog.'
-                    : 'Pick a discovered model or enter an exact ID.')),
-        const SizedBox(height: 16),
-        TextField(
-            controller: prompt,
-            maxLines: 4,
-            decoration: const InputDecoration(
-                labelText: 'System prompt (optional)',
-                alignLabelWithHint: true)),
-        const SizedBox(height: 16),
-        const Text(
-            'This conversation keeps its connection, model and instructions. Start a new conversation to change them. Direct-model context is managed on this device.'),
-        if (error != null)
-          Padding(
-              padding: const EdgeInsets.only(top: 16),
-              child: Text(error!,
-                  style:
-                      TextStyle(color: Theme.of(context).colorScheme.error))),
-        const SizedBox(height: 24),
-        FilledButton(
-            onPressed: connection == null ||
-                    connection?['type'] == 'openclaw' ||
-                    model.text.trim().isEmpty ||
-                    (connection?['type'] == 'hermes' &&
-                        (selectedModel == null || !catalogCurrent)) ||
-                    starting
-                ? null
-                : start,
-            child: const Text('Start conversation')),
+        if (connection?['type'] == 'hermesGateway') ...[
+          const SizedBox(height: 20),
+          const Text(
+              'Start a conversation on your Hermes host or continue an existing one. Models, tools and instructions come from the host, not a direct-model API.'),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+              onPressed: () => Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute<void>(
+                      builder: (_) => CanonicalConnectionPage(
+                          controller: widget.controller,
+                          connection: connection))),
+              icon: const Icon(Icons.forum_outlined),
+              label: const Text('Open Hermes gateway')),
+        ] else ...[
+          if (connection?['type'] == 'openclaw')
+            const Padding(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: Text(
+                    'OpenClaw requires its native gateway. This build cannot discover models or start a conversation on that protocol.')),
+          if (connection?['type'] == 'hermes')
+            const Padding(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: Text(
+                    'Legacy REST connection: this creates an API-owned chat, not a desktop gateway conversation. Add a Hermes gateway connection for native sessions, approvals and controls. Existing API conversations keep their original owner.')),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+              onPressed: connection == null ||
+                      !widget.controller.canDiscoverModels ||
+                      discovering ||
+                      connection?['type'] == 'openclaw'
+                  ? null
+                  : discover,
+              icon: const Icon(Icons.refresh),
+              label: Text(discovering ? 'Discovering…' : 'Discover models')),
+          if (models.isNotEmpty)
+            DropdownButtonFormField<String>(
+                isExpanded: true,
+                decoration:
+                    const InputDecoration(labelText: 'Available models'),
+                items: models
+                    .map((m) => DropdownMenuItem(
+                        value: m.id, child: Text(m.displayName)))
+                    .toList(),
+                onChanged: (v) => setState(() {
+                      if (!catalogCurrent) return;
+                      selectedModel = models.singleWhere((m) => m.id == v);
+                      model.text = selectedModel!.name;
+                    })),
+          const SizedBox(height: 16),
+          TextField(
+              controller: model,
+              readOnly: connection?['type'] == 'hermes',
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                  labelText: 'Model ID',
+                  helperText: connection?['type'] == 'hermes'
+                      ? 'Choose a model from this server’s catalog.'
+                      : 'Pick a discovered model or enter an exact ID.')),
+          const SizedBox(height: 16),
+          TextField(
+              controller: prompt,
+              maxLines: 4,
+              decoration: const InputDecoration(
+                  labelText: 'System prompt (optional)',
+                  alignLabelWithHint: true)),
+          const SizedBox(height: 16),
+          const Text(
+              'This conversation keeps its connection, model and instructions. Start a new conversation to change them. Direct-model context is managed on this device.'),
+          if (error != null)
+            Padding(
+                padding: const EdgeInsets.only(top: 16),
+                child: Text(error!,
+                    style:
+                        TextStyle(color: Theme.of(context).colorScheme.error))),
+          const SizedBox(height: 24),
+          FilledButton(
+              onPressed: connection == null ||
+                      connection?['type'] == 'openclaw' ||
+                      model.text.trim().isEmpty ||
+                      (connection?['type'] == 'hermes' &&
+                          (selectedModel == null || !catalogCurrent)) ||
+                      starting
+                  ? null
+                  : start,
+              child: const Text('Start conversation')),
+        ],
       ]));
 }

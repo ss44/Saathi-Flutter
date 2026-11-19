@@ -2,6 +2,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:io';
 import '../storage/saathi_store.dart';
 import 'hermes_gateway.dart';
 
@@ -16,14 +17,18 @@ class HostInviteVault {
   static Uri trustedSource(String text) {
     final uri = Uri.tryParse(text);
     if (uri == null ||
-        uri.scheme != 'wss' ||
+        !(uri.scheme == 'wss' ||
+            (uri.scheme == 'ws' &&
+                (uri.host == 'localhost' ||
+                    (InternetAddress.tryParse(uri.host)?.isLoopback ??
+                        false)))) ||
         uri.host.isEmpty ||
         uri.userInfo.isNotEmpty ||
         uri.hasQuery ||
         uri.hasFragment ||
         uri.path != '/api/ws') {
       throw const GatewayException(
-          'Enter the trusted host’s WSS /api/ws address');
+          'Use WSS /api/ws, or WS on this device’s loopback only');
     }
     return uri;
   }

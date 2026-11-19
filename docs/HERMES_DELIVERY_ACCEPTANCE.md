@@ -1,5 +1,42 @@
 # Hermes-first delivery acceptance and review handoff
 
+## Gateway-first follow-up, 2026-11-19
+
+New Hermes setup now selects the canonical desktop gateway rather than the
+ordinary inference API. Persisted REST connections remain labeled legacy and
+retain their original conversation and recovery ownership. Native creation uses
+the advertised `session.create` contract with host defaults; it does not send a
+prompt or imported transcript. Its secure intent journal preserves unknown
+creation across restart and never automatically retries it with a new grant.
+Existing native conversations have an explicit original-profile reconnect.
+
+Controlled regression coverage was added for capability gating, journal-before-
+create ordering, unconfirmed creation, source revocation, duplicate-address
+connection identity, delayed attachment after navigation, profile mismatch,
+stale session-list invalidation and creation-recovery isolation. Mobile route
+tests exercise native creation at 360/390 px, 2x text and keyboard insets. These
+are fixture checks, not new live-server/device evidence.
+
+Local verification of this follow-up on Flutter 3.47.9 / Dart 3.13.7:
+
+- All 997 Flutter tests passed in a clean full-suite rerun.
+- Application line coverage: 8377/8817, 95.01%, above the unchanged 85% floor.
+- Strict analyzer, repository Dart formatting, and `git diff --check` passed.
+- 117 Python tooling tests and the branding test passed.
+- `flutter build linux --release --no-pub` built
+  `build/linux/x64/release/bundle/saathi`. This is a local binary, not a published
+  release, deployed-host result, or Android device acceptance.
+
+Upstream creation/bootstrap source was inspected at official Hermes commit
+`52811481bc07b18b073790cd2a168a832c92acd7`. Stock same-device WS loopback invites
+are accepted; remote addresses still require WSS and explicitly secured
+forwarding compatible with the native host's loopback authentication gate.
+REST tokens are never translated into gateway grants. Native OAuth sign-in,
+automatic grant renewal, remote deployment/device acceptance, and verified
+model/tool configuration controls remain open. #59 acceptance still precedes
+adapter extraction under #66. Historical evidence below has not been rewritten
+as verification of this follow-up.
+
 ## Verdict and scope
 
 **Hermes source is ready for exact-diff independent review, not merged, built,
