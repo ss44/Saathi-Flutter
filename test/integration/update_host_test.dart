@@ -50,9 +50,10 @@ void main() {
         secrets: MemorySecrets());
     await tester.pumpWidget(SaathiApp(store: store));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Connection settings'));
+    await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('App updates'));
+    await tester.scrollUntilVisible(find.text('App updates'), 200);
+    await tester.tap(find.text('App updates'));
     await tester.pumpAndSettle();
     expect(find.textContaining('not configured'), findsOneWidget);
     expect(find.text('Current version: 0.1.0'), findsOneWidget);

@@ -64,7 +64,7 @@ void main() {
     await tester.pumpWidget(app());
     await tester.pumpAndSettle();
     await capture('empty-390');
-    await tester.tap(find.byTooltip('Connection settings'));
+    await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add connection'));
     await tester.pumpAndSettle();

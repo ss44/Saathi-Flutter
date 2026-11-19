@@ -35,7 +35,6 @@ import 'safe_markdown.dart';
 import 'conversation_servers.dart';
 import 'prompt_optimizer.dart';
 import 'growing_message_input.dart';
-import 'optimizer_settings.dart';
 
 const muted = Color(0xFF6A7470);
 
@@ -664,7 +663,11 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                 FocusManager.instance.primaryFocus?.unfocus();
                 setState(() => desktopSettings = value);
               },
-              settings: ConnectionsPage(controller: c, embedded: true),
+              // Capture conversation scope when Settings is entered, not when
+              // the persistent desktop shell first mounts its inactive panes.
+              settings: desktopSettings
+                  ? ConnectionsPage(controller: c, embedded: true)
+                  : const SizedBox.shrink(),
               onDrawerChanged: (open) {
                 setState(() {
                   drawerOpen = open;
@@ -711,8 +714,6 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                   ],
                 ),
                 actions: [
-                  if (session != null)
-                    OptimizerSettingsButton(controller: c, chat: session),
                   if (!wide)
                     IconButton(
                       tooltip: 'New conversation',
@@ -721,7 +722,9 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                     ),
                   if (!wide)
                     IconButton(
-                      tooltip: 'Connection settings',
+                      tooltip: 'Settings',
+                      constraints:
+                          const BoxConstraints(minWidth: 48, minHeight: 48),
                       onPressed: () => Navigator.push(
                         context,
                         MaterialPageRoute<void>(

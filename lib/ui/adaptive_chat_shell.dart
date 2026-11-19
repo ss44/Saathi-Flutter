@@ -44,48 +44,54 @@ class AdaptiveChatShell extends StatelessWidget {
     );
     if (!wide) return conversation;
 
-    return Scaffold(
-      resizeToAvoidBottomInset: false,
-      body: SafeArea(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            NavigationRail(
-              backgroundColor: const Color(0xFFE9EDE7),
-              minWidth: 80,
-              labelType: NavigationRailLabelType.all,
-              selectedIndex: showSettings ? 1 : 0,
-              onDestinationSelected: (index) => onSettingsChanged(index == 1),
-              leading: const Padding(
-                padding: EdgeInsets.symmetric(vertical: 20),
-                child: Tooltip(
-                  message: 'Saathi',
-                  child: Icon(Icons.spa_outlined, color: Color(0xFF3E6559)),
+    return PopScope<void>(
+      canPop: !showSettings,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && showSettings) onSettingsChanged(false);
+      },
+      child: Scaffold(
+        resizeToAvoidBottomInset: false,
+        body: SafeArea(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              NavigationRail(
+                backgroundColor: const Color(0xFFE9EDE7),
+                minWidth: 80,
+                labelType: NavigationRailLabelType.all,
+                selectedIndex: showSettings ? 1 : 0,
+                onDestinationSelected: (index) => onSettingsChanged(index == 1),
+                leading: const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 20),
+                  child: Tooltip(
+                    message: 'Saathi',
+                    child: Icon(Icons.spa_outlined, color: Color(0xFF3E6559)),
+                  ),
+                ),
+                destinations: const [
+                  NavigationRailDestination(
+                    icon: Icon(Icons.chat_bubble_outline_rounded),
+                    selectedIcon: Icon(Icons.chat_bubble_rounded),
+                    label: Text('Chats'),
+                  ),
+                  NavigationRailDestination(
+                    icon: Icon(Icons.settings_outlined),
+                    selectedIcon: Icon(Icons.settings),
+                    label: Text('Settings'),
+                  ),
+                ],
+              ),
+              const VerticalDivider(width: 1),
+              SizedBox(width: 300, child: sidebar),
+              const VerticalDivider(width: 1),
+              Expanded(
+                child: IndexedStack(
+                  index: showSettings ? 1 : 0,
+                  children: [conversation, settings],
                 ),
               ),
-              destinations: const [
-                NavigationRailDestination(
-                  icon: Icon(Icons.chat_bubble_outline_rounded),
-                  selectedIcon: Icon(Icons.chat_bubble_rounded),
-                  label: Text('Chats'),
-                ),
-                NavigationRailDestination(
-                  icon: Icon(Icons.settings_outlined),
-                  selectedIcon: Icon(Icons.settings),
-                  label: Text('Settings'),
-                ),
-              ],
-            ),
-            const VerticalDivider(width: 1),
-            SizedBox(width: 300, child: sidebar),
-            const VerticalDivider(width: 1),
-            Expanded(
-              child: IndexedStack(
-                index: showSettings ? 1 : 0,
-                children: [conversation, settings],
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

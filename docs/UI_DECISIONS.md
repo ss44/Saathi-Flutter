@@ -52,6 +52,35 @@ keyboard activation and semantics actions. Existing optimizer tests retain the
 source/lifecycle revocation and Apply/Keep/Undo coverage. These are widget tests,
 not physical-device or TalkBack verification.
 
+## Unified settings
+
+Compact navigation has one accessible **Settings** action, not a separate
+chat-optimizer settings icon. Wide navigation keeps the existing **Settings** rail
+destination and embedded pane, without adding a toolbar shortcut. Its scrollable pane groups **Connections**,
+**Application** (global optimizer, notifications and app updates), and **Current
+conversation** (optimizer override/inheritance). Detail screens and dialogs return
+to that pane; Back returns to the untouched composer draft, including from the
+embedded desktop pane. The conversation section captures the chat on deliberate
+Settings entry, not when the desktop shell mounts its inactive panes. On compact
+navigation it is hidden if selection changes; desktop selection returns to chat
+and the next Settings entry captures that chat. Choosing optimizer settings never changes the response model,
+connection or instructions. Connection edit/save/delete retains its existing secure
+storage and validation paths. Update checks and installation consent are unchanged;
+there is no new automatic-update preference.
+
+Settings rows use the current theme. Appearance/System/Light/Dark implementation
+is tracked separately in #63; this consolidation adds no toolbar theme toggle or
+placeholder preference.
+
+All finite settings rows remain mounted for keyboard traversal and focus-driven
+scrolling. Regression tests cover Tab/Enter/Escape, 360px/2x text with keyboard
+insets, real connection edit/save/delete, notifications, updates, desktop rail
+navigation/Back, captured chat scope and active conversation isolation. Optimizer
+save failures restore the prior raw preference in the plugin cache and storage;
+false and throwing channel writes are tested with same-cache and cold owners.
+These are controlled widget/storage tests, not native-device accessibility or
+OS-storage durability certification.
+
 ## Layout verification
 Wide windows at least 1,000 logical pixels use the persistent workspace when there is also room for the current text scale (at least 720 times the scaled unit size). The chat list stays 300px wide beside the navigation rail; conversation content is capped at 960px. Settings opens inside the workspace without replacing the conversation or its draft. Resizing back to compact navigation preserves the composer. Remote history continues to open as a separate read-only route, not as a local conversation or replayed input.
 

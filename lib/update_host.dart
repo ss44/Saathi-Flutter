@@ -69,20 +69,30 @@ class _UpdateScope extends InheritedWidget {
 }
 
 class UpdateSettingsButton extends StatelessWidget {
-  const UpdateSettingsButton({super.key});
+  const UpdateSettingsButton({super.key, this.asTile = false});
+  final bool asTile;
   @override
   Widget build(BuildContext context) {
+    void open() =>
+        Navigator.of(context).push(MaterialPageRoute<void>(builder: (context) {
+          final scope =
+              context.dependOnInheritedWidgetOfExactType<_UpdateScope>();
+          return SaathiUpdatesPage(
+              controller: scope?.controller, initializationError: scope?.error);
+        }));
+    if (asTile) {
+      return ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.system_update_alt),
+          title: const Text('App updates'),
+          subtitle: const Text('Check for updates and read what’s new'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: open);
+    }
     return IconButton(
         tooltip: 'App updates',
         icon: const Icon(Icons.system_update_alt),
-        onPressed: () => Navigator.of(context)
-                .push(MaterialPageRoute<void>(builder: (context) {
-              final scope =
-                  context.dependOnInheritedWidgetOfExactType<_UpdateScope>();
-              return SaathiUpdatesPage(
-                  controller: scope?.controller,
-                  initializationError: scope?.error);
-            })));
+        onPressed: open);
   }
 }
 

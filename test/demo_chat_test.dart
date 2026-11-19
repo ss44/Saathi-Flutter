@@ -99,7 +99,7 @@ void main() {
     expect(requests.last.headers['authorization'], 'Bearer not-a-real-key');
     expect(store.preferences.getKeys().map(store.preferences.get).join(),
         isNot(contains('not-a-real-key')));
-    await tester.tap(find.byTooltip('Connection settings'));
+    await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
     await tester.pageBack();
     await tester.pumpAndSettle();

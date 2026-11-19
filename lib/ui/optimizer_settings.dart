@@ -103,8 +103,28 @@ extension OptimizerSettings on ChatController {
           for (final entry in chats.entries) entry.key: entry.value.toJson()
         }
       });
-      if (!await store.preferences.setString('saathi.optimizer.v1', payload)) {
-        throw StateError('Could not save optimizer settings');
+      const key = 'saathi.optimizer.v1';
+      final preferences = store.preferences;
+      final before = preferences.get(key);
+      try {
+        if (!await preferences.setString(key, payload)) {
+          throw StateError('Could not save optimizer settings');
+        }
+      } catch (_) {
+        // The plugin mutates its cache before a durable write succeeds. Restore
+        // the exact prior raw value so a new controller cannot adopt a failed
+        // selection. Keep the save guard through compensation as well.
+        final restored = await switch (before) {
+          null => preferences.remove(key),
+          String value => preferences.setString(key, value),
+          bool value => preferences.setBool(key, value),
+          int value => preferences.setInt(key, value),
+          double value => preferences.setDouble(key, value),
+          List value => preferences.setStringList(key, value.cast<String>()),
+          _ => throw StateError('Unsupported previous preference'),
+        };
+        if (!restored) throw StateError('Could not restore optimizer settings');
+        rethrow;
       }
       state.global = global;
       state.chats = chats;
@@ -123,20 +143,36 @@ bool boundedRewriteConnection(String? type) =>
 /// discovery never changes server configuration or sends a draft.
 class OptimizerSettingsButton extends StatelessWidget {
   const OptimizerSettingsButton(
-      {super.key, required this.controller, this.chat});
+      {super.key, required this.controller, this.chat, this.asTile = false});
   final ChatController controller;
   final ChatSession? chat;
+  final bool asTile;
   @override
-  Widget build(BuildContext context) => IconButton(
-      tooltip:
-          chat == null ? 'Global prompt optimizer' : 'Chat prompt optimizer',
-      icon: const Icon(Icons.tune),
-      onPressed: () => showDialog<void>(
-          context: context,
-          builder: (_) => OptimizerSettingsDialog(
-              controller: controller,
-              chat: chat,
-              isOwnerCurrent: () => context.mounted)));
+  Widget build(BuildContext context) {
+    final title =
+        chat == null ? 'Global prompt optimizer' : 'Chat prompt optimizer';
+    void open() => showDialog<void>(
+        context: context,
+        builder: (_) => OptimizerSettingsDialog(
+            controller: controller,
+            chat: chat,
+            isOwnerCurrent: () => context.mounted));
+    if (asTile) {
+      return ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.tune),
+          title: Text(title),
+          subtitle: Text(chat == null
+              ? 'Default rewrite model, separate from chat replies'
+              : controller.optimizerOverride(chat!) == null
+                  ? 'Inheriting global setting'
+                  : 'Override for this chat'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: open);
+    }
+    return IconButton(
+        tooltip: title, icon: const Icon(Icons.tune), onPressed: open);
+  }
 }
 
 class OptimizerSettingsDialog extends StatefulWidget {
@@ -193,18 +229,24 @@ class _OptimizerSettingsDialogState extends State<OptimizerSettingsDialog>
 
   Future<void> save(OptimizerSelection? value) async {
     if (!valid || saving) return;
+    final route = ModalRoute.of(context);
     setState(() {
       saving = true;
       error = null;
     });
     try {
       await widget.controller.saveOptimizerSelection(value, chat: widget.chat);
-      if (mounted) Navigator.pop(context);
+      if (mounted) {
+        setState(() => saving = false);
+        // Dismissal leaves this widget mounted during its reverse transition.
+        // An accepted save may finish, but may only pop its own current route.
+        if (route != null && route.isCurrent) route.navigator?.pop();
+      }
     } catch (_) {
       if (mounted) {
         setState(() {
           saving = false;
-          error = 'Could not save. Your previous setting is kept.';
+          error = 'Could not save. Please try again.';
         });
       }
     }

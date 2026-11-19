@@ -2,14 +2,28 @@ import 'package:flutter/material.dart';
 import 'reply_notifications.dart';
 
 class NotificationSettingsButton extends StatelessWidget {
-  const NotificationSettingsButton({super.key, required this.notifications});
+  const NotificationSettingsButton(
+      {super.key, required this.notifications, this.asTile = false});
   final ReplyNotifications notifications;
+  final bool asTile;
   @override
-  Widget build(BuildContext context) => IconButton(
-      tooltip: 'Notifications',
-      icon: const Icon(Icons.notifications_outlined),
-      onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
-          builder: (_) => _Settings(notifications: notifications))));
+  Widget build(BuildContext context) {
+    void open() => Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => _Settings(notifications: notifications)));
+    if (asTile) {
+      return ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.notifications_outlined),
+          title: const Text('Notifications'),
+          subtitle: const Text('Private background reply alerts'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: open);
+    }
+    return IconButton(
+        tooltip: 'Notifications',
+        icon: const Icon(Icons.notifications_outlined),
+        onPressed: open);
+  }
 }
 
 class _Settings extends StatelessWidget {
