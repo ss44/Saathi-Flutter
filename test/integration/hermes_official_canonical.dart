@@ -119,7 +119,7 @@ void main() {
 
             await tester.tap(find.byTooltip('Open navigation menu'));
             await settle();
-            await tester.tap(find.text('Hermes Desktop / CLI'));
+            await tester.tap(find.text('Hermes gateway'));
             await settle();
             await tester.enterText(find.byKey(const Key('gateway-trusted-url')),
                 ready['url'] as String);

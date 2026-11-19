@@ -2,9 +2,11 @@
 
 ## Bounded mobile connection slice
 
-The actual drawer now has an explicit trusted-host invitation/import path and
-uses this adapter for canonical Desktop/CLI session attachment, composer input,
-streaming and authoritative same-session resync. See
+Hermes setup and New conversation now use this gateway as the primary native
+interface, with explicit trusted-host invitation import, capability-gated native
+creation, canonical Desktop/CLI session attachment, composer input, streaming
+and authoritative same-session resync. Persisted REST connections remain labeled
+legacy and are never silently migrated. See
 [HERMES_DELIVERY_ACCEPTANCE.md](HERMES_DELIVERY_ACCEPTANCE.md) for the current
 Hermes-first acceptance table, real controlled-WSS/process-restart evidence,
 exact review boundary and remaining deployment/device gates. The historical
@@ -19,6 +21,7 @@ Import `package:saathi/gateway/hermes_gateway.dart`. Native Dart (`dart:io`), no
 `HermesGatewayClient(grantProvider: Future<GatewayGrant> Function(), requestTimeout: Duration)`:
 
 - `connect()` performs a real WebSocket upgrade then JSON-RPC `runtime.describe`. Requires canonical `durable-admission-v1`; older standalone/legacy sidecar servers are deliberately rejected.
+- `canCreateSession` requires `local-cli-create-v1` plus advertised `session_create.sources` containing `gui` and parameters containing `request_id` and `source`. `createSession(requestId: ...)` sends only `{request_id, source: gui}`. Model/provider/tools/instructions inherit host defaults; no transcript or prompt is sent. The returned identity is explicitly resumed through the existing canonical path.
 - `listSessions({bool stored = false, int limit = 50})` → `List<GatewaySession>` (`id`, `title`, `running`). Sends `session.list` with `scope: live|stored`; there is no fabricated offset/total.
 - `attach(String sessionId)` → `GatewaySnapshot`. Explicit `session.resume` with `display_projection: true`; loads the authoritative transcript and subscribes to live events. Uses the server-resolved session ID, including compression lineage resolution. Snapshot: `sessionId`, `storedSessionId`, `messages: List<GatewayMessage>` (`role`, `text`), `running`, `needsUserAction`, `authorityEpoch`, `executionGeneration`.
 - `submit(String text, {required String inputId, String? expectedSessionId, String? expectedProfileId})` → `GatewayRun`. Sends **only** `{session_id, text, input_id}`, never history, system prompt, or local model configuration. Caller supplies a stable unique per-input identity; admission receipt has its own distinct `admissionId`. A receipt is admission, **not successful completion**.
@@ -36,11 +39,34 @@ Structured transcript image/image_url blocks project to a safe blocked-image pla
 
 GatewayRunState: queued/running/complete/failed/cancelled/unknown. Events from another admission or owner generation cannot settle this client's run. `owned: false` is observation, not acknowledgement of a local send. Message final text is a replacement/final body, not another delta to append.
 
+### Creation recovery
+
+`GatewaySessionCreation` stores a source/profile-bound intent in secure storage
+before the create RPC and stores a returned session ID before attachment. The
+intent survives disconnect/restart, independently of prompt journals/FIFO. A
+confirmed ID can be opened without another create; unknown creation requires
+refreshing/reviewing host sessions and explicit warning dismissal before another
+new conversation. Dismissal deletes only local evidence, never the host session.
+Successful saved attachment clears confirmed creation evidence. Failed history
+storage retains it. Secure-write failure disables creation until evidence is
+read again. No automatic create retry, even with the same request ID: a new grant
+does not prove the same principal, which is part of the server's creation key.
+
+Do not send a cosmetic `title` in `session.create`: upstream treats it as a
+lookup/create-if-missing identity and may return an existing conversation.
+Creation success is not admission or completion of a user turn.
+
 ## Authentication/bootstrap boundary (important)
 
 `GatewayGrant(url: Uri, protocols: List<String>)` is a caller-provided **trusted connection grant**, not an API-server key. Every dial invokes `grantProvider` anew; no ticket is persisted/logged by the client.
 
 Verified native bootstrap is `hermes gateway attach --json` on the **host**. It returns `url`, `protocols` and owner identity. Protocols contain `hermes-gateway-v1` and `hermes-gateway-ticket.<single-use-ticket>`. Pass the returned protocols unchanged; obtain a fresh grant for each reconnect. The command/control socket runs on the host, not on a phone. A loopback URL returned by the host is not reachable from a phone without a separately configured trusted tunnel/forwarder. An app cannot mint these private local grants with `API_SERVER_KEY`.
+
+The import UI accepts the exact WSS `/api/ws` address or a same-device loopback
+WS address. Non-loopback WS, user-info, queries and fragments remain rejected.
+Stock native tickets are redeemed by the host only from a loopback peer;
+forwarding must deliberately satisfy that boundary, not just rewrite the URL.
+Reconnect of a saved chat checks its original canonical profile before resume.
 
 Remote dashboard URL/token/OAuth boundaries are distinct. An operator can supply an already authenticated, reachable `/api/ws` URL/grant through an existing deployment login integration. **This patch does not implement dashboard sign-in, OAuth, a ticket broker, SSH forwarding, or an insecure key-to-ticket conversion.** It therefore does not claim one-click live mobile login to an arbitrary installation. Use TLS or a trusted tunnel for remote credentials. Do not show credential-bearing URLs in the UI or save one-use tickets as permanent settings.
 
@@ -74,5 +100,14 @@ Repository source URLs are `https://github.com/NousResearch/hermes-agent/blob/<c
 New OpenClaw native integration is deferred under the user's Hermes-first scope (issue #16). Its isolated component work is not part of this delivery and is not represented as verified by Hermes tests. No guessed compatibility endpoint or synthetic successful pairing result is enabled.
 
 ## Verification scope
+
+The 2026-11-19 gateway-first creation/auth contract was read at official Hermes
+commit `52811481bc07b18b073790cd2a168a832c92acd7`. New regressions cover the actual
+New conversation UI, original-profile reconnect refusal, advertised creation,
+secure intent persistence, unknown reply/recreation, storage failure and
+pre-dispatch authority loss. These are controlled fixtures, not a new official
+server/device acceptance run. The current machine has no `/opt/hermes` checkout
+or Android SDK; remote sign-in/provisioning and real deployed-host acceptance
+remain open under #59 before adapter extraction under #66.
 
 Default tests use real controlled local WS/WSS and actual ChatHome/controller fixtures. Separate opt-in probes run the installed official authority, runtime API, persisted transcript/receipts and one-use WSS gate, replacing only agent execution with an explicit non-inferencing stub. The restart probe exercises distinct Dart child processes and actual backend SIGKILL/restart over the same database. See the current acceptance table for which behaviors have official versus fixture evidence. No user's gateway, session, approval or production credential was modified.

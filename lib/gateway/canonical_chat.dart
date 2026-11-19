@@ -7,6 +7,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import '../storage/saathi_store.dart';
 import 'hermes_gateway.dart';
+import 'session_creation.dart';
 
 class CanonicalQueuedInput {
   const CanonicalQueuedInput(this.id, this.text);
@@ -37,6 +38,8 @@ final _authorities = Expando<Map<String, _CanonicalAuthority>>();
 class CanonicalChat extends ChangeNotifier {
   CanonicalChat(this.client, this.secrets,
       {required this.source, required this.isCurrent}) {
+    creation = GatewaySessionCreation(client, secrets,
+        source: source, isCurrent: () => connected);
     _events = client.events.listen(_event);
     _states = client.states.listen((_) {
       if (!_closed) notifyListeners();
@@ -46,6 +49,7 @@ class CanonicalChat extends ChangeNotifier {
   final SecretStore secrets;
   final String source;
   final bool Function() isCurrent;
+  late final GatewaySessionCreation creation;
   late final StreamSubscription<GatewayEvent> _events;
   late final StreamSubscription<GatewayConnectionState> _states;
   bool _closed = false, _suspended = false, _refreshing = false;

@@ -25,8 +25,20 @@ Future<ChatController> openPanel(WidgetTester t,
     'type': type,
     'url': 'https://example.com'
   }, '');
-  await c.newSession(
-      c.connections.single, 'original-model', 'Original instructions');
+  if (type == 'hermesGateway') {
+    // Model malformed persisted native metadata without bypassing the new
+    // production guard against creating native chats through the model API.
+    final session = ChatSession(
+        id: 'native-missing-id',
+        connectionId: 'a',
+        model: 'original-model',
+        systemPrompt: 'Original instructions');
+    c.sessions.add(session);
+    c.select(session);
+  } else {
+    await c.newSession(
+        c.connections.single, 'original-model', 'Original instructions');
+  }
   await t.pumpWidget(MaterialApp(
       builder: (context, child) => MediaQuery(
           data: MediaQuery.of(context)

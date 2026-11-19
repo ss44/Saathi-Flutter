@@ -18,6 +18,15 @@ A direct-model chat normally uploads its relevant conversation context on each r
 
 Remote browsing, reading history, continuing a server-owned API conversation, and attaching to another client's live session are distinct capabilities. Hermes documents REST listing/history and API-session continuation; the ordinary REST API rejects writes to sessions owned by Desktop/CLI. Live shared attachment requires its gateway protocol. OpenClaw similarly needs a verified native gateway adapter for its session features. Do not substitute guessed HTTP endpoints or label imported history as live attachment.
 
+Hermes setup and native conversations use the desktop gateway by default.
+Capability-gated `session.create` uses host defaults; `prompt.submit` sends only
+new input into the canonical owner. Disconnected native chats expose an explicit
+original-profile reconnect. Existing REST conversations remain legacy rather
+than being migrated or replayed. A lost creation reply is durable uncertainty,
+not permission to create again automatically. Same-device loopback invitations
+and operator-secured remote WSS are supported paths; mobile sign-in and tunnel
+provisioning remain separate work.
+
 ## Data/security
 - API credentials: platform secure storage; never ordinary preferences or session JSON.
 - Chat history: local application storage, not advertised as end-to-end encrypted. User-controlled deletion and clear scope.
@@ -41,7 +50,7 @@ Leave DMS widget registration, shell theme bindings, shell-global singleton stat
 
 ## Later milestones
 - Real deployed-provider and gateway interoperability tests.
-- Native shared-session gateway attachment/live stream reconciliation.
+- Deployed-host/device acceptance of native gateway creation, shared-session attachment and live-stream reconciliation.
 - Android share-to-draft (text/images) and image payload support.
 - Optional smart context routing and opt-in price estimation based on maintained price data.
 - Desktop navigation/keyboard/tray and production update install flows.

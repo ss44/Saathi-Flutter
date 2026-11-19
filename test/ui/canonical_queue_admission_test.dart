@@ -60,7 +60,14 @@ void main() {
       'type': 'hermesGateway',
       'url': 'wss://example.test'
     }, '');
-    await c.newSession(c.connections.single, 'native', '');
+    final session = ChatSession(
+        id: 'native-fixture',
+        connectionId: 'native',
+        model: 'native',
+        remoteSessionId: 'chat',
+        canonicalProfileId: 'profile');
+    c.sessions.add(session);
+    c.select(session);
     expect(c.submit('x' * (ChatController.maxInputLength + 1)), isFalse);
     expect(owner.attempts, 0);
     expect(c.outbox, isEmpty);

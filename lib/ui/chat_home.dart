@@ -873,7 +873,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                             if (index == 1 + localCount + serverCaches.length) {
                               return ListTile(
                                 leading: const Icon(Icons.link),
-                                title: const Text('Hermes Desktop / CLI'),
+                                title: const Text('Hermes gateway'),
                                 onTap: () {
                                   if (!wide) Navigator.pop(context);
                                   Navigator.push(
@@ -1304,7 +1304,31 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                               child: const Text('Cancel'),
                                             ),
                                           ),
-                                        if (c.readOnly)
+                                        if (c.readOnly &&
+                                            c.reconnectableGateway != null) ...[
+                                          const Padding(
+                                            padding: EdgeInsets.all(16),
+                                            child: Text(
+                                                'Hermes is disconnected. Reconnect to the original gateway session to continue; nothing will be resent.'),
+                                          ),
+                                          TextButton.icon(
+                                            onPressed: !c.canChangeConnections
+                                                ? null
+                                                : () => Navigator.push(
+                                                    context,
+                                                    MaterialPageRoute<void>(
+                                                        builder: (_) =>
+                                                            CanonicalConnectionPage(
+                                                                controller: c,
+                                                                connection: c
+                                                                    .reconnectableGateway,
+                                                                session: c
+                                                                    .current))),
+                                            icon: const Icon(Icons.link),
+                                            label:
+                                                const Text('Reconnect Hermes'),
+                                          ),
+                                        ] else if (c.readOnly)
                                           const Padding(
                                             padding: EdgeInsets.all(16),
                                             child: Text(

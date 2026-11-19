@@ -17,6 +17,15 @@ This document records product direction, not a claim that every feature below ha
 
 Share useful UI and domain concepts, not invented transport semantics. Do not make every backend look like a plain model, and do not give direct models controls that require an agent runtime. Saathi is a client, not a claim that the phone runs a local tool-executing agent.
 
+Hermes uses its canonical desktop gateway as the primary conversation interface,
+not the ordinary inference API. Setup, native conversation creation, host history,
+streaming, approvals and session controls belong to this gateway flow. Existing
+REST connections remain explicitly legacy and retain their own conversations and
+recovery evidence; their history is never migrated by replay. Native creation uses
+host defaults until richer configuration is separately verified. Remote sign-in
+and tunnel provisioning are distinct acceptance requirements, not implied by
+gateway protocol support.
+
 ## Per-connection features
 
 Behavior follows the configured agent's verified feature list. Depending on the adapter and server, this may include model discovery, remote history, session continuation, reconnect, approvals, clarification, event streams or sub-agent activity.
@@ -54,3 +63,4 @@ Update this document in the same PR as an approved change to product direction. 
 - 2026-11-16: Confirm Hermes as the primary native-agent target and Sathi's multi-agent feel as the broader direction. Separate direct models from native agent clients, with behavior driven by each configured connection's verified features.
 - 2026-11-17: Run native releases daily at 09:00 UTC rather than weekly, so approved changes reach users sooner. Keep the unchanged-source skip, ISO year.week.increment versioning, signing and publication gates; do not build on every merge.
 - 2026-11-17: Extend the shared Flutter client with a Linux-first adaptive workspace. Wide desktop and landscape windows use a far-left navigation rail, a persistent conversation list and the active conversation on the right; narrow windows retain mobile navigation. Windows and macOS can share this layout, with platform acceptance verified separately.
+- 2026-11-19: Make the Hermes desktop gateway the primary Hermes interaction path. Its server-owned conversation lifecycle and native controls fit Saathi better than the limited inference API. Preserve persisted REST conversations without silently converting their authority or replaying history.

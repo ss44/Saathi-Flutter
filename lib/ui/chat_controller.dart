@@ -1173,6 +1173,69 @@ class ChatController extends ChangeNotifier {
           ? _canonical
           : null;
 
+  /// A verified gateway connection is usable before a conversation is selected.
+  CanonicalChat? canonicalFor(Map<String, dynamic> connection) =>
+      identical(connection, _canonicalConnection) &&
+              isCurrentConnection(connection) &&
+              (_canonical?.connected ?? false)
+          ? _canonical
+          : null;
+
+  /// Only profile-scoped saved chats can offer an original-session reconnect.
+  Map<String, dynamic>? get reconnectableGateway => connections
+      .where((c) =>
+          c['type'] == 'hermesGateway' &&
+          c['id'] == current?.connectionId &&
+          current?.canonicalProfileId != null &&
+          current?.remoteSessionId != null)
+      .firstOrNull;
+
+  bool creatingCanonical = false;
+
+  /// Reads host sessions even when creation evidence needs separate recovery.
+  Future<List<GatewaySession>> listCanonical(
+      Map<String, dynamic> connection) async {
+    final owner = canonicalFor(connection);
+    if (owner == null || creatingCanonical) throw StateError('Connect first');
+    try {
+      await owner.creation.load();
+    } catch (_) {
+      // Fail closed for creation without blocking unrelated session reads.
+      // The creation owner retains a safe problem message and disables writes.
+    }
+    return owner.sessions();
+  }
+
+  /// Creates once with host defaults, then attaches and saves native identity.
+  /// Navigation or credential changes revoke adoption, not durable evidence.
+  Future<void> createCanonical(Map<String, dynamic> connection) async {
+    final owner = canonicalFor(connection);
+    if (owner == null ||
+        creatingCanonical ||
+        busy ||
+        unsavedChanges ||
+        _canonicalQueueSaving.isNotEmpty) {
+      throw StateError('Creation unavailable');
+    }
+    final selection = selectionGeneration;
+    creatingCanonical = true;
+    notifyListeners();
+    try {
+      final remote = await owner.creation.create(
+          isAuthorized: () =>
+              identical(owner, canonicalFor(connection)) &&
+              selection == selectionGeneration);
+      if (selection != selectionGeneration ||
+          !identical(owner, canonicalFor(connection))) {
+        throw StateError('Selection changed');
+      }
+      await attachCanonical(remote);
+    } finally {
+      creatingCanonical = false;
+      notifyListeners();
+    }
+  }
+
   /// Explicit new host invite for every dial; API keys never mint tickets.
   Future<List<GatewaySession>> connectCanonical(
     Map<String, dynamic> connection,
@@ -1180,6 +1243,7 @@ class ChatController extends ChangeNotifier {
   ) async {
     if (_runsPaused ||
         busy ||
+        creatingCanonical ||
         unsavedChanges ||
         _canonicalQueueSaving.isNotEmpty ||
         !isCurrentConnection(connection)) {
@@ -1229,17 +1293,27 @@ class ChatController extends ChangeNotifier {
       notifyListeners();
     });
     await owner.connect();
-    return owner.sessions();
+    return listCanonical(connection);
   }
 
-  Future<void> attachCanonical(GatewaySession remote) async {
+  Future<void> attachCanonical(GatewaySession remote,
+      {String? expectedProfileId}) async {
     final owner = _canonical;
     final connection = _canonicalConnection;
-    if (owner == null || connection == null || !owner.connected) {
+    if (owner == null ||
+        connection == null ||
+        !owner.connected ||
+        (expectedProfileId != null &&
+            owner.client.profileId != expectedProfileId)) {
       throw StateError('Connect first');
     }
+    final selection = selectionGeneration;
     await owner.attach(remote.id);
-    if (!owner.connected || !isCurrentConnection(connection)) {
+    if (!owner.connected ||
+        !isCurrentConnection(connection) ||
+        !identical(owner, _canonical) ||
+        selection != selectionGeneration) {
+      owner.revokeInput();
       throw StateError('Source revoked');
     }
     final id = owner.snapshot!.sessionId;
@@ -1257,9 +1331,14 @@ class ChatController extends ChangeNotifier {
           remoteSessionId: id,
           remoteTitle: remote.title,
           canonicalProfileId: owner.client.profileId,
-          model: 'Hermes Desktop / CLI',
+          model: 'Hermes gateway',
         );
     if (!sessions.contains(session)) sessions.add(session);
+    // An explicit attachment has acquired a new session authority. Detach the
+    // previous UI binding before selecting, so selection cannot revoke the new
+    // authority merely because the same connection owned the previous chat.
+    _canonicalSession = null;
+    _savedCanonicalSnapshot = null;
     select(session);
     _canonicalSession = session;
     final queued = [...owner.queuedInputs];
@@ -1292,6 +1371,12 @@ class ChatController extends ChangeNotifier {
       }
     }
     await refreshCanonical();
+    if (!unsavedChanges &&
+        identical(_savedCanonicalSnapshot, owner.snapshot) &&
+        owner.creation.sessionId == id &&
+        owner.connected) {
+      await owner.creation.dismiss();
+    }
   }
 
   /// Authoritative original-session resync; no transcript is uploaded to HTTP chat.
@@ -2041,6 +2126,7 @@ class ChatController extends ChangeNotifier {
       !_disposed &&
       !loading &&
       !busy &&
+      !creatingCanonical &&
       !changingConnection &&
       !_loadFailed &&
       !organization.saving &&
@@ -2067,6 +2153,7 @@ class ChatController extends ChangeNotifier {
     if (_disposed ||
         loading ||
         busy ||
+        creatingCanonical ||
         changingConnection ||
         _loadFailed ||
         (changesConnection &&
@@ -2171,6 +2258,9 @@ class ChatController extends ChangeNotifier {
     String prompt, {
     String? upstreamProvider,
   }) async {
+    if (c['type'] == 'hermesGateway') {
+      throw StateError('Use native gateway session creation');
+    }
     if (upstreamProvider != null && !isCurrentConnection(c)) {
       throw StateError('Stale connection');
     }

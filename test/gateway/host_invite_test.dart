@@ -12,6 +12,26 @@ Map<String, dynamic> invite() => {
       'endpoint': {'instance_id': 'owner', 'profile_id': '/isolated/profile'},
     };
 void main() {
+  test('stock local desktop grants allow only literal loopback cleartext',
+      () async {
+    for (final host in ['127.0.0.1', 'localhost', '[::1]']) {
+      final source = HostInviteVault.trustedSource('ws://$host:8765/api/ws');
+      final vault = HostInviteVault(MemorySecrets());
+      await vault.import('local', jsonEncode({...invite(), 'url': '$source'}),
+          trustedUrl: source);
+      expect((await vault.consume('local', trustedUrl: source)).url, source);
+    }
+    for (final url in [
+      'ws://remote.example/api/ws',
+      'ws://127.0.0.1.evil.example/api/ws',
+      'ws://192.168.1.2/api/ws',
+      'ws://user@localhost/api/ws',
+      'ws://localhost/api/ws?token=secret'
+    ]) {
+      expect(
+          () => HostInviteVault.trustedSource(url), throwsA(isA<Exception>()));
+    }
+  });
   test(
       'expiry, source change and malformed ticket fail closed without leaking credentials',
       () async {

@@ -333,6 +333,14 @@ class HermesGatewayClient {
       }
       _profileId = runtime['profile_id'] as String;
       _capabilities = Set<String>.from(runtime['capabilities'] as List);
+      final creation = runtime['session_create'];
+      _supportsCreate = _capabilities.contains('local-cli-create-v1') &&
+          creation is Map &&
+          creation['sources'] is List &&
+          (creation['sources'] as List).contains('gui') &&
+          creation['parameters'] is List &&
+          (creation['parameters'] as List).contains('request_id') &&
+          (creation['parameters'] as List).contains('source');
       _setState(GatewayConnectionState.connected);
     } catch (_) {
       if (attempt == _connectionEpoch) {
@@ -361,6 +369,39 @@ class HermesGatewayClient {
   }
 
   Set<String> _capabilities = {};
+  bool _supportsCreate = false;
+  bool get canCreateSession =>
+      _state == GatewayConnectionState.connected && _supportsCreate;
+
+  /// Native canonical creation, not prompt submission. The caller must journal
+  /// requestId before dispatch and retain uncertain outcomes across reconnects.
+  /// Omit title (a server lookup key) and launch overrides to use host defaults.
+  Future<GatewaySession> createSession({required String requestId}) async {
+    if (!canCreateSession || _submitting || _attaching) {
+      throw StateError('Gateway does not currently support creation');
+    }
+    if (requestId.isEmpty || requestId.length > 256) {
+      throw ArgumentError.value(requestId, 'requestId');
+    }
+    _attaching = true;
+    try {
+      final result = await _request('session.create', {
+        'request_id': requestId,
+        'source': 'gui',
+      });
+      final id = result['session_id'];
+      if (id is! String || id.isEmpty || id.length > 4096) {
+        throw const GatewayException('Creation result is unconfirmed');
+      }
+      // Adopt only through the normal resume/transcript/journal path. The create
+      // reply can contain raw history; it is never persisted as display content.
+      return GatewaySession({'session_id': id, 'title': ''});
+    } finally {
+      _attaching = false;
+      _flushEvents();
+    }
+  }
+
   String? _transcriptSession, _transcriptCursor;
   List<Map<String, dynamic>> _transcriptRows = [];
   GatewaySnapshot? _attached;

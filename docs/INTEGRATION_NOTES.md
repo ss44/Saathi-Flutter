@@ -6,13 +6,29 @@ These notes distinguish documented contracts from locally tested behavior. Autom
 The Sathi source was read from `ss44/sathi.ai`, commit `e6dfc2491628b3f6497895a89ca4f08edefd4717`. It now includes direct-model adapters, preliminary Hermes/OpenClaw adapters, and optional smart context buckets. Saathi reimplements suitable behavior in Dart, without changing or importing the DMS plugin's runtime.
 
 ## Hermes
+The primary Saathi Hermes interface is now the canonical desktop gateway. New
+connection setup routes to native host authentication; new conversations use
+`session.create` only when `runtime.describe` advertises its canonical contract.
+The REST interface below is retained for persisted legacy API connections, not
+used as fallback for failed gateway authentication or session creation.
+
 Official reference: https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server
 
 Discover capabilities at `GET /v1/capabilities`; supported session listing/history live under `/api/sessions`. A server-owned session can accept new input with its ID rather than repeatedly uploading client history. This reduces phone-to-server traffic, not necessarily the model's context tokens.
 
-Critically, the current ordinary API routes refuse attempts to bind a session owned by another surface (Desktop/CLI/TUI/ACP/messaging) with HTTP 409 `permission_denied`. Sharing an open session needs gateway WebSocket attachment and `prompt.submit`, not replaying a transcript to `/v1/chat/completions` or an invented `/api/chat` endpoint. Browsing history is not the same capability as live attachment. A future gateway client must reconcile history plus live events, compression lineage, reconnects, run state, approvals, and concurrent-client ownership.
+Critically, the current ordinary API routes refuse attempts to bind a session owned by another surface (Desktop/CLI/TUI/ACP/messaging) with HTTP 409 `permission_denied`. Sharing an open session needs gateway WebSocket attachment and `prompt.submit`, not replaying a transcript to `/v1/chat/completions` or an invented `/api/chat` endpoint. Browsing history is not the same capability as live attachment. Saathi's gateway client reconciles history plus live events, compression lineage, reconnects, run state, approvals, and concurrent-client ownership; deployed-host/device acceptance remains separate.
 
 Never auto-retry an admitted turn without idempotency/outcome guarantees. Completion text alone is not proof of successful execution; honor failed/cancelled/incomplete terminal states.
+
+Gateway creation/authentication source was checked against official Hermes commit
+`52811481bc07b18b073790cd2a168a832c92acd7`: `gateway/session_controls.py`,
+`gateway/session_policy.py`, `tui_gateway/contracts/canonical_sessions.py`,
+`gateway/run_api.py`, and `hermes_cli/web_server_chat.py`. Native attach tickets
+are loopback-only on the host, not general remote API credentials. Stock local
+invites are supported on the same device; remote WSS requires deliberate host
+infrastructure. Browser/native OAuth sign-in and automatic ticket renewal are
+not implemented. Contract-source review and controlled fixtures are not a live
+deployment compatibility result.
 
 ## OpenClaw
 Official references:

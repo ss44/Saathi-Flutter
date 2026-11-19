@@ -9,8 +9,8 @@ A lightweight, conversation-first Flutter client for AI models and agents. Herme
 - Conversation-specific model/system prompt, local history, new/switch/delete conversations, Markdown responses.
 - API keys in platform secure storage, separate from ordinary conversation/settings data.
 - Running status, swipe-to-reveal completed activity, immediate long-press copy, safe recoverable errors.
-- Native Hermes capability discovery and paginated **read-only** remote session/history browsing.
-- Explicit trusted-host invitation import and canonical Hermes Desktop/CLI attachment, separate from REST history browsing; see deployment limitations below.
+- Gateway-first Hermes setup, native conversation creation when advertised, host session browsing and canonical Desktop/CLI attachment. New conversations use host model/tool/instruction defaults.
+- Original-session reconnect and durable creation-uncertainty warnings, without automatic prompt or creation replay. Legacy REST history and API-owned conversations remain separate.
 - Local conversation rename/archive, shared personas where supported, visibility-based unread replies and reported usage.
 - Startup/resume update checks, visible update availability, manual update settings, verified Android APK download and native installer handoff after consent. No repository or release is assumed.
 
@@ -21,6 +21,25 @@ The Dart core also supports OpenAI/Hermes SSE and usage/grounding metadata. Nati
 Direct-model chats send bounded relevant history. Server-owned agent sessions can send only new input plus session identity, reducing mobile upload size—not necessarily model context/token usage.
 
 Browsing history is not live attachment. Hermes REST refuses writes to Desktop/CLI-owned sessions; native gateway attachment needs a trusted authenticated grant and reachable connection. The transport module is not a completed mobile login/tunnel broker and is not wired as one-click attachment in the UI. OpenClaw native gateway pairing/control remains unsupported rather than pretending the old DMS HTTP guesses are an integration. See [gateway contract](docs/GATEWAY_API.md) and [integration notes](docs/INTEGRATION_NOTES.md).
+
+### Connect Hermes
+
+Choose **Connect Hermes gateway** in Settings, or **Hermes** when adding a
+connection. On the trusted host run `hermes gateway attach --json`, then enter
+the exact address and fresh invite JSON. The ticket is single-use and expires
+after 30 seconds. A REST API key cannot replace it.
+
+On the same desktop, the stock loopback `ws://127.0.0.1:<port>/api/ws` address is
+accepted. Remote/phone connections require WSS and a deliberately secured
+forwarding deployment satisfying the native host's loopback authentication gate.
+Saathi does not change the invite URL, mint tickets from API keys, or provision
+that deployment. On a phone, localhost is the phone itself.
+
+After connecting, open a host conversation or choose **New Hermes conversation**
+if the host advertises native creation. Creating does not send a prompt. If its
+reply is lost, refresh and review the host sessions; the app will not silently
+create another. Existing `Hermes REST (legacy)` connections and their saved chats
+stay on their original API interface.
 
 ## Develop and test
 

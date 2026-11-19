@@ -10,8 +10,10 @@ class Fixture {
   final requests = <Map<String, dynamic>>[];
   final sockets = <WebSocket>[];
   bool dropSubmitAck = false;
+  bool dropCreateAck = false;
   String profileId = 'profile';
   List<String> capabilities = ['durable-admission-v1', 'event-replay-v1'];
+  Map<String, dynamic>? sessionCreate;
   Map<String, dynamic> Function(Map<String, dynamic>)? respond;
   Future<void> start() async {
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -26,12 +28,14 @@ class Fixture {
         final request = jsonDecode(frame as String) as Map<String, dynamic>;
         requests.add(request);
         if (dropSubmitAck && request['method'] == 'prompt.submit') return;
+        if (dropCreateAck && request['method'] == 'session.create') return;
         final result = request['method'] == 'runtime.describe'
             ? {
                 'profile_id': profileId,
                 'instance_id': 'owner',
                 'authority_epoch': 3,
-                'capabilities': capabilities
+                'capabilities': capabilities,
+                if (sessionCreate != null) 'session_create': sessionCreate,
               }
             : respond?.call(request) ?? {'sessions': <dynamic>[]};
         socket.add(jsonEncode(
@@ -100,6 +104,43 @@ Map<String, dynamic> snapshot() => {
     };
 
 void main() {
+  test('creation requires advertised canonical contract and uses host defaults',
+      () async {
+    final fixture = Fixture();
+    await fixture.start();
+    fixture.respond = (_) => snapshot();
+    final client =
+        HermesGatewayClient(grantProvider: () async => fixture.grant());
+    addTearDown(() async {
+      await client.dispose();
+      await fixture.close();
+    });
+    await client.connect();
+    expect(client.canCreateSession, isFalse);
+    await expectLater(
+        client.createSession(requestId: 'intent'), throwsStateError);
+    expect(fixture.requests.where((r) => r['method'] == 'session.create'),
+        isEmpty);
+    await client.disconnect();
+    fixture.capabilities.add('local-cli-create-v1');
+    fixture.sessionCreate = {
+      'sources': ['cli'],
+      'parameters': ['request_id', 'source']
+    };
+    await client.connect();
+    expect(client.canCreateSession, isFalse);
+    await client.disconnect();
+    fixture.sessionCreate!['sources'] = ['gui', 'cli'];
+    await client.connect();
+    expect(client.canCreateSession, isTrue);
+    final session = await client.createSession(requestId: 'intent');
+    expect(session.id, 'chat');
+    expect(fixture.requests.last['params'],
+        {'request_id': 'intent', 'source': 'gui'});
+    expect(client.run, isNull);
+    expect(
+        fixture.requests.where((r) => r['method'] == 'prompt.submit'), isEmpty);
+  });
   test(
       'queued admission becomes controllable only on its owned execution delta',
       () async {
