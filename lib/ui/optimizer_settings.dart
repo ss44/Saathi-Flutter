@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../core/saathi_core.dart';
+import '../storage/saathi_store.dart' show StorageRecoveryException;
 import 'chat_controller.dart';
 
 /// Persisted destination only. No credentials, URLs, or response-model state.
@@ -114,16 +115,21 @@ extension OptimizerSettings on ChatController {
         // The plugin mutates its cache before a durable write succeeds. Restore
         // the exact prior raw value so a new controller cannot adopt a failed
         // selection. Keep the save guard through compensation as well.
-        final restored = await switch (before) {
-          null => preferences.remove(key),
-          String value => preferences.setString(key, value),
-          bool value => preferences.setBool(key, value),
-          int value => preferences.setInt(key, value),
-          double value => preferences.setDouble(key, value),
-          List value => preferences.setStringList(key, value.cast<String>()),
-          _ => throw StateError('Unsupported previous preference'),
-        };
-        if (!restored) throw StateError('Could not restore optimizer settings');
+        try {
+          final restored = await switch (before) {
+            null => preferences.remove(key),
+            String value => preferences.setString(key, value),
+            bool value => preferences.setBool(key, value),
+            int value => preferences.setInt(key, value),
+            double value => preferences.setDouble(key, value),
+            // The platform codec can decode a string list as List<Object?>.
+            List value => preferences.setStringList(key, value.cast<String>()),
+            _ => throw const StorageRecoveryException(),
+          };
+          if (!restored) throw const StorageRecoveryException();
+        } catch (_) {
+          throw const StorageRecoveryException();
+        }
         rethrow;
       }
       state.global = global;
@@ -242,11 +248,13 @@ class _OptimizerSettingsDialogState extends State<OptimizerSettingsDialog>
         // An accepted save may finish, but may only pop its own current route.
         if (route != null && route.isCurrent) route.navigator?.pop();
       }
-    } catch (_) {
+    } catch (failure) {
       if (mounted) {
         setState(() {
           saving = false;
-          error = 'Could not save. Please try again.';
+          error = failure is StorageRecoveryException
+              ? 'Could not confirm storage recovery. Choose and save a destination again before restarting.'
+              : 'Could not save. Please try again.';
         });
       }
     }
