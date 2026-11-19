@@ -3,6 +3,7 @@ import 'storage/saathi_store.dart';
 import 'notifications/reply_notifications.dart';
 import 'ui/chat_controller.dart';
 import 'ui/chat_home.dart';
+import 'ui/appearance.dart';
 import 'update_host.dart';
 
 void main() {
@@ -21,6 +22,7 @@ class SaathiApp extends StatefulWidget {
 
 class _SaathiAppState extends State<SaathiApp> {
   ChatController? controller;
+  Appearance? appearance;
   String? error;
   ReplyNotifications? notifications;
   final navigator = GlobalKey<NavigatorState>();
@@ -45,6 +47,8 @@ class _SaathiAppState extends State<SaathiApp> {
     try {
       final store = widget.store ?? await SaathiStore.open();
       if (!mounted) return;
+      appearance = Appearance(store.preferences)
+        ..addListener(_appearanceChanged);
       final c = ChatController(store, coreFactory: widget.coreFactory);
       final n = ReplyNotifications(store.preferences);
       notifications = n;
@@ -66,18 +70,32 @@ class _SaathiAppState extends State<SaathiApp> {
 
   @override
   void dispose() {
+    appearance?.removeListener(_appearanceChanged);
+    appearance?.dispose();
     notifications?.dispose();
     controller?.dispose();
     super.dispose();
   }
 
+  void _appearanceChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
-  Widget build(BuildContext context) => SaathiUpdateHost(
+  Widget build(BuildContext context) => AppearanceScope(
+      notifier: appearance,
+      child: SaathiUpdateHost(
           child: MaterialApp(
         navigatorKey: navigator,
         title: 'Saathi',
         builder: widget.builder,
         debugShowCheckedModeBanner: false,
+        themeMode: appearance?.mode ?? ThemeMode.system,
+        darkTheme: ThemeData(
+            useMaterial3: true,
+            colorScheme: ColorScheme.fromSeed(
+                seedColor: const Color(0xFF3E6559),
+                brightness: Brightness.dark)),
         theme: ThemeData(
             useMaterial3: true,
             colorScheme:
@@ -98,5 +116,5 @@ class _SaathiAppState extends State<SaathiApp> {
                             padding: const EdgeInsets.all(24),
                             child: Text(error!))))
             : ChatHome(controller: controller!),
-      ));
+      )));
 }

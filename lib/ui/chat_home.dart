@@ -33,11 +33,10 @@ import 'chat_controller.dart';
 import 'busy_thinking.dart';
 import 'connections.dart';
 import 'safe_markdown.dart';
+import 'markdown_theme.dart';
 import 'conversation_servers.dart';
 import 'prompt_optimizer.dart';
 import 'growing_message_input.dart';
-
-const muted = Color(0xFF6A7470);
 
 class ChatHome extends StatefulWidget {
   const ChatHome({
@@ -708,7 +707,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                     ),
                     Text(
                       subtitle,
-                      style: const TextStyle(fontSize: 12, color: muted),
+                      style: TextStyle(
+                          fontSize: 12,
+                          color:
+                              Theme.of(context).colorScheme.onSurfaceVariant),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -743,13 +745,15 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                 ],
                 bottom: const PreferredSize(
                   preferredSize: Size.fromHeight(1),
-                  child: Divider(height: 1, color: Color(0xFFECEDE9)),
+                  child: Divider(height: 1),
                 ),
               ),
               sidebar: Drawer(
                 elevation: wide ? 0 : null,
                 shape: wide ? const RoundedRectangleBorder() : null,
-                backgroundColor: wide ? const Color(0xFFF1F3EE) : null,
+                backgroundColor: wide
+                    ? Theme.of(context).colorScheme.surfaceContainerLow
+                    : null,
                 child: SafeArea(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -852,11 +856,14 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                             if (index == 2 + localCount + serverCaches.length) {
                               return MediaQuery.viewInsetsOf(context).bottom ==
                                       0
-                                  ? const Padding(
-                                      padding: EdgeInsets.all(12),
+                                  ? Padding(
+                                      padding: const EdgeInsets.all(12),
                                       child: Text(
                                         'Search stays on this device. History stays with its original connection and is not end-to-end encrypted.',
-                                        style: TextStyle(color: muted),
+                                        style: TextStyle(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant),
                                       ),
                                     )
                                   : const SizedBox.shrink();
@@ -940,10 +947,12 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                             child: Column(
                                               mainAxisSize: MainAxisSize.min,
                                               children: [
-                                                const Icon(
+                                                Icon(
                                                   Icons.spa_outlined,
                                                   size: 42,
-                                                  color: Color(0xFF3E6559),
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .primary,
                                                 ),
                                                 const SizedBox(height: 22),
                                                 const Text(
@@ -960,8 +969,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                       ? 'Connect a model and begin a conversation.\nNothing is sent until you choose to send.'
                                                       : 'What’s on your mind?',
                                                   textAlign: TextAlign.center,
-                                                  style: const TextStyle(
-                                                    color: muted,
+                                                  style: TextStyle(
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .onSurfaceVariant,
                                                     height: 1.6,
                                                   ),
                                                 ),
@@ -1453,10 +1464,13 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                   padding:
                                       const EdgeInsets.fromLTRB(15, 4, 5, 4),
                                   decoration: BoxDecoration(
-                                    color: Colors.white,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .surfaceContainerLow,
                                     borderRadius: BorderRadius.circular(26),
                                     border: Border.all(
-                                      color: const Color(0xFFDDE3DE),
+                                      color:
+                                          Theme.of(context).colorScheme.outline,
                                     ),
                                   ),
                                   child: Row(
@@ -1550,10 +1564,13 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                 if (MediaQuery.viewInsetsOf(context).bottom ==
                                     0) ...[
                                   const SizedBox(height: 8),
-                                  const Text(
+                                  Text(
                                     'AI can make mistakes. Review important details.',
-                                    style:
-                                        TextStyle(fontSize: 11, color: muted),
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant),
                                   ),
                                 ],
                               ],
@@ -1637,7 +1654,12 @@ class _MessageViewState extends State<MessageView> {
                     if (widget.user)
                       Text(
                         widget.text,
-                        style: const TextStyle(fontSize: 17, height: 1.45),
+                        style: TextStyle(
+                            fontSize: 17,
+                            height: 1.45,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSecondaryContainer),
                       )
                     else ...[
                       if (widget.answerBuilder case final wrap?)
@@ -1646,8 +1668,12 @@ class _MessageViewState extends State<MessageView> {
                             data: widget.text,
                             imageBuilder: safeMarkdownImageBuilder,
                             selectable: false,
-                            styleSheet: MarkdownStyleSheet(
-                              p: const TextStyle(fontSize: 18, height: 1.5),
+                            styleSheet: saathiMarkdownStyle(context).copyWith(
+                              p: TextStyle(
+                                  fontSize: 18,
+                                  height: 1.5,
+                                  color:
+                                      Theme.of(context).colorScheme.onSurface),
                             ),
                           ),
                         )
@@ -1656,8 +1682,11 @@ class _MessageViewState extends State<MessageView> {
                           data: widget.text,
                           imageBuilder: safeMarkdownImageBuilder,
                           selectable: false,
-                          styleSheet: MarkdownStyleSheet(
-                            p: const TextStyle(fontSize: 18, height: 1.5),
+                          styleSheet: saathiMarkdownStyle(context).copyWith(
+                            p: TextStyle(
+                                fontSize: 18,
+                                height: 1.5,
+                                color: Theme.of(context).colorScheme.onSurface),
                           ),
                         ),
                       if (widget.usage case final usage?)

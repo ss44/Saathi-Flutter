@@ -6,6 +6,7 @@ import '../core/saathi_core.dart';
 import 'chat_controller.dart';
 import 'remote_sessions.dart';
 import 'optimizer_settings.dart';
+import 'appearance.dart';
 
 const providerLabels = {
   'openai': 'OpenAI-compatible',
@@ -200,6 +201,7 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                     const _SettingsHeading('Application'),
                     const Text(
                         'Defaults and preferences for Saathi on this device.'),
+                    const AppearanceSetting(),
                     OptimizerSettingsButton(
                         controller: controller, asTile: true),
                     if (controller.notifications != null)
