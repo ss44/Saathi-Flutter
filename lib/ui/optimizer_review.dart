@@ -77,6 +77,10 @@ class _PromptReviewState extends State<PromptReview> {
       improved = null;
       busy = false;
       loading = false;
+      if (connection != null && !c.isCurrentConnection(connection!)) {
+        error =
+            'Selected connection changed or was removed. Choose an explicit replacement.';
+      }
     }
     if (!identical(settingsRevision, c.optimizerRevision)) {
       configure();

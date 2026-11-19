@@ -51,6 +51,19 @@ absence), because the plugin can mutate its cache before storage acknowledges a
 write. Compensation failures remain errors, not successful saves. Save attempts
 and completion replace an opaque authority revision.
 
+A failed compensation raises a distinct storage-recovery error; the UI asks for
+an explicit saved selection again before restarting instead of claiming that the
+prior disk value was confirmed. Compensation is not an OS-level transaction:
+simultaneous storage/rollback failure or process death during rollback cannot
+guarantee durable recovery. Saving or retrying settings never runs inference.
+
+`OptimizerSettingsDialog(controller:, chat:)` is the shared dialog entry point for
+settings surfaces; omit chat for the global default. Existing app buttons open it.
+Issue 34 does not replace the unified Settings or chat-settings layout owned by
+other work. A selected connection changed/removed while review is open disables
+Improve and explains that an explicit replacement is required.
+
+
 `PromptOptimizer(controller:, composer:, triggerBuilder:)` retains review/Undo
 ownership while ChatHome supplies the Send/menu trigger. Its default trigger is
 kept only for isolated embedding/tests, not the app composer. `PromptReview`
@@ -75,3 +88,14 @@ A real localhost HTTP fixture verifies `/v1/models` and exactly one draft-only
 `/v1/chat/completions` POST. Mock protocol fixtures separately retain all three
 direct providers' history/tool privacy assertions. These are not production,
 Android-device, screen-reader-device, native-build, or paid-inference evidence.
+
+`optimizer_persistence_test.dart` drives the real global/override/inherit controls
+with the actual SharedPreferences method-channel cache and an independent controlled
+platform backing store. It covers false/throw writes, mutation before failure,
+exact raw-value restoration, same-cache owner recreation and cold singleton reset.
+`optimizer_destination_flow_test.dart` configures both scopes through app controls,
+cold-reloads, then verifies disclosure, override/inherited destination and credential
+routing, draft-only payloads, Apply/Keep original/Undo and unavailable native types.
+`optimizer_keyboard_test.dart` exercises nested selection using actual Tab/Enter at
+360px/2× with keyboard insets in both brightnesses. These remain controlled fixtures,
+not proof of physical-device durability or a deployed backend rewrite.
