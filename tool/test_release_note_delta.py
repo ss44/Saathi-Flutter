@@ -30,7 +30,7 @@ class SourceNotesTests(unittest.TestCase):
             ['git', '-C', str(self.repo), *args], text=True,
             stderr=subprocess.PIPE).strip()
 
-    def commit(self, notes=None, raw=None):
+    def commit(self, notes=None, raw=None, subject="fixture"):
         path = self.repo / 'assets/changelog.json'
         path.parent.mkdir(exist_ok=True)
         if notes is not None or raw is not None:
@@ -38,7 +38,7 @@ class SourceNotesTests(unittest.TestCase):
                 {'schema': 1, 'unreleased': notes, 'releases': []}))
         (self.repo / 'sequence').write_text(self.git('rev-list', '--all', '--count'))
         self.git('add', '.')
-        self.git('commit', '-qm', 'fixture')
+        self.git('commit', '-qm', subject)
         return self.git('rev-parse', 'HEAD')
 
     def release(self, tag, date):
@@ -46,29 +46,16 @@ class SourceNotesTests(unittest.TestCase):
         return dict(tag_name=tag, published_at=date, draft=False,
                     target_commitish='main', body='- deliberately wrong notes')
 
-    def test_three_releases_reused_cumulative_and_rotated_notes(self):
-        for lists, expected in [
-            ([['A'], ['A'], ['A']], [['A'], [], []]),
-            ([['A'], ['A', 'B'], ['A', 'B', 'C']], [['A'], ['B'], ['C']]),
-            ([['A'], ['B'], ['C', 'D']], [['A'], ['B'], ['C', 'D']]),
-            ([['A'], ['B'], ['A', 'C']], [['A'], ['B'], ['C']]),
-            ([['A'], ['B'], ['A']], [['A'], ['B'], []]),
-        ]:
-            with self.subTest(lists=lists):
-                releases = []
-                for i, notes in enumerate(lists):
-                    source = self.commit(notes)
-                    self.assertEqual(rp.select_release_notes(source, releases), expected[i])
-                    tag = f'v2026.47.{len(self.git("tag").splitlines()) + 1}'
-                    releases.append(self.release(tag, f'2026-11-{17+i}'))
-                # Working-tree edits and release bodies must not affect source reads.
-                (self.repo / 'assets/changelog.json').write_text('invalid worktree')
-                self.assertEqual(rp.select_release_notes(source, releases), [])
+    def test_first_release_keeps_curated_bootstrap_not_commit_history(self):
+        self.commit(['A'], subject='CHAT: Earlier technical title (#1)')
+        source = self.commit(['A', 'B'], subject='CHAT: Latest technical title (#2)')
+        (self.repo / 'assets/changelog.json').write_text('invalid worktree')
+        self.assertEqual(rp.select_release_notes(source, []), ['A', 'B'])
 
     def test_missing_historical_file_is_first_notes_not_git_failure(self):
         self.commit()
         previous = self.release('v2026.47.1', '2026-11-16')
-        source = self.commit(['First notes'])
+        source = self.commit(['First notes'], subject='CHAT: First notes (#2)')
         self.assertEqual(rp.select_release_notes(source, [previous]), ['First notes'])
 
     def test_bad_json_missing_objects_and_nonancestor_fail_closed(self):
@@ -104,7 +91,7 @@ class SourceNotesTests(unittest.TestCase):
         with patch.object(rp, 'source_notes', wraps=rp.source_notes) as read:
             self.assertEqual(rp.select_release_notes(
                 source, [first, duplicate] + ignored),
-                ['Never published', 'Archived draft', 'C'])
+                ['fixture'])
         self.assertEqual(read.call_count, 2)
         self.assertEqual(read.call_args_list[1].args, (first_source,))
         self.assertEqual(rp.select_release_notes(source, ignored),
@@ -137,7 +124,7 @@ class SourceNotesTests(unittest.TestCase):
     def test_prepare_uses_real_source_delta_and_skips_unchanged_before_allocation(self):
         self.commit(['Old'])
         previous = self.release('v2026.47.1', '2026-11-16')
-        source = self.commit(['Old', 'New'])
+        source = self.commit(['Old', 'New'], subject='CHAT: New (#2)')
         draft = None
         writes = []
 

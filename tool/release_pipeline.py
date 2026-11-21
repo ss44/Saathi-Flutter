@@ -156,16 +156,16 @@ def source_notes(commit, *, historical=False):
 
 
 def select_release_notes(commit, releases):
-    """Subtract all published canonical sources, not just the latest source.
+    """Read exact published-tag..selected-source subjects, never a stale ledger.
 
-    Only tagged published sources establish the ledger: neither release bodies,
-    mutable target_commitish nor unshipped commits/archived entries do. Every
-    eligible tag must resolve to a commit ancestral to the selected source.
+    Validate every canonical published source before selecting the latest by
+    publication time (as plan does). Curated notes bootstrap the first release;
+    historical assets remain validated but do not suppress shipped commits.
     """
     if not re.fullmatch(r'[0-9a-f]{40}', commit):
         raise ValueError('Source must be an exact full commit SHA')
     current = source_notes(commit)
-    old = set()
+    published = []
     sources = {commit: current}
     for release in releases:
         if release['draft']:
@@ -184,8 +184,35 @@ def select_release_notes(commit, releases):
             raise
         if baseline not in sources:
             sources[baseline] = source_notes(baseline, historical=True)
-        old.update(sources[baseline])
-    return [note for note in current if note not in old]
+        published.append((release, baseline))
+    if not published:
+        return current
+    _, baseline = max(published, key=lambda item: item[0]['published_at'])
+    for previous in {source for _, source in published}:
+        try:
+            command('git', 'merge-base', '--is-ancestor', previous, baseline)
+        except subprocess.CalledProcessError as error:
+            if error.returncode == 1:
+                raise ValueError('Earlier source is not an ancestor of latest published source') from error
+            raise
+    subjects = command('git', 'log', '--no-merges', '--reverse', '--topo-order',
+                       '--format=%s%x00', baseline + '..' + commit)
+    notes = []
+    for subject in subjects.split('\0'):
+        subject = subject.strip()
+        if not subject:
+            continue
+        prefix = re.match(
+            r'^(?P<area>[A-Z][A-Z0-9_-]*|feat|fix|perf|refactor|style|chore|ci|build|docs|test)'
+            r'(?:\([^()]+\))?!?:\s*', subject)
+        if prefix:
+            if prefix['area'].lower() in {'ci', 'build', 'docs', 'test'}:
+                continue
+            subject = subject[prefix.end():]
+        subject = re.sub(r'\s+\(#[0-9]+\)$', '', subject)
+        if subject not in notes:
+            notes.append(subject)
+    return validate_notes(notes)
 
 
 def human_block(notes):
