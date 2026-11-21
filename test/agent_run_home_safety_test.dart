@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -193,18 +194,47 @@ void main() {
                 : findsNothing,
             reason: '$status busy=$busy');
         expect(find.textContaining('Run:'), findsNothing);
-        if (status == 'queued') {
-          expect(find.text('Waiting for its turn'), findsWidgets);
+        if (status == 'queued' || status == 'running') {
+          final label = status == 'queued'
+              ? 'Waiting for its turn'
+              : 'Working on your reply';
+          expect(f.c.pendingStatus, label);
+          if (defaultTargetPlatform == TargetPlatform.android) {
+            expect(find.byKey(const Key('pending-response-bubble')),
+                findsOneWidget);
+            expect(
+                find.ancestor(
+                    of: find.byKey(const Key('pending-response-bubble')),
+                    matching: find.byType(BusyThinking)),
+                findsOneWidget);
+            for (final phase in [
+              'Sending your message',
+              'Waiting for its turn',
+              'Working on your reply',
+            ]) {
+              expect(find.text(phase), findsNothing);
+            }
+          } else {
+            expect(find.text(label), findsWidgets);
+          }
+        } else {
+          expect(
+              find.byKey(const Key('pending-response-bubble')), findsNothing);
         }
-        if (status == 'running') {
-          expect(find.text('Working on your reply'), findsWidgets);
+        if (status == 'completed') {
+          expect(f.c.pendingStatus, 'Reply received');
+          expect(find.text('Reply received'), findsOneWidget);
         }
         await t.pump(const Duration(milliseconds: 100));
       }
     }
     f.c.busy = false;
     await f.close(t);
-  });
+  },
+      variant: const TargetPlatformVariant({
+        TargetPlatform.android,
+        TargetPlatform.linux,
+      }));
   testWidgets(
       'unknown confirmation cannot acknowledge a different selected chat',
       (t) async {
