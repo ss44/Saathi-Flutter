@@ -79,5 +79,5 @@ void main() {
         await b.close();
       });
     }
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 }

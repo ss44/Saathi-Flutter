@@ -15,6 +15,7 @@ import '../agent_activity/activity_model.dart';
 import '../core/saathi_core.dart' show RemoteSession;
 import 'remote_sessions.dart';
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/semantics.dart';
@@ -1154,9 +1155,14 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                     children: [
                                                       const BusyThinking(
                                                           busy: true),
-                                                      Text(c.pendingStatus,
-                                                          key: const Key(
-                                                              'pending-status')),
+                                                      if (defaultTargetPlatform !=
+                                                              TargetPlatform
+                                                                  .android ||
+                                                          c.runObservationProblem !=
+                                                              null)
+                                                        Text(c.pendingStatus,
+                                                            key: const Key(
+                                                                'pending-status')),
                                                       if (c.reportedActivity !=
                                                               null &&
                                                           c.runObservationProblem ==
@@ -1440,11 +1446,21 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                       Row(
                                         children: [
                                           Expanded(
-                                            child: Text(
-                                              c.pendingStatus,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
+                                            child: defaultTargetPlatform ==
+                                                        TargetPlatform
+                                                            .android &&
+                                                    const {
+                                                      'Sending your message',
+                                                      'Waiting for its turn',
+                                                      'Working on your reply',
+                                                    }.contains(c.pendingStatus)
+                                                ? const SizedBox.shrink()
+                                                : Text(
+                                                    c.pendingStatus,
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                  ),
                                           ),
                                           if (c.currentRun!.runId == null)
                                             TextButton(

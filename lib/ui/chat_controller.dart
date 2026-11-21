@@ -1022,6 +1022,11 @@ class ChatController extends ChangeNotifier {
   set pendingText(String? value) => _pendingText = value;
   final RunClientFactory? runClientFactory;
   final bool _runDiscovery;
+
+  /// Android HTTP Runs uses admission plus bounded foreground status reads.
+  /// This does not change the distinct native hermesGateway WSS contract.
+  bool get usesRunStatusSync =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
   final Map<String, RunOperation> runs = {};
   final _streamText = <String, String>{};
   final _streamCursors = <String, BigInt>{};
@@ -1151,7 +1156,11 @@ class ChatController extends ChangeNotifier {
     Map<String, Object?> event, {
     String? cursor,
   }) {
-    if (!scope.isCurrent() || event['run_id'] != scope.snapshot.runId) return;
+    if (usesRunStatusSync ||
+        !scope.isCurrent() ||
+        event['run_id'] != scope.snapshot.runId) {
+      return;
+    }
     final op = runs[scope.localChatId];
     if (op == null || op.key != scope.operationKey || op.snapshot.terminal) {
       return;
@@ -2234,7 +2243,9 @@ class ChatController extends ChangeNotifier {
     String text,
     _DispatchPermission permission,
   ) async {
-    if (connection['type'] != 'hermes' || !_runDiscovery) return null;
+    if (connection['type'] != 'hermes') return null;
+    // An injected direct-core test hook must not bypass Android's native policy.
+    if (!_runDiscovery && !usesRunStatusSync) return null;
     final previous = runs[session.id];
     final generation = _runsGeneration;
     bool isCurrent() =>
@@ -2251,6 +2262,12 @@ class ChatController extends ChangeNotifier {
       _rememberRunFeatures(connection, client);
       if (!isCurrent()) throw StateError('Stale run');
       if (!supported) {
+        if (usesRunStatusSync) {
+          throw const ProviderException(
+            'This Hermes connection needs durable Runs for Android replies. '
+            'Enable Runs on the original server, then try again. Nothing was sent.',
+          );
+        }
         if (previous != null || session.remoteSessionId != null) {
           throw StateError('Existing run requires its original Runs authority');
         }
@@ -2325,6 +2342,19 @@ class ChatController extends ChangeNotifier {
           'Not sent. Prepared operation held. Reconnect using the original operation.';
       error = _paused[session];
       return _DispatchResult.admitted;
+    } catch (_) {
+      final op = runs[session.id];
+      if (usesRunStatusSync &&
+          op != null &&
+          !identical(op, previous) &&
+          op.runId != null &&
+          (generation != _runsGeneration ||
+              !_active(session, connection, op))) {
+        // A late foreground read has no authority after suspension/replacement.
+        // Retain its durable admission; returning grants fresh read-only sync.
+        return _DispatchResult.admitted;
+      }
+      rethrow;
     } finally {
       client.close();
     }
