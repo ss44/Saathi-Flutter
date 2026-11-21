@@ -6,6 +6,8 @@ from unittest.mock import patch
 from pathlib import Path
 import tempfile
 import hashlib
+import os
+import subprocess
 import release_pipeline as rp
 
 SHA = 'a' * 40
@@ -257,6 +259,140 @@ class PlanningTests(unittest.TestCase):
                                      ['GET', 'TAG', 'PATCH', 'GET', 'TAG'])
                     self.assertEqual(source_tag.call_count, 3)
                     self.assertEqual(source_tag.call_args_list[0].kwargs, {'create': True})
+
+
+class CommitRangeNotesTests(unittest.TestCase):
+    """Real Git seam: shipped commits change while curated notes stay stale."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR'))
+        self.addCleanup(temporary.cleanup)
+        self.repo = Path(temporary.name)
+        self.git('init', '-q')
+        self.git('config', 'user.name', 'Fixture')
+        self.git('config', 'user.email', 'fixture@example.invalid')
+        path = self.repo / 'assets/changelog.json'
+        path.parent.mkdir()
+        path.write_text(json.dumps({'schema': 1, 'unreleased': ['Stale note'],
+                                    'releases': []}))
+        command = rp.command
+        redirect = patch.object(rp, 'command', side_effect=lambda *args: command(
+            'git', '-C', str(self.repo), *args[1:]))
+        redirect.start()
+        self.addCleanup(redirect.stop)
+
+    def git(self, *args):
+        return subprocess.check_output(['git', '-C', str(self.repo), *args],
+                                       text=True, stderr=subprocess.PIPE).strip()
+
+    def commit(self, subject):
+        path = self.repo / 'sequence'
+        path.write_text(path.read_text() + 'x' if path.exists() else 'x')
+        self.git('add', '.')
+        self.git('commit', '-qm', subject)
+        return self.git('rev-parse', 'HEAD')
+
+    def release(self, increment, date):
+        tag = f'v2026.47.{increment}'
+        self.git('tag', '-a', tag, '-m', 'annotated fixture')
+        return dict(tag_name=tag, draft=False, published_at=date,
+                    target_commitish='wrong-branch', body='wrong notes')
+
+    def test_filtered_range_is_empty_and_git_log_failure_never_falls_back(self):
+        self.commit('Initial source')
+        previous = self.release(1, '2026-11-19')
+        source = self.commit('CI: Refresh automation (#2)')
+        self.assertEqual(rp.select_release_notes(source, [previous]), [])
+        command = rp.command
+
+        def broken(*args):
+            if 'log' in args:
+                raise subprocess.CalledProcessError(128, args)
+            return command(*args)
+
+        with patch.object(rp, 'command', side_effect=broken):
+            with self.assertRaises(subprocess.CalledProcessError):
+                rp.select_release_notes(source, [previous])
+
+    def test_subject_markers_fail_closed_and_conventional_breaking_scope_is_kept(self):
+        self.commit('Initial source')
+        previous = self.release(1, '2026-11-19')
+        source = self.commit('fix(chat)!: Preserve input (#2)')
+        self.assertEqual(rp.select_release_notes(source, [previous]), ['Preserve input'])
+        source = self.commit('CHAT: <!-- saathi-changes:end --> (#3)')
+        with self.assertRaises(ValueError):
+            rp.select_release_notes(source, [previous])
+
+    def test_consecutive_ranges_ignore_stale_rotated_and_cumulative_ledger(self):
+        self.commit('Initial source')
+        first = self.release(1, '2026-11-18')
+        source = self.commit('CHAT: First shipped change (#2)')
+        self.assertEqual(rp.select_release_notes(source, [first]), ['First shipped change'])
+        second = self.release(2, '2026-11-19')
+        path = self.repo / 'assets/changelog.json'
+        for notes in (['Unshipped claim'], ['Stale note', 'Unshipped claim']):
+            path.write_text(json.dumps({'schema': 1, 'unreleased': notes, 'releases': []}))
+            source = self.commit('CI: Rotate stale curated notes')
+        source = self.commit('CHAT: Next shipped change (#3)')
+        releases = [second, first, dict(tag_name='v2026.47.99', draft=True),
+                    dict(tag_name='legacy', draft=False)]
+        self.assertEqual(rp.select_release_notes(source, releases), ['Next shipped change'])
+        third = self.release(3, '2026-11-20')
+        self.assertEqual(rp.select_release_notes(source, releases + [third]), [])
+        # The same title on a distinct later commit is not suppressed across ranges.
+        source = self.commit('CHAT: First shipped change (#4)')
+        self.assertEqual(rp.select_release_notes(source, releases + [third]),
+                         ['First shipped change'])
+
+    def test_merge_wrapper_does_not_repeat_branch_subjects(self):
+        base = self.commit('Initial source')
+        previous = self.release(1, '2026-11-19')
+        branch = self.git('symbolic-ref', '--short', 'HEAD')
+        self.git('checkout', '-qb', 'feature')
+        self.commit('CHAT: Preserve drafts (#20)')
+        self.git('checkout', branch)
+        self.git('merge', '--no-ff', '-qm', 'Merge feature branch', 'feature')
+        source = self.git('rev-parse', 'HEAD')
+        self.assertNotEqual(base, source)
+        self.assertEqual(rp.select_release_notes(source, [previous]), ['Preserve drafts'])
+
+    def test_republished_older_source_cannot_replay_already_shipped_commits(self):
+        original = self.commit('Initial source')
+        first = self.release(1, '2026-11-18')
+        self.commit('CHAT: Already shipped (#20)')
+        second = self.release(2, '2026-11-19')
+        source = self.commit('CHAT: Next change (#21)')
+        self.git('tag', '-a', 'v2026.47.3', original, '-m', 'Older snapshot')
+        rollback = dict(first, tag_name='v2026.47.3', published_at='2026-11-20')
+        with self.assertRaisesRegex(ValueError, 'latest published source'):
+            rp.select_release_notes(source, [second, rollback, first])
+
+    def test_filter_and_dedup_are_narrow_and_keep_technical_fallbacks(self):
+        self.commit('Earlier change')
+        previous = self.release(1, '2026-11-19')
+        subjects = [
+            'CI: Run builds daily (#10)', 'build(android): Update build tools (#11)',
+            'DOCS: Explain setup (#12)', 'test: Adjust fixture (#13)',
+            'CHAT: Keep drafts safe (#14)', 'fix(chat): Keep drafts safe (#15)',
+            'QUALITY: Harden recovery (#16)', 'chore: Preserve useful detail (#17)',
+            'Unclassified technical title (#18)',
+        ]
+        for subject in subjects:
+            self.commit(subject)
+        source = self.git('rev-parse', 'HEAD')
+        self.assertEqual(rp.select_release_notes(source, [previous]), [
+            'Keep drafts safe', 'Harden recovery', 'Preserve useful detail',
+            'Unclassified technical title'])
+
+    def test_unchanged_curated_file_uses_distinct_shipped_commit_subjects(self):
+        self.commit('UI: Earlier shipped change (#1)')
+        previous = self.release(1, '2026-11-19')
+        source = self.commit('CHAT: Keep the conversation readable (#2)')
+        expected = ['Keep the conversation readable']
+        self.assertEqual(rp.select_release_notes(source, [previous]), expected)
+        # Neither repeat invocation nor working-tree text changes affect the result.
+        (self.repo / 'assets/changelog.json').write_text('not committed')
+        self.assertEqual(rp.select_release_notes(source, [previous]), expected)
 
 
 if __name__ == '__main__':

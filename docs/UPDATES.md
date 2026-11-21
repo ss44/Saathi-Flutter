@@ -208,27 +208,47 @@ Install update action on Android (Open releases on desktop), followed by the ful
 recent released history, newest first. Notes are plain text, never executable
 HTML, images or links. Handoff still does not mean installed.
 
-`assets/changelog.json` schema 1 contains `unreleased` bullets for the next draft
-and `releases` entries (`version`, `changes`) for bundled/offline history. Never
-show unreleased bullets as already released. Keep released entries factual.
-Preparing a new draft reads `unreleased` from the exact selected source commit,
-then subtracts the union of `unreleased` bullets from **every** previously
-published canonical weekly release's peeled tag commit (including beta), using
-the existing fully paginated release inventory. Drafts and noncanonical tags do
-not contribute. Each eligible tag must resolve to a locally available commit
-that is an ancestor of the selected source; even an older invalid/divergent tag
-fails closed, rather than silently dropping that release. Duplicate source SHAs
-are read once. Current order is preserved, so stale, cumulative and rotated notes
-cannot replay previously published bullets, even after an intervening rotation.
-Neither release bodies nor mutable `target_commitish` establish prior notes.
-Only those published source snapshots count: intervening unshipped commits and
-bundled `releases` archives are not publication evidence and never suppress new
-bullets. Archives remain separately curated offline history, not a second ledger.
-The first release, or a historical source predating this asset, contributes no
-prior bullets. Malformed JSON/schema/notes, missing Git objects and unreadable Git
-data fail closed; errors never fall back to the entire current list. Empty deltas
-honestly say “No additional change notes for this version.” They do not imply
-that no code changed.
+`assets/changelog.json` schema 1 retains `unreleased` bullets for first-release
+bootstrap and `releases` entries (`version`, `changes`) for curated bundled/offline
+history. Never show unreleased bullets as already released. Keep released entries
+factual; this workflow does not rewrite historical entries.
+
+After the first published canonical weekly release, draft notes come from the
+exact **previous published peeled-tag source..selected source** Git range, not
+from subtraction of the manually maintained `unreleased` list. The fully paginated
+inventory includes beta but excludes drafts and noncanonical tags. Latest means
+latest `published_at`, matching unchanged-tree planning, not API order or mutable
+`target_commitish`. Every eligible published tag must resolve locally and be an
+ancestor of the selected source; every earlier published source must also be an
+ancestor of that latest published source. A rollback/divergent publication fails
+closed instead of replaying already shipped commits. Missing objects, Git/API
+errors and malformed committed changelog JSON/schema/notes still fail closed.
+Historical sources predating the changelog are allowed; selected source requires
+that valid asset. Duplicate source blobs are validated once. With no canonical
+published baseline, use the selected source's curated `unreleased` list unchanged.
+
+Deterministic title policy (no runtime AI or API summarizer):
+
+- Traverse all non-merge commits in the exact range in reverse topological order;
+  branch commits are included once, merge wrappers excluded. Squash merges are
+  ordinary commits. Merge-only conflict-resolution changes have no separate note.
+- Strip an uppercase domain prefix (`CHAT:`, `QUALITY:` etc.) or a conventional
+  lowercase type (`feat`, `fix`, `perf`, `refactor`, `style`, `chore`, `ci`, `build`,
+  `docs`, `test`), including optional `(scope)` / `!`, and a terminal `(#123)`.
+- Omit only explicitly prefixed `CI`, `BUILD`, `DOCS`, `TEST` (or lowercase
+  equivalents). These title categories must not be used for user-facing mixed
+  changes. Do not guess app relevance from words or paths; retain unclassified,
+  quality, refactor and chore titles conservatively.
+- Deduplicate exact normalized strings **within that range**, preserving first
+  occurrence. Never suppress a distinct later commit because an older release
+  had the same wording. Consecutive ranges exclude previously shipped commits by
+  ancestry, not a stale text ledger.
+
+These are lightly normalized committed titles, not guaranteed plain-language
+summaries. Technical wording and platform-specific changes may remain; write
+accurate, understandable squash titles rather than inventing a nicer summary at
+release time. Empty/filtered ranges honestly say “No additional change notes for
+this version.” That does not imply no code changed.
 
 The body has a What's new heading with `<!-- saathi-changes:start -->` and
 `<!-- saathi-changes:end -->` around single-line `- ` bullets, alongside the
