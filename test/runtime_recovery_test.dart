@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:saathi/agent_runs/run_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -263,6 +264,8 @@ void main() {
   test(
       'localhost replayed delta and completion never duplicate result or infer again',
       () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     final f = RuntimeFixture();
     await f.start();
     final c = await connect(f);
@@ -288,6 +291,8 @@ void main() {
 
   test('localhost late completion belongs to original chat, not selected chat',
       () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     final f = RuntimeFixture();
     await f.start();
     final c = await connect(f);

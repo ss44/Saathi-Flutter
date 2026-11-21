@@ -72,7 +72,7 @@ void main() {
     await tester.pump(const Duration(seconds: 24));
     await tester.pumpWidget(const SizedBox());
     semantics.dispose();
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
   for (final size in [(390.0, 1.0), (360.0, 2.0)]) {
     testWidgets('reduced motion is static and fits ${size.$1}/${size.$2}',
         (tester) async {

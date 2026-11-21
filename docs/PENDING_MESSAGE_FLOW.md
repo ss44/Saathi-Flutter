@@ -89,7 +89,7 @@ FIFO remains honestly local.
   limitation. Check status must not POST an uncertain prompt again, even with
   the original idempotency key. A proven never-dispatched prepared operation
   remains explicitly dispatchable. Canonical exact-input receipts are separate.
-- Public Runs `tool.started`/`tool.completed`/`tool.failed` lifecycle labels appear
+- On desktop, public Runs `tool.started`/`tool.completed`/`tool.failed` labels appear
   below thinking. Only bounded tool identifiers are rendered, not arguments,
   result previews, raw errors, reasoning or arbitrary model claims. The current
   canonical event adapter has no verified public tool/model lifecycle projection;
@@ -97,6 +97,46 @@ FIFO remains honestly local.
 - Existing answer streaming, final-result deduplication, durable save and original
   source ownership remain authoritative. Receipt recovery alone does not release
   followers before the recovered snapshot has been saved.
+
+## Android HTTP Hermes: pending bubble and foreground status sync
+
+For HTTP Hermes connections on Android, a message uses the durable Runs admission
+and original run ID rather than a generation-long completion request or activity
+SSE. Servers without that verified capability get an actionable limitation before
+inference; they are not silently downgraded to a fragile compatibility request.
+
+- The assistant waiting bubble follows the pinned `ss44/sathi.ai` plugin's visual
+  pattern: immediate playful text, a new phrase every three seconds, italic
+  half-opacity primary text, a primary spinner and local elapsed seconds. It has
+  no extra “Waiting for reply” or “A little whimsy” heading. Saathi retains its
+  reviewed phrase pool and reduced-motion/accessibility behavior. The elapsed
+  clock measures this mounted waiting view, not server execution time.
+- Ordinary sending/queued/running labels do not add another block beneath the
+  Android bubble. Real recovery, decisions, failures and controls remain visible.
+  The final authoritative answer removes the waiting bubble; HTTP event-fed
+  partial answers are ignored. Desktop streaming behavior is unchanged.
+- Backgrounding suspends observation. Foreground return or controller recreation
+  restores the original durable operation and uses bounded status GETs to sync
+  its answer. Repeated reads/reloads must not add another inference POST or
+  another completion identity. A broken status connection is not proof the
+  server failed, and a late response cannot revive revoked foreground authority.
+- This is intentionally **not** a copy of the desktop plugin's transport. At
+  reference commit `83e73925288b241c692ccdf86b373b11ff9e6cda`, its Hermes
+  provider holds an ordinary XHR until HTTP 200 and restores only local history;
+  it does not provide detached admission or durable pending sync. Its reply
+  typewriter is local animation, not evidence of network token streaming.
+- Native `hermesGateway` WSS attachment is a distinct contract and is unchanged.
+  No HTTP substitute for its trusted invitation, receipt or session-resume RPCs
+  is invented. An HTTP admission ACK lost before its run ID is known remains
+  explicitly uncertain: no verified read-only key lookup exists, so it is never
+  replayed to manufacture recovery.
+
+Controlled tests cover advertised-events/no-SSE, partial-event rejection,
+unsupported servers, warm/cold recovery, failed status GETs, exhausted budgets,
+source replacement and exactly-once answer reconciliation. Stream-specific
+compatibility tests retain their original assertions on explicit desktop
+variants. These checks do not establish Android process-kill, native secure-store
+or deployed-server acceptance.
 
 ## Recovered delta and additional regressions
 

@@ -185,7 +185,7 @@ void main() {
     // its real-zone future in fake-async strands the next pump during unmount.
     await t.runAsync(subscription.cancel);
     await f.close(t);
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
   testWidgets('lost HTTP acknowledgement never resends even on status action',
       (t) async {

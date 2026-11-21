@@ -239,6 +239,6 @@ void main() {
         c.dispose();
         await fixture.close();
       });
-    });
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
   }
 }

@@ -81,7 +81,14 @@ class ActivityOwner {
   }
 
   Future<void> _connect(_Attachment a) async {
-    if (!_valid(a) || a.attempted || !a.scope.eventsSupported) return;
+    // Status bindings remain available; Android never opens activity SSE,
+    // including on explicit resume or after a delayed credential read.
+    if (controller.usesRunStatusSync ||
+        !_valid(a) ||
+        a.attempted ||
+        !a.scope.eventsSupported) {
+      return;
+    }
     a.attempted = true;
     final generation = ++a.generation;
     try {

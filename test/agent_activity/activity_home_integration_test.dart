@@ -301,6 +301,6 @@ void main() {
         }
         await server.close(force: true);
       });
-    });
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
   }
 }

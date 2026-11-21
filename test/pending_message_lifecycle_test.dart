@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:saathi/ui/busy_thinking.dart';
@@ -23,7 +24,11 @@ void main() {
     f.c.observeRunEvent(scopes.last,
         {'event': 'tool.started', 'run_id': 'original', 'tool': 'search'},
         cursor: '1');
-    expect(f.c.reportedActivity, 'Using search');
+    expect(
+        f.c.reportedActivity,
+        defaultTargetPlatform == TargetPlatform.android
+            ? isNull
+            : 'Using search');
     f.status = 'completed';
     await t.runAsync(f.c.checkRunStatus);
     final gate = f.discovery = Completer<void>();
@@ -45,7 +50,9 @@ void main() {
       await t.runAsync(subscription.cancel);
       await f.close(t);
     }
-  });
+  },
+      variant: TargetPlatformVariant(
+          {TargetPlatform.android, TargetPlatform.linux}));
   for (final width in [360.0, 390.0]) {
     for (final lane in ['gateway.fifo', 'gateway.journal']) {
       testWidgets(

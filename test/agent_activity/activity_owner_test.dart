@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -26,6 +27,9 @@ class HeldSecrets extends MemorySecrets {
 }
 
 void main() {
+  // These tests exercise the retained desktop SSE credential boundary.
+  setUp(() => debugDefaultTargetPlatformOverride = TargetPlatform.linux);
+  tearDown(() => debugDefaultTargetPlatformOverride = null);
   test('authoritative status maps answer-needed and unknown honestly', () {
     expect(ActivityOwner.status('waiting_for_approval'),
         ActivityStatus.waitingApproval);

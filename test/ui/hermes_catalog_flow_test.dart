@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -187,10 +188,12 @@ void main() {
   });
   for (final runs in [false, true]) {
     testWidgets(
-        'picker saves provider tuple and dispatches ${runs ? 'Runs' : 'compatibility'} after restart',
+        'picker restores provider tuple after restart: ${runs ? 'Runs dispatch' : 'platform compatibility policy'}',
         (tester) async {
       final posts = <Map<String, dynamic>>[];
+      final requests = <http.Request>[];
       final client = MockClient((r) async {
+        requests.add(r);
         if (r.method == 'POST') {
           posts.add(jsonDecode(r.body));
           return http.Response(
@@ -256,19 +259,53 @@ void main() {
       await tester.tap(find.text('Start conversation'));
       await tester.pumpAndSettle();
       expect(controller.sessions.single.toJson()['upstreamProvider'], 'two');
+      expect(controller.sessions.single.model, 'same');
+      final originalId = controller.sessions.single.id;
+      final originalSource =
+          Map<String, dynamic>.from(controller.connections.single);
+      expect(posts, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+      await store.preferences.reload();
       final restored = ChatController(store,
           coreFactory: () => SaathiCore(client: client),
           runClientFactory: (root, key) =>
               RunClient(root, key, client: client));
       await restored.load();
+      expect(restored.current!.id, originalId);
+      expect(restored.connections.single, originalSource);
       expect(restored.current!.toJson()['upstreamProvider'], 'two');
-      {
-        await tester.runAsync(() => restored.send('hello'));
+      expect(restored.current!.model, 'same');
+      final sent = await tester.runAsync(() => restored.send('hello'));
+      if (!runs && defaultTargetPlatform == TargetPlatform.android) {
+        expect(sent, isFalse);
+        expect(posts, isEmpty);
+        expect(requests.where((r) => r.method == 'POST'), isEmpty);
+        expect(
+            restored.error,
+            'This Hermes connection needs durable Runs for Android replies. '
+            'Enable Runs on the original server, then try again. Nothing was sent.');
+        expect(restored.currentRun, isNull);
+        expect(restored.runPending, isFalse);
+        expect(restored.current!.messages, isEmpty);
+        await tester.runAsync(() async {
+          expect(await store.secrets.read('run.v1.$originalId'), isNull);
+        });
+      } else {
+        expect(sent, isTrue);
         expect(posts.single['provider'], 'two');
         expect(posts.single['model'], 'same');
+        expect(requests.where((r) => r.method == 'POST').single.url.path,
+            runs ? '/v1/runs' : '/v1/chat/completions');
       }
+      expect(restored.current!.upstreamProvider, 'two');
+      expect(restored.current!.model, 'same');
+      expect(restored.current!.id, originalId);
+      expect(restored.connections.single, originalSource);
+      expect(requests.every((r) => r.url.host == 'localhost'), isTrue);
       restored.dispose();
-      controller.dispose();
-    });
+    },
+        variant: TargetPlatformVariant(
+            {TargetPlatform.android, TargetPlatform.linux}));
   }
 }

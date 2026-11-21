@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'agent_run_hardening_test.dart' show setup, FailingJournal;
@@ -65,6 +66,8 @@ void main() {
   }
   for (final body in ['', '<html>not found</html>']) {
     test('discovery 404 $body performs actual legacy chat fallback', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
       final initial =
           await setup(FailingJournal(), (r) async => http.Response('{}', 500));
       var chats = 0;

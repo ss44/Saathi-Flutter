@@ -168,6 +168,6 @@ void main() {
         c.dispose();
         await t.runAsync(f.close);
       }
-    });
+    }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
   }
 }
