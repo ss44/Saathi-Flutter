@@ -113,6 +113,8 @@ class UpdateAvailabilityBanner extends StatelessWidget {
             return const SizedBox.shrink();
           }
           return MaterialBanner(
+              forceActionsBelow:
+                  Theme.of(context).platform == TargetPlatform.android,
               content: Text(
                   'Saathi ${controller.offer!.version.name} is available.'),
               actions: [
