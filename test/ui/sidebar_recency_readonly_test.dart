@@ -711,8 +711,23 @@ void main() {
               expect(interactiveRows[0].readOnly, isFalse);
               expect(interactiveRows[1].readOnly, isFalse);
 
-              final y0 = tester.getTopLeft(find.text('API newer chat')).dy;
-              final y1 = tester.getTopLeft(find.text('API older chat')).dy;
+              final drawer = find.byType(Drawer);
+              final y0 = tester
+                  .getTopLeft(
+                    find.descendant(
+                      of: drawer,
+                      matching: find.text('API newer chat'),
+                    ),
+                  )
+                  .dy;
+              final y1 = tester
+                  .getTopLeft(
+                    find.descendant(
+                      of: drawer,
+                      matching: find.text('API older chat'),
+                    ),
+                  )
+                  .dy;
               expect(y0, lessThan(y1));
 
               final interactiveTile = tester.widget<ListTile>(
