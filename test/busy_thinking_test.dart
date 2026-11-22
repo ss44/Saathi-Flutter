@@ -36,6 +36,27 @@ void main() {
       'Buffering video',
       'Loading ad',
       'Erasing',
+      "You've got mail",
+      'Dividing by zero',
+      'Posting meme',
+      'Retweeting',
+      'Analyzing quantum waves',
+      'Downloading more RAM',
+      'Updating sarcasm drivers',
+      'Deleting system32... just kidding',
+      'Ignoring laws of physics',
+      'Decoding the matrix',
+      'Cooling down the reactor',
+      'Connecting to AOL',
+      'Skipping intro',
+      'Ringing bell',
+      'Sliding into DMs',
+      'Saving game',
+      'Loading save',
+      'Cleaning up',
+      'Writing history',
+      'Unlocking achievement',
+      'Time traveling',
     ]) {
       expect(importedThinkingPhrases, contains(phrase));
       expect(visibleThinkingPhrases, isNot(contains(phrase)));
@@ -43,6 +64,78 @@ void main() {
     expect(
         visibleThinkingPhrases, contains('Reconnecting the tin-can hotline'));
     expect(visibleThinkingPhrases, containsAll(newThinkingPhrases));
+  });
+  test('imported copy does not impersonate generation, tools or HTTP status',
+      () {
+    const phrases = [
+      'Generating witty retort',
+      'Loading personality module',
+      'Launching zig',
+      'Exiting vim',
+      'Finding cursor',
+      'Im a teapot',
+      'Calculating pi',
+      'Calculating tip',
+      'Scrolling doom',
+      'Getting ticket',
+      'Making art',
+      'Drawing outline',
+      'Highlighting',
+      'Sharpening pixels',
+      'Mixing colors',
+      'Shading',
+      'World building',
+      'Story telling',
+    ];
+    expect(importedThinkingPhrases, containsAll(phrases));
+    expect(visibleThinkingPhrases.where(phrases.contains), isEmpty);
+  });
+
+  test('new copy does not claim plausible agent or device actions', () {
+    const phrases = [
+      'Feeding the paper shredder',
+      'Browsing the source of the source',
+      'Googling the exact error with quotes',
+      'Removing the quotes and trying again',
+      'Opening a new tab by muscle memory',
+      'Closing nine copies of the same tab',
+      'Consulting a forum post from 2009',
+      'Clearing a cache I just cleared',
+      'Renaming final_final for the last time',
+      'Moving the mouse to stay online',
+      'Turning it off again',
+      'Checking which Python showed up',
+      'Opening a tab to find the other tab',
+      'Reconciling the desktop shortcuts',
+      'Making room on drive A',
+      'Installing one font for a thirty-page manual',
+      'Opening BIOS by hitting every key',
+      'Moving the mouse off the video',
+      'Reviewing a one-star review',
+      'Reseating the cartridge',
+      'Bringing back the startup chime',
+      'Adding another backslash',
+      'Making the regex worse',
+      'Removing the load-bearing comma',
+      'Putting the comma back',
+      'Checking if localhost is home',
+      'Taking a detour through Control Panel',
+      'Turning off motion blur again',
+      'Changing the difficulty for one room',
+      'Turning the volume down to read better',
+      "Scrolling past the recipe writer's childhood",
+    ];
+    expect(visibleThinkingPhrases.where(phrases.contains), isEmpty);
+  });
+  test('imported jokes do not imply a purchase or financial action', () {
+    const phrases = [
+      'Ordering pizza',
+      'Paying bills',
+      'Buying groceries',
+      'Filing taxes'
+    ];
+    expect(importedThinkingPhrases, containsAll(phrases));
+    expect(visibleThinkingPhrases.where(phrases.contains), isEmpty);
   });
   testWidgets(
       'loader animates, preserves phrase cadence through native polls and disposes',
