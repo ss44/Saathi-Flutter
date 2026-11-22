@@ -86,10 +86,7 @@ class _BusyThinkingState extends State<BusyThinking>
         if (elapsed != _elapsed) setState(() => _elapsed = elapsed);
       });
     }
-    _timer ??= Timer.periodic(
-        Duration(
-            seconds: defaultTargetPlatform == TargetPlatform.android ? 3 : 8),
-        (_) {
+    _timer ??= Timer.periodic(const Duration(seconds: 10), (_) {
       setState(() => _quip = _bag.next());
     });
   }
@@ -106,6 +103,7 @@ class _BusyThinkingState extends State<BusyThinking>
   @override
   Widget build(BuildContext context) {
     if (!widget.busy) return const SizedBox.shrink();
+    final quip = '$_quip...';
     if (defaultTargetPlatform == TargetPlatform.android) {
       final colors = Theme.of(context).colorScheme;
       return Semantics(
@@ -147,7 +145,7 @@ class _BusyThinkingState extends State<BusyThinking>
                         ),
                       const SizedBox(width: 12),
                       Expanded(
-                        child: Text('$_quip...',
+                        child: Text(quip,
                             key: const Key('thinking-quip'),
                             style: Theme.of(context)
                                 .textTheme
@@ -202,7 +200,7 @@ class _BusyThinkingState extends State<BusyThinking>
             children: [
               const Text('Waiting for reply'),
               const SizedBox(height: 4),
-              Text('A little whimsy: $_quip',
+              Text(quip,
                   key: const Key('thinking-quip'),
                   style: Theme.of(context).textTheme.bodySmall),
             ],

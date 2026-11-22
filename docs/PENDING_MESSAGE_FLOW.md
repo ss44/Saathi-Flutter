@@ -106,10 +106,12 @@ SSE. Servers without that verified capability get an actionable limitation befor
 inference; they are not silently downgraded to a fragile compatibility request.
 
 - The assistant waiting bubble follows the pinned `ss44/sathi.ai` plugin's visual
-  pattern: immediate playful text, a new phrase every three seconds, italic
+  pattern: immediate playful text, italic
   half-opacity primary text, a primary spinner and local elapsed seconds. It has
-  no extra “Waiting for reply” or “A little whimsy” heading. Saathi retains its
-  reviewed phrase pool and reduced-motion/accessibility behavior. The elapsed
+  no extra heading or label. Saathi shuffles plugin jokes and 200 new lines,
+  leaving out originals that read like actual status or errors. The copy rotates
+  every ten seconds while actively waiting in the foreground on all platforms.
+  Reduced-motion and accessible navigation keep the phrase static. The elapsed
   clock measures this mounted waiting view, not server execution time.
 - Ordinary sending/queued/running labels do not add another block beneath the
   Android bubble. Real recovery, decisions, failures and controls remain visible.
