@@ -20,11 +20,7 @@ void main() {
         tester.view.physicalSize = Size(width, 844);
         tester.view.devicePixelRatio = 1;
         tester.view.viewInsets = const FakeViewPadding(bottom: 300);
-        tester.platformDispatcher.textScaleFactorTestValue = 2;
-        addTearDown(() {
-          tester.view.reset();
-          tester.platformDispatcher.clearTextScaleFactorTestValue();
-        });
+        addTearDown(tester.view.reset);
         late ChatController controller;
         late fixture.NativeHost host;
         await tester.runAsync(() async {
@@ -44,6 +40,18 @@ void main() {
         tester.binding
             .handleAppLifecycleStateChanged(AppLifecycleState.resumed);
         await tester.pumpWidget(MaterialApp(
+          // Keep the original mobile input density for the height comparison.
+          // Linux otherwise subtracts 8 px from InputDecorator's natural height.
+          theme: ThemeData(
+            inputDecorationTheme: const InputDecorationTheme(
+              visualDensity: VisualDensity.standard,
+            ),
+          ),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context)
+                .copyWith(textScaler: TextScaler.linear(2)),
+            child: child!,
+          ),
           home: ChatHome(controller: controller),
         ));
         Future<void> settle() async {
@@ -54,7 +62,7 @@ void main() {
           }
         }
 
-        await tester.runAsync(() => controller.send('first'));
+        expect(await tester.runAsync(() => controller.send('first')), isTrue);
         await settle();
         final transcript = find
             .descendant(
@@ -94,32 +102,47 @@ void main() {
         await tester.pumpAndSettle();
         final draftOffset = draftScroll.position.pixels;
         final inputBottom = tester.getBottomLeft(input).dy;
-        // Controlled telemetry through the actual ChatHome-owned activity model;
-        // this checks layout/edit ownership, not native telemetry transport.
-        final model = tester
-            .widget<AgentActivityStrip>(find.byType(AgentActivityStrip))
-            .model;
-        final binding = model.bind(
-          connectionId: 'native',
-          revision: 'fixture',
-          connectionName: 'Native',
-          localChatId: controller.current!.id,
-          runId: 'run',
-          title: 'Fixture work',
-        );
-        model.updateStatus(binding, ActivityStatus.running);
-        model.event(binding, {
-          'event': 'subagent.start',
-          'run_id': 'run',
-          'seq': 1,
-          'subagent_id': 'child',
-          'goal': 'Fixture child activity',
-        });
+        final strip = find.byType(AgentActivityStrip);
+        final desktop =
+            Theme.of(tester.element(input)).platform == TargetPlatform.linux;
+        ActivityModel? model;
+        ActivityBinding? binding;
+        if (desktop) {
+          // Inject activity into the real desktop strip to exercise relayout.
+          // The WebSocket below separately drives canonical streaming.
+          model = tester.widget<AgentActivityStrip>(strip).model;
+          binding = model.bind(
+            connectionId: 'native',
+            revision: 'fixture',
+            connectionName: 'Native',
+            localChatId: controller.current!.id,
+            runId: 'run',
+            title: 'Fixture work',
+          );
+          model.updateStatus(binding, ActivityStatus.running);
+          model.event(binding, {
+            'event': 'subagent.start',
+            'run_id': 'run',
+            'seq': 1,
+            'subagent_id': 'child',
+            'goal': 'Fixture child activity',
+          });
+        } else {
+          expect(strip, findsNothing);
+        }
         await settle();
+        expect(find.text('Agent activity').hitTestable(),
+            desktop ? findsOneWidget : findsNothing);
         host.delta('A visible streamed reply ' * 10);
-        await settle();
+        // Real socket delivery and Flutter frames use different clocks.
+        // Wait for the owned delta rather than assuming IO finishes in 200 ms.
+        final streamDeadline = Stopwatch()..start();
+        while (controller.streamingText == null &&
+            streamDeadline.elapsed < const Duration(seconds: 5)) {
+          await settle();
+        }
         expect(controller.streamingText, contains('visible streamed reply'));
-        model.event(binding, {
+        model?.event(binding!, {
           'event': 'subagent.complete',
           'run_id': 'run',
           'seq': 2,
@@ -135,6 +158,8 @@ void main() {
             (widget) => widget is MessageView && widget.text == anchor.text);
         expect(tester.getTopLeft(surviving).dy, closeTo(anchorY, .01));
         expect(tester.getBottomLeft(input).dy, closeTo(inputBottom, .01));
+        expect(find.byTooltip('Stop current Hermes work').hitTestable(),
+            findsOneWidget);
         expect(find.byTooltip('Send').hitTestable(), findsOneWidget);
         await tester.enterText(input, 'Short');
         await tester.pumpAndSettle();
@@ -144,6 +169,8 @@ void main() {
         await tester.pumpWidget(const SizedBox());
         await settle();
       }, _RealHttp());
-    });
+    },
+        variant: TargetPlatformVariant(
+            {TargetPlatform.android, TargetPlatform.linux}));
   }
 }

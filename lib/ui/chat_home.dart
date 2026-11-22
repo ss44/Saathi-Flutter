@@ -1483,11 +1483,15 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                AgentActivityStrip(
-                                  model: activity.model,
-                                  onOpenParent: openActivityParent,
-                                  onOpenChildHistory: openActivityChild,
-                                ),
+                                // This strip consumes HTTP Runs activity, not
+                                // canonical Gateway events. Android HTTP Runs
+                                // only observes status. Keep controls below.
+                                if (!c.usesRunStatusSync)
+                                  AgentActivityStrip(
+                                    model: activity.model,
+                                    onOpenParent: openActivityParent,
+                                    onOpenChildHistory: openActivityChild,
+                                  ),
                                 if (c.canonical != null)
                                   CanonicalComposerControls(
                                     chat: c.canonical!,

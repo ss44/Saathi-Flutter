@@ -240,6 +240,43 @@ void main() {
     c.dispose();
   });
 
+  testWidgets('Android status-only run stays out of the composer controls',
+      (t) async {
+    t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    t.view.devicePixelRatio = 1;
+    t.view.physicalSize = const Size(360, 800);
+    addTearDown(t.view.resetPhysicalSize);
+    addTearDown(t.view.resetDevicePixelRatio);
+    final c = _ActivityController(store);
+    await c.load();
+    await t.pumpWidget(MaterialApp(
+        builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+                textScaler: TextScaler.linear(2),
+                viewInsets: const EdgeInsets.only(bottom: 220)),
+            child: child!),
+        home: ChatHome(controller: c)));
+    expect(c.usesRunStatusSync, isTrue);
+    for (final status in ['running', 'waiting_for_approval']) {
+      c.observations.add(ScopedRunSnapshot(
+          localChatId: a.id,
+          connectionId: 'a',
+          connectionRevision: Object(),
+          operationKey: 'activity-operation',
+          originalAuthority: {},
+          originalConnection: c.connections.first,
+          snapshot: RunSnapshot({'run_id': 'activity-run', 'status': status}),
+          isCurrent: () => true));
+      await t.pump();
+      expect(find.text('Agent activity'), findsNothing);
+      expect(find.text('Needs your attention'), findsNothing);
+      expect(find.byKey(const Key('composer')), findsOneWidget);
+      expect(t.takeException(), isNull);
+    }
+    await t.pumpWidget(const SizedBox());
+    c.dispose();
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
   testWidgets('activity navigation revokes preparing input across a round trip',
       (t) async {
     t.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
@@ -291,7 +328,7 @@ void main() {
     expect(posts, 1);
     await t.pumpWidget(const SizedBox());
     c.dispose();
-  });
+  }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
   testWidgets('pending direct input stays in its owning conversation',
       (t) async {
