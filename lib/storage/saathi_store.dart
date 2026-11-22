@@ -288,6 +288,10 @@ class SaathiStore {
                           as Map?)?['authoritativeCompletion'] ==
                       true)
                     'authoritativeCompletion': true,
+                  if ((message['metadata'] as Map?)?['timestamp']
+                      case final String ts
+                      when ts.length <= 64 && DateTime.tryParse(ts) != null)
+                    'timestamp': ts,
                   if (const [
                     'message',
                     'toolActivity',

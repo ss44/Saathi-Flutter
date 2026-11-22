@@ -33,6 +33,13 @@ extension ConversationWorkLabel on ConversationWorkState {
       };
 }
 
+/// Subtle neutral gray background for read-only conversation rows, legible in
+/// both light and dark themes.
+Color readOnlyConversationTileColor(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+        ? const Color(0xFF262626)
+        : const Color(0xFFEEEEEE);
+
 /// Supplied from the controller's original-conversation state, never a global
 /// spinner. Neither working state nor inferred text creates an unread completion.
 @immutable
@@ -42,23 +49,33 @@ class ConversationRowData {
       required this.title,
       this.subtitle = '',
       this.searchText = '',
-      this.state = ConversationWorkState.idle});
+      this.state = ConversationWorkState.idle,
+      this.readOnly = false,
+      this.latestMessageAt});
   final ConversationIdentity identity;
   final String title, subtitle, searchText;
   final ConversationWorkState state;
+  final bool readOnly;
+  final DateTime? latestMessageAt;
 }
 
 /// Compact, nonanimated and non-colour-only status, usable in row or app bar.
 class ConversationStatus extends StatelessWidget {
   const ConversationStatus(
-      {super.key, required this.state, required this.unread});
+      {super.key,
+      required this.state,
+      required this.unread,
+      this.readOnly = false});
   final ConversationWorkState state;
   final bool unread;
+  final bool readOnly;
   @override
   Widget build(BuildContext context) => Wrap(
           spacing: 6,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
+            if (readOnly)
+              Text('Read-only', style: Theme.of(context).textTheme.labelSmall),
             if (state != ConversationWorkState.idle) ...[
               Icon(state.icon, size: 16, semanticLabel: state.label),
               Text(state.label, style: Theme.of(context).textTheme.labelSmall)
@@ -106,13 +123,29 @@ class _ConversationOrganizationListState
                 organization.entry(r.identity).unread ||
                 r.state != ConversationWorkState.idle)
             .length;
-        final rows = widget.rows.where((r) {
+        final filtered = widget.rows.where((r) {
           final entry = organization.entry(r.identity);
           return entry.archived == _archived &&
               '${entry.title(r.title)} ${r.searchText}'
                   .toLowerCase()
                   .contains(_query.trim().toLowerCase());
+        }).toList();
+        final indexed = filtered.asMap().entries.toList();
+        indexed.sort((a, b) {
+          if (a.value.readOnly != b.value.readOnly) {
+            return a.value.readOnly ? 1 : -1;
+          }
+          final aTime = a.value.latestMessageAt;
+          final bTime = b.value.latestMessageAt;
+          if (aTime != null && bTime != null) {
+            final cmp = bTime.compareTo(aTime);
+            if (cmp != 0) return cmp;
+          } else if (aTime != null || bTime != null) {
+            return aTime != null ? -1 : 1;
+          }
+          return a.key.compareTo(b.key);
         });
+        final rows = [for (final entry in indexed) entry.value];
         return ListView(
             padding: const EdgeInsets.symmetric(vertical: 12),
             children: [
@@ -181,8 +214,12 @@ class ConversationActionRow extends StatefulWidget {
       required this.onSelect,
       required this.onArchive,
       required this.onEdit,
-      this.selected = false});
+      this.selected = false,
+      bool? readOnly})
+      : _readOnly = readOnly;
   final bool selected;
+  final bool? _readOnly;
+  bool get readOnly => _readOnly ?? row.readOnly;
   final ConversationRowData row;
   final ConversationPresentation presentation;
   final VoidCallback onSelect;
@@ -267,6 +304,9 @@ class _ConversationActionRowState extends State<ConversationActionRow> {
                   color: Theme.of(context).colorScheme.surface,
                   child: ListTile(
                     selected: widget.selected,
+                    tileColor: widget.readOnly
+                        ? readOnlyConversationTileColor(context)
+                        : null,
                     selectedTileColor:
                         Theme.of(context).colorScheme.secondaryContainer,
                     onTap: widget.onSelect,
@@ -281,7 +321,8 @@ class _ConversationActionRowState extends State<ConversationActionRow> {
                                 maxLines: 2, overflow: TextOverflow.ellipsis),
                           ConversationStatus(
                               state: widget.row.state,
-                              unread: widget.presentation.unread)
+                              unread: widget.presentation.unread,
+                              readOnly: widget.readOnly)
                         ]),
                     trailing: PopupMenuButton<bool>(
                         tooltip: 'Conversation actions',

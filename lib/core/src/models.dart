@@ -56,6 +56,34 @@ class ModelInfo {
       : '$providerId|${Uri.encodeComponent(upstreamProvider!)}|${Uri.encodeComponent(name)}';
 }
 
+const _maxEpochMillis = 8640000000000000;
+
+DateTime? parseMessageTimestamp(Object? value) {
+  if (value is String) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return null;
+    if (RegExp(r'^\d+$').hasMatch(trimmed)) {
+      final numeric = int.tryParse(trimmed);
+      return numeric == null ? null : parseMessageTimestamp(numeric);
+    }
+    final parsed = DateTime.tryParse(trimmed);
+    return parsed?.toUtc();
+  }
+  if (value is int) {
+    if (value <= 0 || value > _maxEpochMillis) return null;
+    final millis = value < 100000000000 ? value * 1000 : value;
+    if (millis > _maxEpochMillis) return null;
+    return DateTime.fromMillisecondsSinceEpoch(millis, isUtc: true);
+  }
+  if (value is num) {
+    if (value <= 0 || !value.isFinite || value > _maxEpochMillis) return null;
+    final scaled = value < 100000000000 ? value * 1000 : value;
+    if (!scaled.isFinite || scaled > _maxEpochMillis) return null;
+    return DateTime.fromMillisecondsSinceEpoch(scaled.round(), isUtc: true);
+  }
+  return null;
+}
+
 class ChatMessage {
   ChatMessage(
       {required this.role,
@@ -67,6 +95,20 @@ class ChatMessage {
   final String content;
   final String? id;
   final Map<String, dynamic> metadata;
+  DateTime? get timestamp {
+    for (final key in const [
+      'timestamp',
+      'created_at',
+      'createdAt',
+      'updated_at',
+      'updatedAt',
+    ]) {
+      final parsed = parseMessageTimestamp(metadata[key]);
+      if (parsed != null) return parsed;
+    }
+    return null;
+  }
+
   Map<String, dynamic> toJson() => {
         'role': role,
         'content': content,
@@ -101,6 +143,50 @@ class RemoteSession {
   String get title => data['title'] as String? ?? id;
   String? get source => data['source'] as String?;
   String? get model => data['model'] as String?;
+  DateTime? get latestMessageAt {
+    for (final key in const [
+      'last_message_at',
+      'lastMessageAt',
+      'last_message_timestamp',
+      'lastMessageTimestamp',
+      'updated_at',
+      'updatedAt',
+      'timestamp',
+    ]) {
+      final parsed = parseMessageTimestamp(data[key]);
+      if (parsed != null) return parsed;
+    }
+    return null;
+  }
+
+  bool isInteractiveApiSession({bool runSubmissionSupported = true}) =>
+      runSubmissionSupported && source == 'api_server';
+
+  static List<RemoteSession> orderByRecency(
+    Iterable<RemoteSession> sessions, {
+    bool runSubmissionSupported = true,
+  }) {
+    final indexed = sessions.toList().asMap().entries.toList();
+    indexed.sort((a, b) {
+      final aInteractive = a.value.isInteractiveApiSession(
+        runSubmissionSupported: runSubmissionSupported,
+      );
+      final bInteractive = b.value.isInteractiveApiSession(
+        runSubmissionSupported: runSubmissionSupported,
+      );
+      if (aInteractive != bInteractive) return aInteractive ? -1 : 1;
+      final aTime = a.value.latestMessageAt;
+      final bTime = b.value.latestMessageAt;
+      if (aTime != null && bTime != null) {
+        final cmp = bTime.compareTo(aTime);
+        if (cmp != 0) return cmp;
+      } else if (aTime != null || bTime != null) {
+        return aTime != null ? -1 : 1;
+      }
+      return a.key.compareTo(b.key);
+    });
+    return [for (final entry in indexed) entry.value];
+  }
 
   /// This integration is read-only; foreign owners must use the native gateway.
   bool get canContinueViaRest => false;

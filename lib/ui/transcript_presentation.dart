@@ -20,8 +20,24 @@ ChatMessage? projectRemoteHistory(Map<String, dynamic> row) {
                   'Image blocked · attachment preview is unavailable',
             ].join('\n\n')
           : '';
+  DateTime? timestamp;
+  for (final key in const [
+    'timestamp',
+    'created_at',
+    'createdAt',
+    'updated_at',
+    'updatedAt',
+    'last_message_at',
+  ]) {
+    timestamp = parseMessageTimestamp(row[key]);
+    if (timestamp != null) break;
+  }
   return ChatMessage(
-      role: row['role'] == 'user' ? 'user' : 'model', content: text);
+      role: row['role'] == 'user' ? 'user' : 'model',
+      content: text,
+      metadata: timestamp == null
+          ? const {}
+          : {'timestamp': timestamp.toIso8601String()});
 }
 
 /// Presentation only: canonical rows and their indices remain untouched.

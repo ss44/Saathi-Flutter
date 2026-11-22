@@ -628,11 +628,11 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
           }
           final thinking = c.showPendingThinking;
           final localMatches = searchLocalHistory(
-            c.sessions.reversed.where(
-              (s) =>
-                  c.organization.entry(c.identityOf(s)).archived ==
-                  archivedView,
-            ),
+            c.orderedSessions().where(
+                  (s) =>
+                      c.organization.entry(c.identityOf(s)).archived ==
+                      archivedView,
+                ),
             historyQuery,
             displayTitle: c.displayTitle,
           );
@@ -911,9 +911,11 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                             }
                             final match = localMatches[index - 1];
                             final s = match.session;
+                            final sessionReadOnly = c.isSessionReadOnly(s);
                             return ConversationActionRow(
                               key: ValueKey(c.identityOf(s).storageKey),
                               selected: wide && identical(s, session),
+                              readOnly: sessionReadOnly,
                               row: ConversationRowData(
                                 identity: c.identityOf(s),
                                 title: s.title,
@@ -921,6 +923,8 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                     ? 'On this device · ${s.model}'
                                     : '${match.snippet}\nOn this device · ${s.model}',
                                 state: c.workState(s),
+                                readOnly: sessionReadOnly,
+                                latestMessageAt: s.latestMessageAt,
                               ),
                               presentation:
                                   c.organization.entry(c.identityOf(s)),

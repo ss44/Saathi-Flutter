@@ -39,6 +39,26 @@ class ChatSession {
   String get title =>
       remoteTitle ??
       (messages.isEmpty ? 'New conversation' : messages.first.content);
+  DateTime? get latestMessageAt {
+    DateTime? latestVisible;
+    for (final message in messages) {
+      if (!showsHistoryBubble(message)) continue;
+      final ts = message.timestamp;
+      if (ts != null && (latestVisible == null || ts.isAfter(latestVisible))) {
+        latestVisible = ts;
+      }
+    }
+    if (latestVisible != null) return latestVisible;
+    DateTime? latestAny;
+    for (final message in messages) {
+      final ts = message.timestamp;
+      if (ts != null && (latestAny == null || ts.isAfter(latestAny))) {
+        latestAny = ts;
+      }
+    }
+    return latestAny;
+  }
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'connectionId': connectionId,
@@ -391,14 +411,22 @@ class ChatController extends ChangeNotifier {
     } else {
       _terminalProblems.remove(session);
     }
+    final now = DateTime.now().toUtc().toIso8601String();
     session.messages.addAll([
-      ChatMessage(role: 'user', content: input),
+      ChatMessage(
+        role: 'user',
+        content: input,
+        metadata: {'timestamp': now},
+      ),
       ChatMessage(
         role: 'model',
         content: text,
         id: replyId,
         metadata: {
           ...ReportedUsage.fromMetadata(metadata).toMetadata(),
+          'timestamp':
+              parseMessageTimestamp(metadata['timestamp'])?.toIso8601String() ??
+                  now,
           if (text.trim().isNotEmpty) 'authoritativeCompletion': true,
         },
       ),
@@ -1585,6 +1613,7 @@ class ChatController extends ChangeNotifier {
       if (snapshot != null && !identical(snapshot, _savedCanonicalSnapshot)) {
         final previous = {for (final m in session.messages) m.id: m};
         final completed = <String>[];
+        final now = DateTime.now().toUtc().toIso8601String();
         session.messages
           ..clear()
           ..addAll([
@@ -1606,6 +1635,8 @@ class ChatController extends ChangeNotifier {
                   id: id,
                   metadata: {
                     ...?previous[id]?.metadata,
+                    if (fresh && previous[id]?.metadata['timestamp'] == null)
+                      'timestamp': now,
                     'canonicalRowKind': m.kind.name,
                     if (fresh) 'authoritativeCompletion': true,
                   },
@@ -2066,13 +2097,20 @@ class ChatController extends ChangeNotifier {
       }
       final marker = 'run-${op.key}';
       if (!session.messages.any((m) => m.id == marker)) {
+        final now = DateTime.now().toUtc().toIso8601String();
         session.messages.addAll([
-          ChatMessage(role: 'user', content: op.input, id: 'input-${op.key}'),
+          ChatMessage(
+            role: 'user',
+            content: op.input,
+            id: 'input-${op.key}',
+            metadata: {'timestamp': now},
+          ),
           ChatMessage(
             role: 'model',
             content: snapshot.output,
             id: marker,
             metadata: {
+              'timestamp': now,
               if (snapshot.output.trim().isNotEmpty)
                 'authoritativeCompletion': true,
             },
@@ -2453,17 +2491,43 @@ class ChatController extends ChangeNotifier {
         'Secure storage recovery could not be confirmed. Connections are read-only; restart after checking storage.';
   }
 
+  bool isSessionReadOnly(ChatSession session) {
+    final activeCanonical = identical(session, current)
+        ? canonical
+        : (identical(session, _canonicalSession) ? _canonical : null);
+    return _loadFailed ||
+        _quarantinedInputs.contains(session) ||
+        (connections.any(
+              (c) =>
+                  c['id'] == session.connectionId &&
+                  c['type'] == 'hermesGateway',
+            ) &&
+            (activeCanonical == null || !activeCanonical.connected)) ||
+        !connections.any((c) => c['id'] == session.connectionId);
+  }
+
+  List<ChatSession> orderedSessions([Iterable<ChatSession>? source]) {
+    final candidates = (source ?? sessions.reversed).toList();
+    final indexed = candidates.asMap().entries.toList();
+    indexed.sort((a, b) {
+      final aReadOnly = isSessionReadOnly(a.value);
+      final bReadOnly = isSessionReadOnly(b.value);
+      if (aReadOnly != bReadOnly) return aReadOnly ? 1 : -1;
+      final aTime = a.value.latestMessageAt;
+      final bTime = b.value.latestMessageAt;
+      if (aTime != null && bTime != null) {
+        final cmp = bTime.compareTo(aTime);
+        if (cmp != 0) return cmp;
+      } else if (aTime != null || bTime != null) {
+        return aTime != null ? -1 : 1;
+      }
+      return a.key.compareTo(b.key);
+    });
+    return [for (final entry in indexed) entry.value];
+  }
+
   bool get readOnly =>
-      _loadFailed ||
-      _quarantinedInputs.contains(current) ||
-      (connections.any(
-            (c) =>
-                c['id'] == current?.connectionId &&
-                c['type'] == 'hermesGateway',
-          ) &&
-          (canonical == null || !canonical!.connected)) ||
-      current != null &&
-          !connections.any((c) => c['id'] == current!.connectionId);
+      _loadFailed || (current != null && isSessionReadOnly(current!));
 
   void _checkMutation(String id, {bool changesConnection = true}) {
     if (_disposed ||
