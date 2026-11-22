@@ -193,6 +193,183 @@ void main() {
     expect(posts, 2);
   });
 
+  test(
+      'whole-ledger 1,000-chat capacity isolates the 1,001st chat across retry and restart without duplicate unread or notifications',
+      () async {
+    final seed = ChatOrganization(OrganizationStorage(store.preferences));
+    await seed.load();
+    await seed.recordCompletion(
+        const ConversationIdentity('a', 'a-chat'), 'reply-a0');
+    for (var i = 1; i < 1000; i++) {
+      await seed.recordCompletion(
+          ConversationIdentity('a', 'chat-$i'), 'reply-0');
+    }
+    a.messages.add(ChatMessage(
+        role: 'model',
+        content: 'existing answer',
+        id: 'reply-a0',
+        metadata: {'authoritativeCompletion': true}));
+    await store.saveChats([a.toJson(), b.toJson()]);
+
+    final notifications = <String>[];
+    final c = controller()..onReplyReceived = notifications.add;
+    await c.load();
+
+    // Select the 1,001st conversation identity (b-chat) and complete a reply.
+    c.select(c.sessions.singleWhere((s) => s.id == b.id));
+    expect(c.organizationBlocked, isFalse);
+    expect(await c.send('1001st question'), isTrue);
+    expect(posts, 1);
+    expect(notifications, [b.id]);
+    expect(c.current!.messages.last.content, 'answer');
+    expect(c.organization.hasUnsavedChanges, isFalse);
+    expect(c.organizationBlocked, isTrue);
+    expect(c.organizationProblem,
+        contains('This conversation reached its saved reply-details limit.'));
+    expect(c.organizationProblem,
+        contains('Other conversations remain available.'));
+
+    await c.retryOrganizationSave();
+    expect(c.organizationBlocked, isTrue);
+    expect(c.organization.hasUnsavedChanges, isFalse);
+    expect(notifications, [b.id]);
+    expect(posts, 1);
+
+    // Existing chat among the 1,000 remains unblocked, can mark visible and send.
+    final healthyA = c.sessions.singleWhere((s) => s.id == a.id);
+    c.select(healthyA);
+    expect(c.organizationBlocked, isFalse);
+    expect(c.organizationProblem, isNull);
+    expect(c.organization.entry(c.identityOf(healthyA)).unread, isTrue);
+    await c.replyVisible(healthyA, 'reply-a0');
+    expect(c.organization.entry(c.identityOf(healthyA)).unread, isFalse);
+    expect(await c.send('follow-up in existing chat'), isTrue);
+    expect(posts, 2);
+    expect(notifications, [b.id, a.id]);
+    final secondReplyId = healthyA.messages.last.id!;
+    expect(c.organization.entry(c.identityOf(healthyA)).unreadCompletionIds,
+        [secondReplyId]);
+    await c.replyVisible(healthyA, secondReplyId);
+    expect(c.organization.entry(c.identityOf(healthyA)).unread, isFalse);
+    c.dispose();
+
+    // Restart preserves retained answer, isolates 1,001st chat, and creates no duplicate unread/notification.
+    final restored = controller()..onReplyReceived = notifications.add;
+    addTearDown(restored.dispose);
+    await restored.load();
+    expect(notifications, [b.id, a.id]);
+
+    final restoredA = restored.sessions.singleWhere((s) => s.id == a.id);
+    restored.select(restoredA);
+    expect(restored.organizationBlocked, isFalse);
+    expect(restored.organizationProblem, isNull);
+    expect(restored.organization.entry(restored.identityOf(restoredA)).unread,
+        isFalse);
+    expect(await restored.send('post-restart in existing chat'), isTrue);
+    expect(posts, 3);
+    expect(notifications, [b.id, a.id, a.id]);
+    await restored.replyVisible(restoredA, restoredA.messages.last.id!);
+    expect(restored.organization.entry(restored.identityOf(restoredA)).unread,
+        isFalse);
+
+    final restoredB = restored.sessions.singleWhere((s) => s.id == b.id);
+    restored.select(restoredB);
+    expect(restored.organizationBlocked, isTrue);
+    expect(restored.organizationProblem,
+        contains('This conversation reached its saved reply-details limit.'));
+    expect(restoredB.messages.last.content, 'answer');
+  });
+
+  test(
+      'serialized 2 MiB organization byte limit isolates overflowing chat and rejects oversized edits without blocking healthy chat',
+      () async {
+    const limit = 2 * 1024 * 1024;
+    const identityA = ConversationIdentity('a', 'a-chat');
+    final chats = <String, dynamic>{
+      for (var i = 0; i < 130; i++)
+        ConversationIdentity('a', 'filler-$i').storageKey: {
+          'displayName': '',
+          'archived': false,
+          'instructions': 'i' * 16000,
+          'completions': <String, bool>{},
+        },
+      identityA.storageKey: {
+        'displayName': 'Chat A',
+        'archived': false,
+        'instructions': '',
+        'completions': {'reply-a0': false},
+      },
+    };
+    final baseLength =
+        jsonEncode({'schema': 1, 'chats': chats, 'personas': []}).length;
+    final pad = limit - baseLength - 18;
+    (chats[identityA.storageKey] as Map<String, dynamic>)['instructions'] =
+        'p' * pad;
+    a.messages.add(ChatMessage(
+        role: 'model',
+        content: 'initial A answer',
+        id: 'reply-a0',
+        metadata: {'authoritativeCompletion': true}));
+    await store.saveChats([a.toJson(), b.toJson()]);
+    await store.preferences.setString(OrganizationStorage.key,
+        jsonEncode({'schema': 1, 'chats': chats, 'personas': []}));
+
+    final c = controller();
+    addTearDown(c.dispose);
+    await c.load();
+
+    // Completing a reply in B exceeds the 2 MiB serialized ledger budget.
+    final sessionB = c.sessions.singleWhere((s) => s.id == b.id);
+    c.select(sessionB);
+    expect(await c.send('overflow 2 MiB in B'), isTrue);
+    expect(posts, 1);
+    expect(sessionB.messages.last.content, 'answer');
+    expect(c.organization.hasUnsavedChanges, isFalse);
+    expect(c.organizationBlocked, isTrue);
+    expect(c.organizationProblem,
+        contains('This conversation reached its saved reply-details limit.'));
+
+    // Switching to A keeps A unblocked and able to mark its reply visible.
+    final sessionA = c.sessions.singleWhere((s) => s.id == a.id);
+    c.select(sessionA);
+    expect(c.organizationBlocked, isFalse);
+    expect(c.organizationProblem, isNull);
+    await c.replyVisible(sessionA, 'reply-a0');
+    expect(c.organization.entry(identityA).unread, isFalse);
+
+    // An oversized edit on A is rejected before pending state can block A.
+    await expectLater(
+      c.organization.edit(
+        identityA,
+        displayName: 'x' * 80,
+        personaId: null,
+        policy: PersonaEditPolicy.localInstructions,
+        pendingReason: null,
+      ),
+      throwsStateError,
+    );
+    expect(c.organization.hasUnsavedChanges, isFalse);
+    expect(c.organizationBlocked, isFalse);
+    expect(c.organizationProblem, isNull);
+
+    // Freeing instruction space in A and retrying unblocks B's retained completion.
+    await c.saveChatSettings(
+      sessionA,
+      originalConnection:
+          c.connections.singleWhere((conn) => conn['id'] == 'a'),
+      selection: c.selectionGeneration,
+      model: 'model',
+      instructions: 'short',
+      personaId: null,
+    );
+    await c.retryOrganizationSave();
+    c.select(sessionB);
+    expect(c.organizationBlocked, isFalse);
+    expect(c.organizationProblem, isNull);
+    expect(c.organization.entry(c.identityOf(sessionB)).unreadCompletionIds,
+        [sessionB.messages.last.id]);
+  });
+
   test('oversized direct input is refused before journal or queue mutation',
       () async {
     final c = controller();

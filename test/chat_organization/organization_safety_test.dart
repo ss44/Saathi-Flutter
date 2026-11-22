@@ -47,6 +47,190 @@ void main() {
     await organization.recordCompletion(
         const ConversationIdentity('original', 'other'), 'healthy');
   });
+  test(
+      'normal growth to 1,000 conversations isolates 1,001st capacity without evicting dedupe IDs or wedging pending edits',
+      () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    final organization = ChatOrganization(OrganizationStorage(prefs));
+    await organization.load();
+    for (var i = 0; i < 1000; i++) {
+      await organization.recordCompletion(
+          ConversationIdentity('original', 'chat-$i'), 'reply-0');
+    }
+    const first = ConversationIdentity('original', 'chat-0');
+    const last = ConversationIdentity('original', 'chat-999');
+    const overflow = ConversationIdentity('original', 'chat-1000');
+    expect(organization.entry(first).unread, isTrue);
+    expect(organization.entry(last).unread, isTrue);
+
+    await expectLater(
+      organization.recordCompletion(overflow, 'reply-overflow'),
+      throwsA(
+        isA<OrganizationCapacityException>()
+            .having((e) => e.identity, 'identity', overflow),
+      ),
+    );
+    expect(organization.hasUnsavedChanges, isFalse);
+    expect(organization.error, isNull);
+    expect(organization.entry(overflow).completions, isEmpty);
+    expect(organization.entry(first).completions, {'reply-0': false});
+    expect(organization.entry(last).completions, {'reply-0': false});
+
+    await expectLater(
+        organization.setArchived(overflow, true), throwsStateError);
+    expect(organization.hasUnsavedChanges, isFalse);
+    expect(organization.error, isNull);
+
+    await expectLater(
+      organization.edit(
+        overflow,
+        displayName: 'Overflow',
+        personaId: null,
+        policy: PersonaEditPolicy.localInstructions,
+        pendingReason: null,
+      ),
+      throwsStateError,
+    );
+    expect(organization.hasUnsavedChanges, isFalse);
+    expect(organization.error, isNull);
+
+    await expectLater(
+      organization.saveChatSettings(
+        overflow,
+        replyModel: 'gpt-4o',
+        instructions: 'stay rejected',
+        personaId: null,
+        restriction: () => null,
+      ),
+      throwsStateError,
+    );
+    expect(organization.hasUnsavedChanges, isFalse);
+    expect(organization.error, isNull);
+
+    // Existing conversations remain fully writable and deduplicated.
+    await organization.markReplyVisible(first, 'reply-0');
+    expect(organization.entry(first).unread, isFalse);
+    await organization.recordCompletion(first, 'reply-1');
+    expect(organization.entry(first).unreadCompletionIds, ['reply-1']);
+    await organization.markReplyVisible(first, 'reply-1');
+    expect(organization.entry(first).unread, isFalse);
+    await organization.setArchived(first, true);
+    expect(organization.entry(first).archived, isTrue);
+  });
+  test(
+      'serialized 2 MiB boundary rejects overflowing completion and edits before setting pending state',
+      () async {
+    const limit = 2 * 1024 * 1024;
+    const healthy = ConversationIdentity('original', 'healthy');
+    const target = ConversationIdentity('original', 'target');
+    const extra = ConversationIdentity('original', 'extra');
+    final chats = <String, dynamic>{
+      for (var i = 0; i < 130; i++)
+        ConversationIdentity('original', 'filler-$i').storageKey: {
+          'displayName': '',
+          'archived': false,
+          'instructions': 'i' * 16000,
+          'completions': <String, bool>{},
+        },
+      healthy.storageKey: {
+        'displayName': 'Healthy',
+        'archived': false,
+        'instructions': '',
+        'completions': {'seen-0': false},
+      },
+      target.storageKey: {
+        'displayName': 'Target',
+        'archived': false,
+        'instructions': '',
+        'completions': <String, bool>{},
+      },
+    };
+    final baseLength =
+        jsonEncode({'schema': 1, 'chats': chats, 'personas': []}).length;
+    final pad = limit - baseLength - 18;
+    expect(pad, greaterThan(0));
+    expect(pad, lessThanOrEqualTo(16000));
+    (chats[healthy.storageKey] as Map<String, dynamic>)['instructions'] =
+        'p' * pad;
+
+    SharedPreferences.setMockInitialValues({
+      OrganizationStorage.key:
+          jsonEncode({'schema': 1, 'chats': chats, 'personas': []}),
+    });
+    final prefs = await SharedPreferences.getInstance();
+    final organization = ChatOrganization(OrganizationStorage(prefs));
+    await organization.load();
+    expect(jsonEncode(organization.toJson()).length, limit - 18);
+
+    await expectLater(
+      organization.recordCompletion(target, 'reply-exceeding-two-mib-budget'),
+      throwsA(
+        isA<OrganizationCapacityException>()
+            .having((e) => e.identity, 'identity', target),
+      ),
+    );
+    expect(organization.hasUnsavedChanges, isFalse);
+    expect(organization.error, isNull);
+    expect(organization.entry(target).completions, isEmpty);
+
+    await expectLater(
+      organization.edit(
+        target,
+        displayName: 'x' * 80,
+        personaId: null,
+        policy: PersonaEditPolicy.localInstructions,
+        pendingReason: null,
+      ),
+      throwsStateError,
+    );
+    expect(organization.hasUnsavedChanges, isFalse);
+    expect(organization.error, isNull);
+    expect(organization.entry(target).displayName, 'Target');
+
+    await expectLater(
+      organization.setArchived(extra, true),
+      throwsStateError,
+    );
+    expect(organization.hasUnsavedChanges, isFalse);
+    expect(organization.error, isNull);
+
+    await expectLater(
+      organization.savePersona(
+        const SharedPersona(
+          id: 'overflow-persona',
+          name: 'Role',
+          instructions: 'Too large for remaining budget',
+        ),
+        canEdit: (_) => null,
+      ),
+      throwsStateError,
+    );
+    expect(organization.hasUnsavedChanges, isFalse);
+    expect(organization.error, isNull);
+    expect(organization.personas, isEmpty);
+
+    await expectLater(
+      organization.saveChatSettings(
+        target,
+        replyModel: 'gpt-4o',
+        instructions: 'x' * 100,
+        personaId: null,
+        restriction: () => null,
+      ),
+      throwsStateError,
+    );
+    expect(organization.hasUnsavedChanges, isFalse);
+    expect(organization.error, isNull);
+
+    // An existing chat can still mark its reply visible and record a short ID.
+    await organization.markReplyVisible(healthy, 'seen-0');
+    expect(organization.entry(healthy).unread, isFalse);
+    await organization.recordCompletion(healthy, 'r1');
+    expect(organization.entry(healthy).unreadCompletionIds, ['r1']);
+    await organization.markReplyVisible(healthy, 'r1');
+    expect(organization.entry(healthy).unread, isFalse);
+  });
   testWidgets('an editor cannot adopt or cancel another failed reply write',
       (tester) async {
     SharedPreferences.setMockInitialValues({});
