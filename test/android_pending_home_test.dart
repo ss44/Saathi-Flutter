@@ -37,7 +37,7 @@ void main() {
     expect(find.byKey(const Key('pending-response-bubble')), findsOneWidget);
     expect(find.byKey(const Key('pending-status')), findsNothing);
     expectNoOrdinaryPhaseText();
-    expect(find.text('Reconnect').hitTestable(), findsOneWidget);
+    expect(find.text('Refresh').hitTestable(), findsOneWidget);
     expect(find.byType(AlertDialog), findsNothing);
     fixture.admission.complete();
     await tester.runAsync(() => sending);

@@ -88,6 +88,20 @@ class PreparedRunRevoked extends StateError {
   final RunOperation operation;
 }
 
+/// Validated page returned by `GET /api/sessions/{session_id}/messages` under
+/// an operation's bound RunClient origin and credential scope.
+class RunHistoryPage {
+  const RunHistoryPage({
+    required this.sessionId,
+    required this.messages,
+    required this.pagination,
+  });
+
+  final String sessionId;
+  final List<Map<String, dynamic>> messages;
+  final Map<String, dynamic> pagination;
+}
+
 class RunLedger {
   RunLedger(this.secrets);
   final SecretStore secrets;
@@ -548,6 +562,65 @@ class RunClient {
     }
     if (isCurrent != null && !isCurrent()) throw StateError('Stale run');
     return op.snapshot;
+  }
+
+  /// Read-only session history fetch bound to [op]'s original authority.
+  /// Used to refresh and match a lost admission receipt without resending.
+  Future<RunHistoryPage> sessionMessages(
+    RunOperation op, {
+    int limit = 100,
+    int offset = 0,
+    bool Function()? isCurrent,
+  }) async {
+    if (limit < 1 || limit > 100 || offset < 0) {
+      throw ArgumentError('Invalid message pagination');
+    }
+    if (isCurrent != null && !isCurrent()) throw StateError('Stale run');
+    bind(op);
+    final query = Uri(queryParameters: {
+      'limit': '$limit',
+      'offset': '$offset',
+      'order': 'oldest',
+      'include_compacted': 'false',
+      'inline_images': 'false',
+    }).query;
+    final (code, data, _) = await _request(
+      'GET',
+      '/api/sessions/${Uri.encodeComponent(_id(op.sessionId))}/messages?$query',
+    );
+    if (isCurrent != null && !isCurrent()) throw StateError('Stale run');
+    if (code != 200) throw StateError('Session history unavailable');
+    final sessionId = data['session_id'];
+    if (sessionId != null && sessionId != op.sessionId) {
+      throw StateError('Session identity mismatch');
+    }
+    final rawList = data['data'];
+    if (rawList is! List || rawList.any((row) => row is! Map)) {
+      throw const FormatException('Invalid session history response');
+    }
+    final paginationRaw = data['pagination'];
+    if (paginationRaw != null && paginationRaw is! Map) {
+      throw const FormatException('Invalid session history pagination');
+    }
+    final pagination = paginationRaw is Map
+        ? Map<String, dynamic>.from(paginationRaw)
+        : const <String, dynamic>{};
+    final returned = pagination['returned'] as int? ?? rawList.length;
+    final pageLimit = pagination['limit'] as int? ?? limit;
+    if ((pagination['offset'] ?? offset) != offset ||
+        returned != rawList.length ||
+        pageLimit <= 0 ||
+        pageLimit > 100 ||
+        returned > pageLimit) {
+      throw const FormatException('Invalid session history pagination');
+    }
+    return RunHistoryPage(
+      sessionId: sessionId is String ? sessionId : op.sessionId,
+      messages: [
+        for (final row in rawList) Map<String, dynamic>.from(row as Map),
+      ],
+      pagination: pagination,
+    );
   }
 
   bool get canResolveUnknown =>

@@ -1454,7 +1454,13 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                               onPressed: c.busy
                                                   ? null
                                                   : () => c.checkRunStatus(),
-                                              child: const Text('Reconnect'),
+                                              child: Text(
+                                                c.currentRun!.data[
+                                                            'attempted'] ==
+                                                        true
+                                                    ? 'Refresh'
+                                                    : 'Reconnect',
+                                              ),
                                             )
                                           else
                                             IconButton(

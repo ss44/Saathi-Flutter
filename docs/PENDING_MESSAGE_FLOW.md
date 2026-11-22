@@ -84,11 +84,18 @@ FIFO remains honestly local.
   A disconnected one-use-grant connection needs a fresh host invitation; the app
   does not invent credentials or silently redial consumed authority.
 - The installed official HTTP Runs routes expose status by `run_id`, not a
-  read-only idempotency-key lookup. If its entire admission reply is lost before
-  the run ID is known, this refinement retains uncertainty and explains the
-  limitation. Check status must not POST an uncertain prompt again, even with
-  the original idempotency key. A proven never-dispatched prepared operation
-  remains explicitly dispatchable. Canonical exact-input receipts are separate.
+  read-only idempotency-key lookup. When an admission reply is lost before the
+  `run_id` is known (`attempted == true`, `runId == null`), Saathi performs a
+  bounded automatic and manual read-only chat refresh (`GET /api/sessions/{session_id}/messages`)
+  bound to the original connection authority rather than stranding the user on
+  an unactionable dead-end notice. After verifying prefix alignment against
+  local history, it string-matches the submitted input after existing messages
+  to recover a missing `run_id` (transitioning to live `GET /v1/runs/{run_id}`
+  status checks) or settle a completed assistant reply. Diverged or foreign
+  session history fails closed. Refresh never POSTs an uncertain prompt again,
+  even with the original idempotency key; a proven never-dispatched prepared
+  operation remains explicitly dispatchable via Reconnect. Canonical exact-input
+  receipts remain separate.
 - On desktop, public Runs `tool.started`/`tool.completed`/`tool.failed` labels appear
   below thinking. Only bounded tool identifiers are rendered, not arguments,
   result previews, raw errors, reasoning or arbitrary model claims. The current
