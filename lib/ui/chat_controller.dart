@@ -44,8 +44,7 @@ class ChatSession {
     for (final message in messages) {
       if (!showsHistoryBubble(message)) continue;
       final ts = message.timestamp;
-      if (ts != null &&
-          (latestVisible == null || ts.isAfter(latestVisible))) {
+      if (ts != null && (latestVisible == null || ts.isAfter(latestVisible))) {
         latestVisible = ts;
       }
     }
@@ -426,7 +425,8 @@ class ChatController extends ChangeNotifier {
         metadata: {
           ...ReportedUsage.fromMetadata(metadata).toMetadata(),
           'timestamp':
-              metadata['timestamp'] is String ? metadata['timestamp'] : now,
+              parseMessageTimestamp(metadata['timestamp'])?.toIso8601String() ??
+                  now,
           if (text.trim().isNotEmpty) 'authoritativeCompletion': true,
         },
       ),
@@ -2496,8 +2496,7 @@ class ChatController extends ChangeNotifier {
       _quarantinedInputs.contains(session) ||
       (connections.any(
             (c) =>
-                c['id'] == session.connectionId &&
-                c['type'] == 'hermesGateway',
+                c['id'] == session.connectionId && c['type'] == 'hermesGateway',
           ) &&
           (!identical(session, _canonicalSession) ||
               _canonical == null ||

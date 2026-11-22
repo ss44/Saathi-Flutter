@@ -84,10 +84,60 @@ void main() {
           metadata: const {'timestamp': 'not-a-timestamp', 'created_at': -5},
         );
         expect(invalid.timestamp, isNull);
+        expect(parseMessageTimestamp(1700000000000000000), isNull);
+        expect(parseMessageTimestamp(1e30), isNull);
+        expect(parseMessageTimestamp(double.infinity), isNull);
+        expect(parseMessageTimestamp(double.nan), isNull);
       },
     );
 
-    test('projectRemoteHistory records UTC ISO-8601 timestamp when present on remote row', () {
+    test(
+      'SaathiStore.saveChats persists valid ISO-8601 timestamps and drops invalid or oversized ones',
+      () async {
+        final store = await _makeStore();
+        await store.saveChats([
+          {
+            'id': 'c1',
+            'connectionId': 'a',
+            'model': 'm',
+            'messages': [
+              {
+                'role': 'user',
+                'content': 'valid',
+                'metadata': {'timestamp': '2026-11-21T10:00:00.000Z'},
+              },
+              {
+                'role': 'model',
+                'content': 'invalid',
+                'metadata': {'timestamp': 'not-a-date'},
+              },
+              {
+                'role': 'model',
+                'content': 'oversized',
+                'metadata': {'timestamp': '2026-11-21T10:00:00Z${' ' * 60}'},
+              },
+            ],
+          },
+        ]);
+        final messages = (await store.load()).chats.single['messages'] as List;
+        expect(
+          (messages[0] as Map)['metadata']['timestamp'],
+          '2026-11-21T10:00:00.000Z',
+        );
+        expect(
+          ((messages[1] as Map)['metadata'] as Map).containsKey('timestamp'),
+          isFalse,
+        );
+        expect(
+          ((messages[2] as Map)['metadata'] as Map).containsKey('timestamp'),
+          isFalse,
+        );
+      },
+    );
+
+    test(
+        'projectRemoteHistory records UTC ISO-8601 timestamp when present on remote row',
+        () {
       final projected = projectRemoteHistory({
         'role': 'assistant',
         'content': 'Projected answer',
@@ -110,7 +160,9 @@ void main() {
       expect(withoutTimestamp!.metadata, isEmpty);
     });
 
-    test('ChatSession.latestMessageAt uses visible bubbles first and falls back to any message timestamp', () {
+    test(
+        'ChatSession.latestMessageAt uses visible bubbles first and falls back to any message timestamp',
+        () {
       final session = ChatSession(
         id: 's1',
         connectionId: 'c1',
@@ -158,7 +210,9 @@ void main() {
       expect(fallbackOnly.latestMessageAt, DateTime.utc(2026, 11, 20, 11, 0));
     });
 
-    test('RemoteSession.latestMessageAt extracts message/update timestamps and ignores created_at', () {
+    test(
+        'RemoteSession.latestMessageAt extracts message/update timestamps and ignores created_at',
+        () {
       expect(
         RemoteSession({
           'id': 'r1',
@@ -194,7 +248,9 @@ void main() {
   });
 
   group('isSessionReadOnly and local session ordering', () {
-    test('isSessionReadOnly distinguishes active connections, removed sources, quarantined inputs, and connected vs disconnected hermesGateway', () async {
+    test(
+        'isSessionReadOnly distinguishes active connections, removed sources, quarantined inputs, and connected vs disconnected hermesGateway',
+        () async {
       final env = CanonicalTestEnvironment();
       await env.setUp();
       addTearDown(env.tearDown);
@@ -251,7 +307,9 @@ void main() {
       expect(c.isSessionReadOnly(disconnectedGatewaySession), isTrue);
     });
 
-    test('new incoming direct and Runs messages update timestamp and resort to top while selection and status polling do not', () async {
+    test(
+        'new incoming direct and Runs messages update timestamp and resort to top while selection and status polling do not',
+        () async {
       var runCompleted = false;
       final client = MockClient((r) async {
         if (r.url.path == '/v1/chat/completions') {
@@ -424,7 +482,9 @@ void main() {
       ]);
     });
 
-    test('equal or missing timestamps preserve deterministic c.sessions.reversed order within each group', () async {
+    test(
+        'equal or missing timestamps preserve deterministic c.sessions.reversed order within each group',
+        () async {
       final c = ChatController(await _makeStore());
       addTearDown(c.dispose);
       await c.load();
@@ -505,7 +565,8 @@ void main() {
     });
   });
 
-  group('Sidebar, ConversationOrganizationList, and remote session widgets', () {
+  group('Sidebar, ConversationOrganizationList, and remote session widgets',
+      () {
     for (final width in [360.0, 390.0]) {
       for (final brightness in Brightness.values) {
         testWidgets(
@@ -620,12 +681,10 @@ void main() {
               // Verify vertical visual ordering in the drawer.
               final y0 = tester.getTopLeft(find.text('API newer chat')).dy;
               final y1 = tester.getTopLeft(find.text('API older chat')).dy;
-              final y2 = tester
-                  .getTopLeft(find.text('Read-only newer chat'))
-                  .dy;
-              final y3 = tester
-                  .getTopLeft(find.text('Read-only older chat'))
-                  .dy;
+              final y2 =
+                  tester.getTopLeft(find.text('Read-only newer chat')).dy;
+              final y3 =
+                  tester.getTopLeft(find.text('Read-only older chat')).dy;
               expect(y0, lessThan(y1));
               expect(y1, lessThan(y2));
               expect(y2, lessThan(y3));
@@ -1023,6 +1082,47 @@ void main() {
             matching: find.text('Read-only'),
           ),
           findsOneWidget,
+        );
+
+        // When run_submission is false on RemoteSessionsPage, api_server shows Runs unavailable, not Gateway connection required.
+        runSubmissionSupported = false;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: RemoteSessionsPage(
+              key: const ValueKey('runs-unavailable'),
+              controller: c,
+              connection: connection,
+            ),
+          ),
+        );
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pumpAndSettle();
+        final unavailableApiTile = find.widgetWithText(
+          ListTile,
+          'API Newer Chat',
+        );
+        expect(
+          find.descendant(
+            of: unavailableApiTile,
+            matching: find.text('api_server · Runs unavailable'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: unavailableApiTile,
+            matching: find.text('Read-only'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: unavailableApiTile,
+            matching: find.textContaining('Gateway connection required'),
+          ),
+          findsNothing,
         );
       },
     );

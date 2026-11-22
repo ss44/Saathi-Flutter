@@ -629,10 +629,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
           final thinking = c.showPendingThinking;
           final localMatches = searchLocalHistory(
             c.orderedSessions().where(
-              (s) =>
-                  c.organization.entry(c.identityOf(s)).archived ==
-                  archivedView,
-            ),
+                  (s) =>
+                      c.organization.entry(c.identityOf(s)).archived ==
+                      archivedView,
+                ),
             historyQuery,
             displayTitle: c.displayTitle,
           );

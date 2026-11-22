@@ -69,8 +69,7 @@ class _RemoteSessionsPageState extends State<RemoteSessionsPage> {
         final capabilities =
             await core.discoverCapabilities(widget.connection['id']);
         final features = capabilities['features'];
-        supportsRuns =
-            features is! Map || features['run_submission'] != false;
+        supportsRuns = features is! Map || features['run_submission'] != false;
       }
       if (!current) return;
       final page = await core.listRemoteSessions(widget.connection['id'],
@@ -133,7 +132,7 @@ class _RemoteSessionsPageState extends State<RemoteSessionsPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                      '${session.source ?? 'Remote'} · ${session.isInteractiveApiSession(runSubmissionSupported: runSubmissionSupported) ? 'Native continuation' : 'Gateway connection required'}'),
+                      '${session.source ?? 'Remote'} · ${session.source == 'api_server' ? (runSubmissionSupported ? 'Native continuation' : 'Runs unavailable') : 'Gateway connection required'}'),
                   if (!session.isInteractiveApiSession(
                     runSubmissionSupported: runSubmissionSupported,
                   ))

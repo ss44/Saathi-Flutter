@@ -56,6 +56,8 @@ class ModelInfo {
       : '$providerId|${Uri.encodeComponent(upstreamProvider!)}|${Uri.encodeComponent(name)}';
 }
 
+const _maxEpochMillis = 8640000000000000;
+
 DateTime? parseMessageTimestamp(Object? value) {
   if (value is String) {
     final trimmed = value.trim();
@@ -66,15 +68,16 @@ DateTime? parseMessageTimestamp(Object? value) {
     return numeric == null ? null : parseMessageTimestamp(numeric);
   }
   if (value is int) {
-    if (value <= 0) return null;
+    if (value <= 0 || value > _maxEpochMillis) return null;
     final millis = value < 100000000000 ? value * 1000 : value;
+    if (millis > _maxEpochMillis) return null;
     return DateTime.fromMillisecondsSinceEpoch(millis, isUtc: true);
   }
   if (value is num) {
-    if (value <= 0 || !value.isFinite) return null;
-    final millis =
-        value < 100000000000 ? (value * 1000).round() : value.round();
-    return DateTime.fromMillisecondsSinceEpoch(millis, isUtc: true);
+    if (value <= 0 || !value.isFinite || value > _maxEpochMillis) return null;
+    final scaled = value < 100000000000 ? value * 1000 : value;
+    if (!scaled.isFinite || scaled > _maxEpochMillis) return null;
+    return DateTime.fromMillisecondsSinceEpoch(scaled.round(), isUtc: true);
   }
   return null;
 }
