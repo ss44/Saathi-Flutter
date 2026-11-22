@@ -1136,6 +1136,18 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                   user: true,
                                                   pending: true,
                                                 ),
+                                              // Keep the active response at the
+                                              // live edge, even with tall queued
+                                              // follow-ups in the transcript.
+                                              for (final item in c.outbox)
+                                                MessageView(
+                                                  key: ValueKey(item.replyId),
+                                                  text: item.text,
+                                                  user: true,
+                                                  pending: true,
+                                                  onCancelPending: () =>
+                                                      c.cancelQueued(item),
+                                                ),
                                               if (c.streamingText?.isNotEmpty ??
                                                   false)
                                                 MessageView(
@@ -1174,15 +1186,6 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                                 'reported-activity')),
                                                     ],
                                                   ),
-                                                ),
-                                              for (final item in c.outbox)
-                                                MessageView(
-                                                  key: ValueKey(item.replyId),
-                                                  text: item.text,
-                                                  user: true,
-                                                  pending: true,
-                                                  onCancelPending: () =>
-                                                      c.cancelQueued(item),
                                                 ),
                                             ],
                                           ),
@@ -1710,7 +1713,7 @@ class _MessageViewState extends State<MessageView> {
   @override
   Widget build(BuildContext context) {
     final animate = widget.pending &&
-        TickerMode.of(context) &&
+        TickerMode.valuesOf(context).enabled &&
         !MediaQuery.disableAnimationsOf(context) &&
         !MediaQuery.accessibleNavigationOf(context);
     if (animate) {
