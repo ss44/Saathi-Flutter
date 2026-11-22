@@ -16,8 +16,7 @@ import 'package:saathi/ui/remote_sessions.dart';
 import 'package:saathi/ui/transcript_presentation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../gateway/canonical_combined_controller_test.dart'
-    show CanonicalTestEnvironment;
+import '../gateway/canonical_combined_controller_test.dart' show NativeHost;
 import '../runtime_flow_test.dart' show runtimeCapabilities;
 
 double _contrastRatio(Color a, Color b) {
@@ -251,17 +250,27 @@ void main() {
     test(
         'isSessionReadOnly distinguishes active connections, removed sources, quarantined inputs, and connected vs disconnected hermesGateway',
         () async {
-      final env = CanonicalTestEnvironment();
-      await env.setUp();
-      addTearDown(env.tearDown);
+      final host = NativeHost();
+      await host.start();
+      addTearDown(host.close);
 
-      final c = env.controller;
+      final c = ChatController(await _makeStore());
+      addTearDown(c.dispose);
+      await c.load();
       await c.addConnection({
         'id': 'direct',
         'name': 'Direct OpenAI',
         'type': 'openai',
         'url': 'https://api.openai.com',
       }, 'secret');
+      await c.addConnection({
+        'id': 'gateway',
+        'name': 'Hermes Desktop',
+        'type': 'hermesGateway',
+        'url': host.url,
+      }, '');
+      final gatewayConnection =
+          c.connections.singleWhere((conn) => conn['id'] == 'gateway');
 
       final activeSession = ChatSession(
         id: 'active',
@@ -275,7 +284,7 @@ void main() {
       );
       final disconnectedGatewaySession = ChatSession(
         id: 'saved-gateway',
-        connectionId: env.gatewayConnection['id'] as String,
+        connectionId: gatewayConnection['id'] as String,
         remoteSessionId: 'unattached-session',
         canonicalProfileId: 'profile-1',
         model: 'Hermes Desktop / CLI',
@@ -296,8 +305,8 @@ void main() {
       expect(c.readOnly, isTrue);
 
       final listed = await c.connectCanonical(
-        env.gatewayConnection,
-        env.mintInvite(),
+        gatewayConnection,
+        host.invite,
       );
       await c.attachCanonical(listed.first);
       final attachedGatewaySession = c.current!;

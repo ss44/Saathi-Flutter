@@ -216,9 +216,10 @@ class ConversationActionRow extends StatefulWidget {
       required this.onEdit,
       this.selected = false,
       bool? readOnly})
-      : readOnly = readOnly ?? row.readOnly;
+      : _readOnly = readOnly;
   final bool selected;
-  final bool readOnly;
+  final bool? _readOnly;
+  bool get readOnly => _readOnly ?? row.readOnly;
   final ConversationRowData row;
   final ConversationPresentation presentation;
   final VoidCallback onSelect;
