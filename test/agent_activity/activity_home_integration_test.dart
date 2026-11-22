@@ -176,18 +176,11 @@ void main() {
         await t.pump();
         expect(c.submit('Queued while approval is pending'), isTrue);
         await t.pump();
-        final feedbackScroll = find
-            .descendant(
-                of: find.byKey(const Key('chat-feedback')),
-                matching: find.byType(Scrollable))
-            .first;
-        await t.scrollUntilVisible(find.text('Cancel'), 30,
-            scrollable: feedbackScroll);
-        await Scrollable.ensureVisible(t.element(find.text('Cancel')),
-            alignment: .5);
+        final cancel = find.byTooltip('Cancel pending message');
+        await Scrollable.ensureVisible(t.element(cancel), alignment: .5);
         await t.pumpAndSettle();
-        expect(find.text('Cancel').hitTestable(), findsOneWidget);
-        await t.tap(find.text('Cancel'));
+        expect(cancel.hitTestable(), findsOneWidget);
+        await t.tap(cancel);
         await t.pump();
         expect(c.outbox, isEmpty);
         expect(find.text('Review action').hitTestable(), findsOneWidget);
