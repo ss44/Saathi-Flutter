@@ -2,6 +2,14 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:saathi/ui/busy_thinking.dart';
+import 'package:saathi/ui/thinking_phrases.dart';
+
+class _FirstPhraseRandom extends Fake implements Random {
+  @override
+  int nextInt(int max) => max == visibleThinkingPhrases.length
+      ? visibleThinkingPhrases.indexOf('Reconnecting the tin-can hotline')
+      : 0;
+}
 
 void main() {
   testWidgets('Android elapsed wait pauses display updates while backgrounded',
@@ -37,7 +45,7 @@ void main() {
   }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
   testWidgets(
-      'Android pending bubble matches plugin copy and three-second cadence',
+      'Android pending bubble matches plugin copy and ten-second cadence',
       (tester) async {
     await tester.pumpWidget(MaterialApp(
         home: Scaffold(body: BusyThinking(busy: true, random: Random(7)))));
@@ -49,11 +57,23 @@ void main() {
     expect(find.text('Waiting for reply'), findsNothing);
     expect(find.byKey(const Key('pending-response-bubble')), findsOneWidget);
     expect(find.text('0.0s'), findsOneWidget);
-    await tester.pump(const Duration(milliseconds: 2999));
+    await tester.pump(const Duration(milliseconds: 9999));
     expect(tester.widget<Text>(finder).data, initial.data);
     await tester.pump(const Duration(milliseconds: 1));
     expect(tester.widget<Text>(finder).data, isNot(initial.data));
     await tester.pumpWidget(const SizedBox.shrink());
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+  testWidgets('Android displays satirical copy without a label',
+      (tester) async {
+    final semantics = tester.ensureSemantics();
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: BusyThinking(busy: true, random: _FirstPhraseRandom()))));
+    expect(find.text('Reconnecting the tin-can hotline...'), findsOneWidget);
+    expect(find.bySemanticsLabel('Waiting for reply'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    semantics.dispose();
   }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
   testWidgets(

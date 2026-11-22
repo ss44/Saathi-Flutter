@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:saathi/ui/busy_thinking.dart';
+import 'package:saathi/ui/thinking_phrases.dart';
 
 Widget host(
         {bool busy = true,
@@ -20,6 +21,29 @@ Widget host(
                     child: BusyThinking(busy: busy, random: Random(7))))));
 
 void main() {
+  test('rotation keeps the jokes and drops phrases that look like status', () {
+    expect(importedThinkingPhrases, hasLength(225));
+    expect(newThinkingPhrases, hasLength(200));
+    expect(visibleThinkingPhrases.toSet(),
+        hasLength(visibleThinkingPhrases.length));
+    for (final phrase in [
+      'Reconnecting',
+      'Disconnecting',
+      'Corrupted data',
+      'Encrypting secrets',
+      'Checking for updates',
+      '500 Internal Server Error',
+      'Buffering video',
+      'Loading ad',
+      'Erasing',
+    ]) {
+      expect(importedThinkingPhrases, contains(phrase));
+      expect(visibleThinkingPhrases, isNot(contains(phrase)));
+    }
+    expect(
+        visibleThinkingPhrases, contains('Reconnecting the tin-can hotline'));
+    expect(visibleThinkingPhrases, containsAll(newThinkingPhrases));
+  });
   testWidgets(
       'loader animates, preserves phrase cadence through native polls and disposes',
       (tester) async {
@@ -36,7 +60,7 @@ void main() {
             .turns,
         greaterThan(turns));
     await tester.pumpAndSettle();
-    for (var i = 0; i < 9; i++) {
+    for (var i = 0; i < 10; i++) {
       await tester.pumpWidget(host());
       await tester.pump(const Duration(seconds: 1));
     }
@@ -47,7 +71,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
   testWidgets(
-      'rotates only after eight seconds, pauses in background, ends cleanly',
+      'rotates only after ten seconds, pauses in background, ends cleanly',
       (tester) async {
     final semantics = tester.ensureSemantics();
     await tester.pumpWidget(host());
@@ -55,7 +79,7 @@ void main() {
     String quip() =>
         tester.widget<Text>(find.byKey(const Key('thinking-quip'))).data!;
     final first = quip();
-    await tester.pump(const Duration(seconds: 7));
+    await tester.pump(const Duration(seconds: 9));
     expect(quip(), first);
     await tester.pump(const Duration(seconds: 1));
     expect(quip(), isNot(first));
@@ -65,7 +89,7 @@ void main() {
     await tester.pump(const Duration(seconds: 24));
     expect(quip(), paused);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    await tester.pump(const Duration(seconds: 8));
+    await tester.pump(const Duration(seconds: 10));
     expect(quip(), isNot(paused));
     await tester.pumpWidget(host(busy: false));
     expect(find.text('Waiting for reply'), findsNothing);
