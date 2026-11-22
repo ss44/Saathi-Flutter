@@ -1500,8 +1500,9 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                // Status-only Runs have no activity stream to
-                                // populate the panel. Keep native controls below.
+                                // This strip consumes HTTP Runs activity, not
+                                // canonical Gateway events. Android HTTP Runs
+                                // only observes status. Keep controls below.
                                 if (!c.usesRunStatusSync)
                                   AgentActivityStrip(
                                     model: activity.model,

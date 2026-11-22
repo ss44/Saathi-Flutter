@@ -114,7 +114,9 @@ inference; they are not silently downgraded to a fragile compatibility request.
 - Ordinary sending/queued/running labels do not add another block beneath the
   Android bubble. Real recovery, decisions, failures and controls remain visible.
   The Android status-only path does not show the Agent activity button; it has
-  no activity stream to fill the panel. Streamed desktop activity is unchanged.
+  no activity stream to fill the panel. Streamed desktop activity, canonical
+  Gateway reply streaming, and the separate Stop and decision controls are
+  unchanged.
   The final authoritative answer removes the waiting bubble; HTTP event-fed
   partial answers are ignored. Desktop streaming behavior is unchanged.
 - Backgrounding suspends observation. Foreground return or controller recreation

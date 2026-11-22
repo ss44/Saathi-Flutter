@@ -13,6 +13,12 @@ void expectNoOrdinaryPhaseText() {
   }
 }
 
+void expectNoActivityStrip() {
+  expect(find.text('Agent activity'), findsNothing);
+  expect(find.text('Needs your attention'), findsNothing);
+  expect(find.byKey(const Key('composer')).hitTestable(), findsOneWidget);
+}
+
 void main() {
   testWidgets(
       'Android original pending bubble is replaced only by the final reply',
@@ -47,6 +53,7 @@ void main() {
     });
     await tester.pump();
     expect(fixture.c.currentRun!.snapshot.status, 'running');
+    expectNoActivityStrip();
     expect(find.byType(BusyThinking), findsOneWidget);
     expectNoOrdinaryPhaseText();
     expect(find.byTooltip('Check status').hitTestable(), findsOneWidget);
@@ -83,6 +90,7 @@ void main() {
     await tester.runAsync(() => fixture.c.checkRunStatus());
     await tester.pump();
     expect(find.text('Your decision is needed'), findsOneWidget);
+    expectNoActivityStrip();
     expect(find.byType(BusyThinking), findsNothing);
     expect(find.byTooltip('Check status').hitTestable(), findsOneWidget);
     fixture.status = 'stopping';
