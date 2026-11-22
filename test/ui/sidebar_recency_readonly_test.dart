@@ -738,15 +738,19 @@ void main() {
               );
               expect(interactiveTile.tileColor, isNull);
 
-              // Scroll the drawer to bring the read-only group below into view.
-              final drawerScrollable = find
-                  .descendant(
-                    of: find.byType(Drawer),
-                    matching: find.byType(Scrollable),
-                  )
-                  .first;
+              // Scroll the drawer ListView to bring the read-only group below into view.
+              final drawerScrollable = find.descendant(
+                of: find.descendant(
+                  of: drawer,
+                  matching: find.byType(ListView),
+                ),
+                matching: find.byType(Scrollable),
+              );
               await tester.scrollUntilVisible(
-                find.text('Read-only older chat'),
+                find.descendant(
+                  of: drawer,
+                  matching: find.text('Read-only older chat'),
+                ),
                 200,
                 scrollable: drawerScrollable,
               );
