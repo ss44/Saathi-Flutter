@@ -1134,6 +1134,19 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                 MessageView(
                                                   text: c.pendingText!,
                                                   user: true,
+                                                  pending: true,
+                                                ),
+                                              // Keep the active response at the
+                                              // live edge, even with tall queued
+                                              // follow-ups in the transcript.
+                                              for (final item in c.outbox)
+                                                MessageView(
+                                                  key: ValueKey(item.replyId),
+                                                  text: item.text,
+                                                  user: true,
+                                                  pending: true,
+                                                  onCancelPending: () =>
+                                                      c.cancelQueued(item),
                                                 ),
                                               if (c.streamingText?.isNotEmpty ??
                                                   false)
@@ -1178,8 +1191,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                           ),
                                         ),
                                 ),
-                                if (c.outbox.isNotEmpty ||
-                                    c.queueStatus != null ||
+                                if (c.queueStatus != null ||
                                     c.uncertainInput != null ||
                                     c.readOnly ||
                                     c.error != null ||
@@ -1227,18 +1239,6 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                 ),
                                               ],
                                             ),
-                                          ),
-                                        if (c.outbox.isNotEmpty ||
-                                            c.queueStatus != null ||
-                                            c.uncertainInput != null)
-                                          Text(
-                                            c.canonical == null
-                                                ? 'Queued · Kept only while Saathi stays open.'
-                                                : (c.canonicalQueueSaving ||
-                                                        c.unsavedChanges
-                                                    ? 'Waiting on this device · Saving before send.'
-                                                    : 'Waiting on this device · Not yet sent to Hermes.'),
-                                            style: TextStyle(fontSize: 12),
                                           ),
                                         if (c.queueStatus != null)
                                           Text(c.queueStatus!),
@@ -1301,23 +1301,6 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                     .abandonHeldOutbox(source);
                                               }
                                             },
-                                          ),
-                                        for (final item in c.outbox)
-                                          ListTile(
-                                            contentPadding: EdgeInsets.zero,
-                                            title: Text(c.canonical == null
-                                                ? 'Queued'
-                                                : 'Not yet sent'),
-                                            subtitle: Text(
-                                              item.text,
-                                              maxLines: 2,
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                            trailing: TextButton(
-                                              onPressed: () =>
-                                                  c.cancelQueued(item),
-                                              child: const Text('Cancel'),
-                                            ),
                                           ),
                                         if (c.readOnly &&
                                             names.firstOrNull?['type'] ==
@@ -1689,9 +1672,13 @@ class MessageView extends StatefulWidget {
     this.answerBuilder,
     this.usage,
     this.contextMetadata,
+    this.pending = false,
+    this.onCancelPending,
   });
   final String text;
   final bool user;
+  final bool pending;
+  final VoidCallback? onCancelPending;
   final String? activityText;
   final Widget Function(Widget)? answerBuilder;
   final ReportedUsage? usage;
@@ -1702,6 +1689,15 @@ class MessageView extends StatefulWidget {
 
 class _MessageViewState extends State<MessageView> {
   bool activity = false;
+  bool _glow = false;
+  Timer? _pulse;
+
+  @override
+  void dispose() {
+    _pulse?.cancel();
+    super.dispose();
+  }
+
   Future<void> copyMessage() async {
     try {
       await Clipboard.setData(ClipboardData(text: widget.text));
@@ -1719,60 +1715,83 @@ class _MessageViewState extends State<MessageView> {
   }
 
   @override
-  Widget build(BuildContext context) => Semantics(
-        container: true,
-        label: widget.user ? 'Your message' : 'Assistant message',
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onLongPress: copyMessage,
-          onHorizontalDragEnd:
-              widget.user ? null : (_) => setState(() => activity = !activity),
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 28),
-            child: Align(
-              alignment:
-                  widget.user ? Alignment.centerRight : Alignment.centerLeft,
-              child: Container(
-                constraints: const BoxConstraints(maxWidth: 720),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                decoration: BoxDecoration(
-                  color: widget.user
-                      ? Theme.of(context).colorScheme.secondaryContainer
-                      : Theme.of(context).colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (widget.user)
-                      Text(
-                        widget.text,
-                        style: TextStyle(
-                            fontSize: 17,
-                            height: 1.45,
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSecondaryContainer),
-                      )
-                    else ...[
-                      if (widget.answerBuilder case final wrap?)
-                        wrap(
-                          MarkdownBody(
-                            data: widget.text,
-                            imageBuilder: safeMarkdownImageBuilder,
-                            selectable: false,
-                            styleSheet: saathiMarkdownStyle(context).copyWith(
-                              p: TextStyle(
-                                  fontSize: 18,
-                                  height: 1.5,
-                                  color:
-                                      Theme.of(context).colorScheme.onSurface),
-                            ),
-                          ),
+  Widget build(BuildContext context) {
+    final animate = widget.pending &&
+        TickerMode.valuesOf(context).enabled &&
+        !MediaQuery.disableAnimationsOf(context) &&
+        !MediaQuery.accessibleNavigationOf(context);
+    if (animate) {
+      _pulse ??= Timer.periodic(const Duration(seconds: 2), (_) {
+        final lifecycle = WidgetsBinding.instance.lifecycleState;
+        if (lifecycle == null || lifecycle == AppLifecycleState.resumed) {
+          setState(() => _glow = !_glow);
+        }
+      });
+    } else {
+      _pulse?.cancel();
+      _pulse = null;
+      _glow = false;
+    }
+    return Semantics(
+      container: true,
+      label: widget.pending
+          ? 'Your pending message'
+          : widget.user
+              ? 'Your message'
+              : 'Assistant message',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onLongPress: copyMessage,
+        onHorizontalDragEnd:
+            widget.user ? null : (_) => setState(() => activity = !activity),
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 28),
+          child: Align(
+            alignment:
+                widget.user ? Alignment.centerRight : Alignment.centerLeft,
+            child: AnimatedContainer(
+              duration:
+                  animate ? const Duration(milliseconds: 1400) : Duration.zero,
+              curve: Curves.easeInOut,
+              constraints: const BoxConstraints(maxWidth: 720),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              decoration: BoxDecoration(
+                color: widget.user
+                    ? Theme.of(context).colorScheme.secondaryContainer
+                    : Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: widget.pending
+                    ? [
+                        BoxShadow(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .primary
+                              .withValues(alpha: _glow ? .22 : .08),
+                          blurRadius: _glow ? 16 : 8,
                         )
-                      else
+                      ]
+                    : null,
+              ),
+              child: Column(
+                crossAxisAlignment: widget.onCancelPending == null
+                    ? CrossAxisAlignment.start
+                    : CrossAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (widget.user)
+                    Text(
+                      widget.text,
+                      style: TextStyle(
+                          fontSize: 17,
+                          height: 1.45,
+                          fontStyle: widget.pending ? FontStyle.italic : null,
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSecondaryContainer),
+                    )
+                  else ...[
+                    if (widget.answerBuilder case final wrap?)
+                      wrap(
                         MarkdownBody(
                           data: widget.text,
                           imageBuilder: safeMarkdownImageBuilder,
@@ -1784,30 +1803,49 @@ class _MessageViewState extends State<MessageView> {
                                 color: Theme.of(context).colorScheme.onSurface),
                           ),
                         ),
-                      if (widget.usage case final usage?)
-                        ReportedUsageLine(
-                          usage: usage,
-                          context: widget.contextMetadata,
-                        ),
-                    ],
-                    if (activity && !widget.user)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 14),
-                        child: Text(
-                          widget.activityText ??
-                              'Activity · Response received\nOnly observable status is shown. No private reasoning.',
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant),
+                      )
+                    else
+                      MarkdownBody(
+                        data: widget.text,
+                        imageBuilder: safeMarkdownImageBuilder,
+                        selectable: false,
+                        styleSheet: saathiMarkdownStyle(context).copyWith(
+                          p: TextStyle(
+                              fontSize: 18,
+                              height: 1.5,
+                              color: Theme.of(context).colorScheme.onSurface),
                         ),
                       ),
+                    if (widget.usage case final usage?)
+                      ReportedUsageLine(
+                        usage: usage,
+                        context: widget.contextMetadata,
+                      ),
                   ],
-                ),
+                  if (widget.onCancelPending case final cancel?)
+                    IconButton(
+                      tooltip: 'Cancel pending message',
+                      onPressed: cancel,
+                      icon: const Icon(Icons.close, size: 18),
+                    ),
+                  if (activity && !widget.user)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 14),
+                      child: Text(
+                        widget.activityText ??
+                            'Activity · Response received\nOnly observable status is shown. No private reasoning.',
+                        style: TextStyle(
+                            fontSize: 12,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant),
+                      ),
+                    ),
+                ],
               ),
             ),
           ),
         ),
-      );
+      ),
+    );
+  }
 }

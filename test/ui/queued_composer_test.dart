@@ -9,6 +9,29 @@ import 'package:saathi/ui/chat_home.dart';
 import 'controller_http_test.dart' show makeStore;
 
 void main() {
+  for (final reduced in [false, true]) {
+    testWidgets('pending bubble glow respects reduced motion=$reduced',
+        (tester) async {
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpWidget(MaterialApp(
+          home: MediaQuery(
+              data: MediaQueryData(disableAnimations: reduced),
+              child: const Scaffold(
+                body: MessageView(text: 'Pending', user: true, pending: true),
+              ))));
+      final bubble = find.descendant(
+          of: find.byType(MessageView), matching: find.byType(DecoratedBox));
+      BoxShadow shadow() =>
+          (tester.widget<DecoratedBox>(bubble).decoration as BoxDecoration)
+              .boxShadow!
+              .single;
+      final initial = shadow();
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump(const Duration(milliseconds: 700));
+      expect(shadow(), reduced ? initial : isNot(initial));
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
   testWidgets('unknown outcome requires explicit abandon confirmation',
       (t) async {
     final c = ChatController(await makeStore(),
@@ -88,12 +111,19 @@ void main() {
       await t.pump();
       await t.tap(find.byTooltip('Send'));
       await t.pump();
-      expect(find.text('Queued'), findsOneWidget);
-      expect(find.text('Cancel'), findsOneWidget);
+      expect(find.text('Queued'), findsNothing);
+      final pending = find.text(('Long followup ' * 80).trim());
+      final transcript = find
+          .descendant(
+              of: find.byType(ListView), matching: find.byType(Scrollable))
+          .first;
+      await t.scrollUntilVisible(pending, 180, scrollable: transcript);
+      expect(t.widget<Text>(pending).style?.fontStyle, FontStyle.italic);
+      final cancel = find.byTooltip('Cancel pending message');
       await t.enterText(input, 'Newer draft');
-      await t.ensureVisible(find.text('Cancel'));
+      await t.ensureVisible(cancel);
       await t.pump(const Duration(milliseconds: 300));
-      await t.tap(find.text('Cancel'));
+      await t.tap(cancel);
       await t.pump();
       expect(c.outbox, isEmpty);
       response.complete(

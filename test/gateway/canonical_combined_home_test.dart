@@ -172,6 +172,14 @@ void main() {
               host.delta(' More output for an older-history reader.');
               await settle();
               expect(scroll.extentAfter, greaterThan(120));
+              final queuedText = 'A tall unsent follow-up. ' * 60;
+              expect(c.submit(queuedText), isTrue);
+              await settle();
+              expect(c.outbox, hasLength(1));
+              expect(c.canonicalQueueSaving, isFalse);
+              expect(c.unsavedChanges, isFalse);
+              expect(host.requests.where((r) => r['method'] == 'prompt.submit'),
+                  hasLength(before));
               for (var i = 0; i < 8; i++) {
                 scroll.jumpTo(scroll.maxScrollExtent);
                 await tester.pump();
@@ -185,26 +193,60 @@ void main() {
               expect(scroll.extentAfter, lessThan(2),
                   reason:
                       'stream=${c.streamingText?.length} pixels=${scroll.pixels} max=${scroll.maxScrollExtent}');
+              final liveReply = find.byWidgetPredicate((widget) =>
+                  widget is MessageView &&
+                  !widget.user &&
+                  widget.text
+                      .contains('Live edge grows with this new output.'));
+              expect(liveReply, findsOneWidget);
+              expect(tester.getBottomLeft(liveReply).dy,
+                  closeTo(tester.getBottomLeft(transcript).dy, 24),
+                  reason: 'The live edge must show the reply, not the queue');
+
+              final queuedBubble =
+                  find.byKey(ValueKey(c.outbox.single.replyId));
+              final cancelQueued = find.descendant(
+                  of: queuedBubble,
+                  matching: find.byTooltip('Cancel pending message'));
+              await tester.scrollUntilVisible(cancelQueued, -200,
+                  scrollable: transcript);
+              await Scrollable.ensureVisible(tester.element(cancelQueued),
+                  alignment: 0.5);
+              await tester.pump();
+              expect(cancelQueued.hitTestable(), findsOneWidget);
+              await tester.tap(cancelQueued);
+              await settle();
+              expect(c.outbox, isEmpty);
+              expect(c.canonical!.queuedInputs, isEmpty);
+              expect(host.requests.where((r) => r['method'] == 'prompt.submit'),
+                  hasLength(before));
+              expect(tester.widget<TextField>(composer).controller!.text,
+                  'A long retained draft. ' * 30);
+
               await tester.tap(find.byTooltip('Use draft while Hermes works'));
               await settle();
               await tester.tap(find.text('Interrupt, then queue draft'));
               await settle();
               expect(c.outbox, hasLength(1));
               expect(c.canonicalQueueSaving, isFalse,
-                  reason:
-                      'Queue save must settle before its saved-state label');
+                  reason: 'Queue save must settle before checking held input');
               expect(c.unsavedChanges, isFalse,
-                  reason: 'Queue label must not conceal a storage failure');
-              expect(c.canonical, isNotNull);
+                  reason: 'The bubble must not conceal a storage failure');
+              final held = c.outbox.single;
+              expect(c.canonical!.queuedInputs.single.id, held.replyId);
+              expect(c.canonical!.queuedInputs.single.text, held.text);
+              final heldBubble = find.byKey(ValueKey(held.replyId));
               await tester.scrollUntilVisible(
-                  find.text('Waiting on this device · Not yet sent to Hermes.'),
-                  60,
-                  scrollable: find.descendant(
-                      of: find.byKey(const Key('chat-feedback')),
-                      matching: find.byType(Scrollable)));
-              expect(
-                  find.text('Waiting on this device · Not yet sent to Hermes.'),
-                  findsOneWidget);
+                  find.descendant(
+                      of: heldBubble,
+                      matching: find.byTooltip('Cancel pending message')),
+                  -200,
+                  scrollable: transcript);
+              final bubble = tester.widget<MessageView>(heldBubble);
+              expect(bubble.text, held.text);
+              expect(bubble.text, 'A long retained draft. ' * 30);
+              expect(bubble.user, isTrue);
+              expect(bubble.pending, isTrue);
               expect(c.runPending, isTrue,
                   reason: 'Stop ACK is not terminal proof');
               expect(host.requests.where((r) => r['method'] == 'prompt.submit'),
