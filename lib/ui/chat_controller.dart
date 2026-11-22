@@ -2491,17 +2491,20 @@ class ChatController extends ChangeNotifier {
         'Secure storage recovery could not be confirmed. Connections are read-only; restart after checking storage.';
   }
 
-  bool isSessionReadOnly(ChatSession session) =>
-      _loadFailed ||
-      _quarantinedInputs.contains(session) ||
-      (connections.any(
-            (c) =>
-                c['id'] == session.connectionId && c['type'] == 'hermesGateway',
-          ) &&
-          (!identical(session, _canonicalSession) ||
-              _canonical == null ||
-              !_canonical!.connected)) ||
-      !connections.any((c) => c['id'] == session.connectionId);
+  bool isSessionReadOnly(ChatSession session) {
+    final activeCanonical = identical(session, current)
+        ? canonical
+        : (identical(session, _canonicalSession) ? _canonical : null);
+    return _loadFailed ||
+        _quarantinedInputs.contains(session) ||
+        (connections.any(
+              (c) =>
+                  c['id'] == session.connectionId &&
+                  c['type'] == 'hermesGateway',
+            ) &&
+            (activeCanonical == null || !activeCanonical.connected)) ||
+        !connections.any((c) => c['id'] == session.connectionId);
+  }
 
   List<ChatSession> orderedSessions([Iterable<ChatSession>? source]) {
     final candidates = (source ?? sessions.reversed).toList();

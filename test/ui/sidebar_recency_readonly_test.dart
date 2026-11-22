@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,6 +19,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../gateway/canonical_combined_controller_test.dart' show NativeHost;
 import '../runtime_flow_test.dart' show runtimeCapabilities;
+
+class _RealHttp extends HttpOverrides {}
 
 double _contrastRatio(Color a, Color b) {
   final lumA = a.computeLuminance();
@@ -249,72 +252,72 @@ void main() {
   group('isSessionReadOnly and local session ordering', () {
     test(
         'isSessionReadOnly distinguishes active connections, removed sources, quarantined inputs, and connected vs disconnected hermesGateway',
-        () async {
-      final host = NativeHost();
-      await host.start();
-      addTearDown(host.close);
+        () => HttpOverrides.runWithHttpOverrides(() async {
+              final host = NativeHost();
+              await host.start();
+              addTearDown(host.close);
 
-      final c = ChatController(await _makeStore());
-      addTearDown(c.dispose);
-      await c.load();
-      await c.addConnection({
-        'id': 'direct',
-        'name': 'Direct OpenAI',
-        'type': 'openai',
-        'url': 'https://api.openai.com',
-      }, 'secret');
-      await c.addConnection({
-        'id': 'gateway',
-        'name': 'Hermes Desktop',
-        'type': 'hermesGateway',
-        'url': host.url,
-      }, '');
-      final gatewayConnection =
-          c.connections.singleWhere((conn) => conn['id'] == 'gateway');
+              final c = ChatController(await _makeStore());
+              addTearDown(c.dispose);
+              await c.load();
+              await c.addConnection({
+                'id': 'direct',
+                'name': 'Direct OpenAI',
+                'type': 'openai',
+                'url': 'https://api.openai.com',
+              }, 'secret');
+              await c.addConnection({
+                'id': 'gateway',
+                'name': 'Hermes Desktop',
+                'type': 'hermesGateway',
+                'url': host.url,
+              }, '');
+              final gatewayConnection =
+                  c.connections.singleWhere((conn) => conn['id'] == 'gateway');
 
-      final activeSession = ChatSession(
-        id: 'active',
-        connectionId: 'direct',
-        model: 'gpt-4o',
-      );
-      final orphanedSession = ChatSession(
-        id: 'orphaned',
-        connectionId: 'removed-conn',
-        model: 'gpt-4o',
-      );
-      final disconnectedGatewaySession = ChatSession(
-        id: 'saved-gateway',
-        connectionId: gatewayConnection['id'] as String,
-        remoteSessionId: 'unattached-session',
-        canonicalProfileId: 'profile-1',
-        model: 'Hermes Desktop / CLI',
-      );
-      c.sessions.addAll([
-        activeSession,
-        orphanedSession,
-        disconnectedGatewaySession,
-      ]);
+              final activeSession = ChatSession(
+                id: 'active',
+                connectionId: 'direct',
+                model: 'gpt-4o',
+              );
+              final orphanedSession = ChatSession(
+                id: 'orphaned',
+                connectionId: 'removed-conn',
+                model: 'gpt-4o',
+              );
+              final disconnectedGatewaySession = ChatSession(
+                id: 'saved-gateway',
+                connectionId: gatewayConnection['id'] as String,
+                remoteSessionId: 'unattached-session',
+                canonicalProfileId: 'profile-1',
+                model: 'Hermes Desktop / CLI',
+              );
+              c.sessions.addAll([
+                activeSession,
+                orphanedSession,
+                disconnectedGatewaySession,
+              ]);
 
-      expect(c.isSessionReadOnly(activeSession), isFalse);
-      expect(c.isSessionReadOnly(orphanedSession), isTrue);
-      expect(c.isSessionReadOnly(disconnectedGatewaySession), isTrue);
+              expect(c.isSessionReadOnly(activeSession), isFalse);
+              expect(c.isSessionReadOnly(orphanedSession), isTrue);
+              expect(c.isSessionReadOnly(disconnectedGatewaySession), isTrue);
 
-      c.select(activeSession);
-      expect(c.readOnly, isFalse);
-      c.select(orphanedSession);
-      expect(c.readOnly, isTrue);
+              c.select(activeSession);
+              expect(c.readOnly, isFalse);
+              c.select(orphanedSession);
+              expect(c.readOnly, isTrue);
 
-      final listed = await c.connectCanonical(
-        gatewayConnection,
-        host.invite,
-      );
-      await c.attachCanonical(listed.first);
-      final attachedGatewaySession = c.current!;
-      expect(c.isSessionReadOnly(attachedGatewaySession), isFalse);
-      expect(c.readOnly, isFalse);
-      // Another saved hermesGateway session that is not the attached one remains read-only.
-      expect(c.isSessionReadOnly(disconnectedGatewaySession), isTrue);
-    });
+              final listed = await c.connectCanonical(
+                gatewayConnection,
+                host.invite,
+              );
+              await c.attachCanonical(listed.first);
+              final attachedGatewaySession = c.current!;
+              expect(c.isSessionReadOnly(attachedGatewaySession), isFalse);
+              expect(c.readOnly, isFalse);
+              // Another saved hermesGateway session that is not the attached one remains read-only.
+              expect(c.isSessionReadOnly(disconnectedGatewaySession), isTrue);
+            }, _RealHttp()));
 
     test(
         'new incoming direct and Runs messages update timestamp and resort to top while selection and status polling do not',
@@ -671,55 +674,19 @@ void main() {
               await tester.tap(find.byTooltip('Open navigation menu'));
               await tester.pumpAndSettle();
 
-              final rows = tester
-                  .widgetList<ConversationActionRow>(
-                    find.byType(ConversationActionRow),
-                  )
-                  .toList();
-              expect(rows.map((r) => r.row.title), [
-                'API newer chat',
-                'API older chat',
-                'Read-only newer chat',
-                'Read-only older chat',
+              expect(c.orderedSessions().map((s) => s.id), [
+                'api-newer',
+                'api-older',
+                'ro-newer',
+                'ro-older',
               ]);
-              expect(rows[0].readOnly, isFalse);
-              expect(rows[1].readOnly, isFalse);
-              expect(rows[2].readOnly, isTrue);
-              expect(rows[3].readOnly, isTrue);
 
-              // Verify vertical visual ordering in the drawer.
-              final y0 = tester.getTopLeft(find.text('API newer chat')).dy;
-              final y1 = tester.getTopLeft(find.text('API older chat')).dy;
-              final y2 =
-                  tester.getTopLeft(find.text('Read-only newer chat')).dy;
-              final y3 =
-                  tester.getTopLeft(find.text('Read-only older chat')).dy;
-              expect(y0, lessThan(y1));
-              expect(y1, lessThan(y2));
-              expect(y2, lessThan(y3));
-
-              // Verify subtle neutral gray background & legibility contrast in light & dark themes.
               final expectedGray = readOnlyConversationTileColor(
                 tester.element(find.byType(Drawer)),
               );
               expect(expectedGray.r, closeTo(expectedGray.g, 0.01));
               expect(expectedGray.g, closeTo(expectedGray.b, 0.01));
               expect(expectedGray, isNot(equals(theme.colorScheme.surface)));
-
-              final interactiveTile = tester.widget<ListTile>(
-                find.descendant(
-                  of: find.byWidget(rows[0]),
-                  matching: find.byType(ListTile),
-                ),
-              );
-              final readOnlyTile = tester.widget<ListTile>(
-                find.descendant(
-                  of: find.byWidget(rows[2]),
-                  matching: find.byType(ListTile),
-                ),
-              );
-              expect(interactiveTile.tileColor, isNull);
-              expect(readOnlyTile.tileColor, expectedGray);
               expect(
                 _contrastRatio(theme.colorScheme.onSurface, expectedGray),
                 greaterThanOrEqualTo(4.5),
@@ -732,10 +699,77 @@ void main() {
                 greaterThanOrEqualTo(4.5),
               );
 
+              // Top of the lazy 2x-scaled drawer shows interactive API chats newest first.
+              final interactiveRows = tester
+                  .widgetList<ConversationActionRow>(
+                    find.byType(ConversationActionRow),
+                  )
+                  .toList();
+              expect(interactiveRows.length, greaterThanOrEqualTo(2));
+              expect(interactiveRows[0].row.title, 'API newer chat');
+              expect(interactiveRows[1].row.title, 'API older chat');
+              expect(interactiveRows[0].readOnly, isFalse);
+              expect(interactiveRows[1].readOnly, isFalse);
+
+              final y0 = tester.getTopLeft(find.text('API newer chat')).dy;
+              final y1 = tester.getTopLeft(find.text('API older chat')).dy;
+              expect(y0, lessThan(y1));
+
+              final interactiveTile = tester.widget<ListTile>(
+                find.descendant(
+                  of: find.byWidget(interactiveRows[0]),
+                  matching: find.byType(ListTile),
+                ),
+              );
+              expect(interactiveTile.tileColor, isNull);
+
+              // Scroll the drawer to bring the read-only group below into view.
+              final drawerScrollable = find
+                  .descendant(
+                    of: find.byType(Drawer),
+                    matching: find.byType(Scrollable),
+                  )
+                  .first;
+              await tester.scrollUntilVisible(
+                find.text('Read-only older chat'),
+                200,
+                scrollable: drawerScrollable,
+              );
+              await tester.pumpAndSettle();
+
+              final roNewerRow = tester.widget<ConversationActionRow>(
+                find.ancestor(
+                  of: find.text('Read-only newer chat'),
+                  matching: find.byType(ConversationActionRow),
+                ),
+              );
+              final roOlderRow = tester.widget<ConversationActionRow>(
+                find.ancestor(
+                  of: find.text('Read-only older chat'),
+                  matching: find.byType(ConversationActionRow),
+                ),
+              );
+              expect(roNewerRow.readOnly, isTrue);
+              expect(roOlderRow.readOnly, isTrue);
+
+              final y2 =
+                  tester.getTopLeft(find.text('Read-only newer chat')).dy;
+              final y3 =
+                  tester.getTopLeft(find.text('Read-only older chat')).dy;
+              expect(y2, lessThan(y3));
+
+              final readOnlyTile = tester.widget<ListTile>(
+                find.descendant(
+                  of: find.byWidget(roNewerRow),
+                  matching: find.byType(ListTile),
+                ),
+              );
+              expect(readOnlyTile.tileColor, expectedGray);
+
               // Visible Read-only badge and screen-reader semantics.
               expect(
                 find.descendant(
-                  of: find.byWidget(rows[2]),
+                  of: find.byWidget(roNewerRow),
                   matching: find.text('Read-only'),
                 ),
                 findsOneWidget,
@@ -744,7 +778,7 @@ void main() {
                 tester
                     .getSemantics(
                       find.descendant(
-                        of: find.byWidget(rows[2]),
+                        of: find.byWidget(roNewerRow),
                         matching: find.byType(ListTile),
                       ),
                     )
@@ -1008,7 +1042,7 @@ void main() {
 
         final cache = ConversationServerCache(c, connection);
         addTearDown(cache.dispose);
-        await cache.load();
+        await tester.runAsync(() => cache.load());
 
         expect(cache.sessions.map((s) => s.id), [
           'api-newer',
@@ -1052,7 +1086,7 @@ void main() {
 
         // When capabilities explicitly report run_submission: false, even api_server is read-only.
         runSubmissionSupported = false;
-        await cache.load(refresh: true);
+        await tester.runAsync(() => cache.load(refresh: true));
         await tester.pumpAndSettle();
         final disabledApiTile = tester.widget<ListTile>(
           find.widgetWithText(ListTile, 'API Newer Chat'),
@@ -1061,14 +1095,15 @@ void main() {
 
         // Verify RemoteSessionsPage ordering and Read-only label when run_submission is enabled.
         runSubmissionSupported = true;
-        await tester.pumpWidget(
-          MaterialApp(
-            home: RemoteSessionsPage(controller: c, connection: connection),
-          ),
-        );
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 50)),
-        );
+        await tester.runAsync(() async {
+          await tester.pumpWidget(
+            MaterialApp(
+              home: RemoteSessionsPage(controller: c, connection: connection),
+            ),
+          );
+          await tester.pump();
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        });
         await tester.pumpAndSettle();
 
         final remoteTitles = tester
@@ -1095,18 +1130,19 @@ void main() {
 
         // When run_submission is false on RemoteSessionsPage, api_server shows Runs unavailable, not Gateway connection required.
         runSubmissionSupported = false;
-        await tester.pumpWidget(
-          MaterialApp(
-            home: RemoteSessionsPage(
-              key: const ValueKey('runs-unavailable'),
-              controller: c,
-              connection: connection,
+        await tester.runAsync(() async {
+          await tester.pumpWidget(
+            MaterialApp(
+              home: RemoteSessionsPage(
+                key: const ValueKey('runs-unavailable'),
+                controller: c,
+                connection: connection,
+              ),
             ),
-          ),
-        );
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 50)),
-        );
+          );
+          await tester.pump();
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        });
         await tester.pumpAndSettle();
         final unavailableApiTile = find.widgetWithText(
           ListTile,

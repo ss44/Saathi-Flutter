@@ -62,10 +62,12 @@ DateTime? parseMessageTimestamp(Object? value) {
   if (value is String) {
     final trimmed = value.trim();
     if (trimmed.isEmpty) return null;
+    if (RegExp(r'^\d+$').hasMatch(trimmed)) {
+      final numeric = int.tryParse(trimmed);
+      return numeric == null ? null : parseMessageTimestamp(numeric);
+    }
     final parsed = DateTime.tryParse(trimmed);
-    if (parsed != null) return parsed.toUtc();
-    final numeric = int.tryParse(trimmed);
-    return numeric == null ? null : parseMessageTimestamp(numeric);
+    return parsed?.toUtc();
   }
   if (value is int) {
     if (value <= 0 || value > _maxEpochMillis) return null;
