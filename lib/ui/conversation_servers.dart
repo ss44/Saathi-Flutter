@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../chat_organization/organization_widgets.dart'
+    show readOnlyConversationTileColor;
 import '../core/saathi_core.dart' hide RemoteHistoryPage;
 import 'chat_controller.dart';
 import 'remote_sessions.dart';
@@ -11,10 +13,15 @@ class ConversationServerCache extends ChangeNotifier {
   final sessions = <RemoteSession>[];
   bool loading = false, loaded = false, failed = false, more = false;
   bool disposed = false;
+  bool runSubmissionSupported = true;
   bool _failedRefresh = false;
   int offset = 0;
   SaathiCore? active;
   bool get current => !disposed && controller.isCurrentConnection(connection);
+  bool isSessionReadOnly(RemoteSession session) =>
+      !session.isInteractiveApiSession(
+        runSubmissionSupported: runSubmissionSupported,
+      );
   void update(VoidCallback action) {
     action();
     if (!disposed) notifyListeners();
@@ -40,16 +47,27 @@ class ConversationServerCache extends ChangeNotifier {
       core = await controller.coreFor(connection);
       if (!current) return;
       active = core;
-      await core.discoverCapabilities(connection['id']);
+      final capabilities = await core.discoverCapabilities(connection['id']);
       if (!current) return;
+      final features = capabilities['features'];
+      final supportsRuns =
+          features is! Map || features['run_submission'] != false;
       final page = await core.listRemoteSessions(connection['id'],
           offset: refresh ? 0 : offset);
       if (!current) return;
       update(() {
+        runSubmissionSupported = supportsRuns;
         if (refresh) sessions.clear();
         for (final session in page.sessions) {
           if (!sessions.any((s) => s.id == session.id)) sessions.add(session);
         }
+        final ordered = RemoteSession.orderByRecency(
+          sessions,
+          runSubmissionSupported: runSubmissionSupported,
+        );
+        sessions
+          ..clear()
+          ..addAll(ordered);
         offset = page.offset + page.limit;
         more = page.hasMore;
         loaded = true;
@@ -93,8 +111,14 @@ class ConversationServer extends StatelessWidget {
                       icon: const Icon(Icons.refresh))),
               for (final session in cache.sessions)
                 ListTile(
+                    tileColor: cache.isSessionReadOnly(session)
+                        ? readOnlyConversationTileColor(context)
+                        : null,
                     title: Text(session.title,
                         maxLines: 1, overflow: TextOverflow.ellipsis),
+                    subtitle: cache.isSessionReadOnly(session)
+                        ? const Text('Read-only')
+                        : null,
                     onTap: () {
                       if (!cache.current) return;
                       final navigator = Navigator.of(context);

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../chat_organization/organization_widgets.dart'
+    show readOnlyConversationTileColor;
 import '../core/saathi_core.dart';
 import 'chat_controller.dart';
 import 'chat_home.dart' show MessageView;
@@ -17,6 +19,7 @@ class RemoteSessionsPage extends StatefulWidget {
 class _RemoteSessionsPageState extends State<RemoteSessionsPage> {
   final sessions = <RemoteSession>[];
   bool loading = true, more = false;
+  bool runSubmissionSupported = true;
   int offset = 0;
   String? error;
   SaathiCore? active;
@@ -61,14 +64,29 @@ class _RemoteSessionsPageState extends State<RemoteSessionsPage> {
       core = await widget.controller.coreFor(widget.connection);
       if (!current) return;
       active = core;
-      if (offset == 0) await core.discoverCapabilities(widget.connection['id']);
+      var supportsRuns = runSubmissionSupported;
+      if (offset == 0) {
+        final capabilities =
+            await core.discoverCapabilities(widget.connection['id']);
+        final features = capabilities['features'];
+        supportsRuns =
+            features is! Map || features['run_submission'] != false;
+      }
       if (!current) return;
       final page = await core.listRemoteSessions(widget.connection['id'],
           offset: offset);
       if (current) {
         setState(() {
+          runSubmissionSupported = supportsRuns;
           sessions.addAll(page.sessions
               .where((s) => !sessions.any((old) => old.id == s.id)));
+          final ordered = RemoteSession.orderByRecency(
+            sessions,
+            runSubmissionSupported: runSubmissionSupported,
+          );
+          sessions
+            ..clear()
+            ..addAll(ordered);
           offset = page.offset + page.limit;
           more = page.hasMore;
         });
@@ -103,10 +121,25 @@ class _RemoteSessionsPageState extends State<RemoteSessionsPage> {
         for (final session in sessions)
           ListTile(
               contentPadding: EdgeInsets.zero,
+              tileColor: !session.isInteractiveApiSession(
+                runSubmissionSupported: runSubmissionSupported,
+              )
+                  ? readOnlyConversationTileColor(context)
+                  : null,
               leading: const Icon(Icons.cloud_outlined),
               title: Text(session.title),
-              subtitle: Text(
-                  '${session.source ?? 'Remote'} · ${session.source == 'api_server' ? 'Native continuation' : 'Gateway connection required'}'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                      '${session.source ?? 'Remote'} · ${session.isInteractiveApiSession(runSubmissionSupported: runSubmissionSupported) ? 'Native continuation' : 'Gateway connection required'}'),
+                  if (!session.isInteractiveApiSession(
+                    runSubmissionSupported: runSubmissionSupported,
+                  ))
+                    const Text('Read-only'),
+                ],
+              ),
               onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute<void>(
