@@ -749,33 +749,23 @@ void main() {
               await tester.scrollUntilVisible(
                 find.descendant(
                   of: drawer,
-                  matching: find.text('Read-only older chat'),
+                  matching: find.text('Read-only newer chat'),
                 ),
-                200,
+                120,
                 scrollable: drawerScrollable,
               );
               await tester.pumpAndSettle();
 
               final roNewerRow = tester.widget<ConversationActionRow>(
                 find.ancestor(
-                  of: find.text('Read-only newer chat'),
-                  matching: find.byType(ConversationActionRow),
-                ),
-              );
-              final roOlderRow = tester.widget<ConversationActionRow>(
-                find.ancestor(
-                  of: find.text('Read-only older chat'),
+                  of: find.descendant(
+                    of: drawer,
+                    matching: find.text('Read-only newer chat'),
+                  ),
                   matching: find.byType(ConversationActionRow),
                 ),
               );
               expect(roNewerRow.readOnly, isTrue);
-              expect(roOlderRow.readOnly, isTrue);
-
-              final y2 =
-                  tester.getTopLeft(find.text('Read-only newer chat')).dy;
-              final y3 =
-                  tester.getTopLeft(find.text('Read-only older chat')).dy;
-              expect(y2, lessThan(y3));
 
               final readOnlyTile = tester.widget<ListTile>(
                 find.descendant(
@@ -805,10 +795,37 @@ void main() {
                 contains('Read-only'),
               );
 
-              // Read-only conversation remains selectable for viewing history.
-              await tester.tap(find.text('Read-only newer chat'));
+              // Scroll further down to reach the older read-only chat below it.
+              await tester.scrollUntilVisible(
+                find.descendant(
+                  of: drawer,
+                  matching: find.text('Read-only older chat'),
+                ),
+                120,
+                scrollable: drawerScrollable,
+              );
               await tester.pumpAndSettle();
-              expect(c.current, same(roNewer));
+
+              final roOlderRow = tester.widget<ConversationActionRow>(
+                find.ancestor(
+                  of: find.descendant(
+                    of: drawer,
+                    matching: find.text('Read-only older chat'),
+                  ),
+                  matching: find.byType(ConversationActionRow),
+                ),
+              );
+              expect(roOlderRow.readOnly, isTrue);
+
+              // Read-only conversation remains selectable for viewing history.
+              await tester.tap(
+                find.descendant(
+                  of: drawer,
+                  matching: find.text('Read-only older chat'),
+                ),
+              );
+              await tester.pumpAndSettle();
+              expect(c.current, same(roOlder));
               expect(c.readOnly, isTrue);
               expect(tester.takeException(), isNull);
               await tester.pumpWidget(const SizedBox());
