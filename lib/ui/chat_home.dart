@@ -1500,11 +1500,14 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                AgentActivityStrip(
-                                  model: activity.model,
-                                  onOpenParent: openActivityParent,
-                                  onOpenChildHistory: openActivityChild,
-                                ),
+                                // Status-only Runs have no activity stream to
+                                // populate the panel. Keep native controls below.
+                                if (!c.usesRunStatusSync)
+                                  AgentActivityStrip(
+                                    model: activity.model,
+                                    onOpenParent: openActivityParent,
+                                    onOpenChildHistory: openActivityChild,
+                                  ),
                                 if (c.canonical != null)
                                   CanonicalComposerControls(
                                     chat: c.canonical!,
