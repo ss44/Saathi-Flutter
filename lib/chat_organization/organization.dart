@@ -304,17 +304,23 @@ class ChatOrganization extends ChangeNotifier {
   Future<void> _save(Map<String, ConversationPresentation> next,
       {Map<String, SharedPersona>? personas,
       bool edit = true,
+      ConversationIdentity? capacityKey,
       void Function()? validate}) async {
     if (_disposed || !loaded || saving || hasUnsavedChanges) {
       throw StateError('Save or recover conversation details first');
     }
-    if (next.length > 1000) {
+    final nextPersonas = personas ?? _personas;
+    if (next.length > 1000 ||
+        jsonEncode(_json(next, nextPersonas)).length > 2 * 1024 * 1024) {
+      if (capacityKey != null) {
+        throw OrganizationCapacityException(capacityKey);
+      }
       throw StateError('Conversation details limit reached');
     }
     _pendingIsEdit = edit;
     _pendingValidation = validate;
     _pending = next;
-    _pendingPersonas = personas ?? _personas;
+    _pendingPersonas = nextPersonas;
     await retrySave();
   }
 
@@ -330,9 +336,6 @@ class ChatOrganization extends ChangeNotifier {
     try {
       _pendingValidation?.call();
       final value = jsonEncode(_json(_pending!, _pendingPersonas!));
-      if (value.length > 2 * 1024 * 1024) {
-        throw StateError('Conversation details limit reached');
-      }
       await storage.write(value);
       _entries = _pending!;
       _personas = _pendingPersonas!;
@@ -506,7 +509,7 @@ class ChatOrganization extends ChangeNotifier {
       ..._entries,
       key.storageKey:
           before.copyWith(completions: {...before.completions, replyId: false})
-    }, edit: false);
+    }, edit: false, capacityKey: key);
   }
 
   /// Called ONLY by the foreground reply visibility sentinel, never by navigation.
