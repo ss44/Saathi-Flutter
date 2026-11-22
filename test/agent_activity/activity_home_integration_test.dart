@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
@@ -14,6 +15,17 @@ import '../agent_runs_test.dart' show capabilities;
 import '../ui/remote_history_test_driver.dart';
 
 class _RealHttp extends HttpOverrides {}
+
+Future<void> _pumpUntil(
+    WidgetTester tester, bool Function() ready, String reason) async {
+  for (var i = 0; i < 100; i++) {
+    await tester.pump(const Duration(milliseconds: 16));
+    if (ready()) return;
+    await tester
+        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+  }
+  expect(ready(), isTrue, reason: reason);
+}
 
 void main() {
   for (final approval in [false, true]) {
@@ -32,6 +44,8 @@ void main() {
       final paths = <String>[];
       final streams = <HttpResponse>[];
       var pending = approval;
+      Completer<void>? pollResponseGate;
+      var pollRequested = false;
       final posts = <String>[];
       Map<String, dynamic> snapshot() => {
             'run_id': 'run_1',
@@ -73,6 +87,10 @@ void main() {
             r.response.write(
                 '{"session_id":"session_child","data":[{"role":"assistant","content":"Public child result"}],"pagination":{"returned":1,"limit":100}}');
           } else if (r.uri.path.endsWith('capabilities')) {
+            if (pollResponseGate case final gate?) {
+              pollRequested = true;
+              await gate.future;
+            }
             r.response.write(jsonEncode({
               ...capabilities,
               'features': {
@@ -189,18 +207,29 @@ void main() {
             lessThan(t.getTopLeft(find.byKey(const Key('composer'))).dy));
         expect(t.takeException(), isNull);
         await t.tap(find.text('Review action'));
-        for (var i = 0; i < 12; i++) {
-          await t.pump(const Duration(milliseconds: 50));
-          await t.runAsync(
-              () => Future<void>.delayed(const Duration(milliseconds: 30)));
-        }
-        await t.ensureVisible(find.text('Allow once'));
-        await t.tap(find.text('Allow once'));
-        for (var i = 0; i < 12; i++) {
-          await t.pump(const Duration(milliseconds: 50));
-          await t.runAsync(
-              () => Future<void>.delayed(const Duration(milliseconds: 30)));
-        }
+        final allowOnce = find.widgetWithText(FilledButton, 'Allow once');
+        await _pumpUntil(
+            t,
+            () =>
+                allowOnce.evaluate().length == 1 &&
+                t.widget<FilledButton>(allowOnce).onPressed != null &&
+                ModalRoute.of(t.element(allowOnce))?.animation?.isCompleted ==
+                    true,
+            'approval control is ready and its sheet has opened');
+        await t.ensureVisible(allowOnce);
+        await t.pump();
+        expect(allowOnce.hitTestable(), findsOneWidget);
+        await t.tap(allowOnce);
+        await _pumpUntil(
+            t,
+            () =>
+                find
+                    .text(
+                        'Response acknowledged; this is not completion of the action.')
+                    .evaluate()
+                    .isNotEmpty &&
+                allowOnce.evaluate().isEmpty,
+            'approval acknowledged and authoritative controls refreshed');
         expect(posts, ['/v1/runs', '/v1/runs/run_1/approval']);
         Navigator.of(t.element(find.byType(ChatHome))).pop();
         await t.pumpAndSettle();
@@ -216,6 +245,23 @@ void main() {
       expect(paths.where((p) => p.endsWith('/events')).length, 1);
       if (approval) {
         expect(t.takeException(), isNull);
+        // Reproduce CI's teardown race with a real read in flight instead of
+        // depending on when the desktop status timer happens to fire.
+        final gate = pollResponseGate = Completer<void>();
+        http.runWithClient(() => c.pauseRuns(false),
+            () => IOClient(_RealHttp().createHttpClient(null)));
+        await t.pump(const Duration(seconds: 2));
+        await _pumpUntil(t, () => pollRequested, 'scheduled poll reached HTTP');
+        expect(c.busy, isTrue);
+        final requestCount = paths.length;
+        // Cancel future polls, but keep the fixture live until the current
+        // request and its fake-zone timeout have settled normally.
+        c.pauseRuns(true);
+        gate.complete();
+        await _pumpUntil(
+            t, () => !c.busy, 'revoked poll drained before teardown');
+        expect(paths, hasLength(requestCount));
+        expect(posts, ['/v1/runs', '/v1/runs/run_1/approval']);
         await t.pumpWidget(const SizedBox());
         c.dispose();
         await t.runAsync(() async {
