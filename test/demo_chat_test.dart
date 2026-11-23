@@ -44,8 +44,6 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Connect a model'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Add connection'));
-    await tester.pumpAndSettle();
     await tester.enterText(
         find.widgetWithText(TextFormField, 'Connection name'), 'Local model');
     await tester.enterText(find.widgetWithText(TextFormField, 'API base URL'),
@@ -55,14 +53,13 @@ void main() {
         'not-a-real-key');
     await tester.ensureVisible(find.text('Save connection'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Save connection'));
-    await tester.pumpAndSettle();
-    await tester.pageBack();
-    await tester.pumpAndSettle();
     await tester.runAsync(() async {
-      await tester.tap(find.text('Discover models'));
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await tester.tap(find.text('Save connection'));
+      await Future<void>.delayed(const Duration(milliseconds: 80));
     });
+    await tester.pumpAndSettle();
+    await tester
+        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Available models'));
     await tester.pumpAndSettle();

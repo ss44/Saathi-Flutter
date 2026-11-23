@@ -552,14 +552,17 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
     if (c.connections.isEmpty) {
       await Navigator.push(
         context,
-        MaterialPageRoute<void>(builder: (_) => ConnectionsPage(controller: c)),
+        MaterialPageRoute<void>(
+            builder: (_) => AddConnectionPage(controller: c)),
       );
       if (!mounted || c.connections.isEmpty) return;
     }
     if (mounted) {
       await Navigator.push(
         context,
-        MaterialPageRoute<void>(builder: (_) => NewChatPage(controller: c)),
+        MaterialPageRoute<void>(
+          builder: (_) => NewChatPage(controller: c, autoDiscover: true),
+        ),
       );
     }
     if (mounted) setState(() => composer.clear());
