@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 /// A draft field that grows to twice its single-line height, then scrolls.
 ///
@@ -12,11 +13,52 @@ class GrowingMessageInput extends StatelessWidget {
     required this.controller,
     required this.enabled,
     required this.onChanged,
+    this.onSubmit,
   });
 
   final TextEditingController controller;
   final bool enabled;
   final ValueChanged<String> onChanged;
+
+  /// Optional desktop submit callback triggered by Enter without Shift or Alt.
+  ///
+  /// Ignored on mobile platforms, when disabled, during active IME composition,
+  /// on key repeat, or when the draft contains only whitespace.
+  final VoidCallback? onSubmit;
+
+  static const _desktopPlatforms = {
+    TargetPlatform.linux,
+    TargetPlatform.macOS,
+    TargetPlatform.windows,
+  };
+
+  KeyEventResult _handleKeyEvent(BuildContext context, KeyEvent event) {
+    if (!_desktopPlatforms.contains(Theme.of(context).platform) ||
+        !enabled ||
+        onSubmit == null) {
+      return KeyEventResult.ignored;
+    }
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey != LogicalKeyboardKey.enter &&
+        event.logicalKey != LogicalKeyboardKey.numpadEnter) {
+      return KeyEventResult.ignored;
+    }
+    final keyboard = HardwareKeyboard.instance;
+    if (keyboard.isShiftPressed || keyboard.isAltPressed) {
+      return KeyEventResult.ignored;
+    }
+    final composing = controller.value.composing;
+    if (composing.isValid && !composing.isCollapsed) {
+      return KeyEventResult.ignored;
+    }
+    if (event is KeyRepeatEvent || controller.text.trim().isEmpty) {
+      return KeyEventResult.handled;
+    }
+    onSubmit!();
+    return KeyEventResult.handled;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -36,21 +78,26 @@ class GrowingMessageInput extends StatelessWidget {
       painter.preferredLineHeight + padding.vertical,
     );
     painter.dispose();
-    return TextField(
-      key: const Key('composer'),
-      controller: controller,
-      enabled: enabled,
-      style: style,
-      minLines: 1,
-      maxLines: null,
-      textCapitalization: TextCapitalization.sentences,
-      onChanged: onChanged,
-      decoration: InputDecoration(
-        hintText: 'Message Saathi',
-        hintMaxLines: 1,
-        border: InputBorder.none,
-        contentPadding: padding,
-        constraints: BoxConstraints(maxHeight: singleLineHeight * 2),
+    return Focus(
+      skipTraversal: true,
+      canRequestFocus: false,
+      onKeyEvent: (_, event) => _handleKeyEvent(context, event),
+      child: TextField(
+        key: const Key('composer'),
+        controller: controller,
+        enabled: enabled,
+        style: style,
+        minLines: 1,
+        maxLines: null,
+        textCapitalization: TextCapitalization.sentences,
+        onChanged: onChanged,
+        decoration: InputDecoration(
+          hintText: 'Message Saathi',
+          hintMaxLines: 1,
+          border: InputBorder.none,
+          contentPadding: padding,
+          constraints: BoxConstraints(maxHeight: singleLineHeight * 2),
+        ),
       ),
     );
   }
