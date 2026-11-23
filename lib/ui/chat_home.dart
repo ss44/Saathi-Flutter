@@ -1678,11 +1678,15 @@ class MessageView extends StatefulWidget {
     this.contextMetadata,
     this.pending = false,
     this.onCancelPending,
+    this.onOpenLink,
   });
   final String text;
   final bool user;
   final bool pending;
   final VoidCallback? onCancelPending;
+
+  /// Optional test/host hook for opening validated external Markdown links.
+  final Future<bool> Function(Uri)? onOpenLink;
   final String? activityText;
   final Widget Function(Widget)? answerBuilder;
   final ReportedUsage? usage;
@@ -1718,6 +1722,29 @@ class _MessageViewState extends State<MessageView> {
     }
   }
 
+  Future<void> openLink(String? href) async {
+    final uri = parseSafeMarkdownLink(href);
+    if (uri == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(
+            const SnackBar(
+                content: Text('Only web links (http/https) can be opened.')),
+          );
+      }
+      return;
+    }
+    final opened = await openSafeMarkdownUri(uri, launch: widget.onOpenLink);
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(content: Text('Could not open this link.')),
+        );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final animate = widget.pending &&
@@ -1736,6 +1763,25 @@ class _MessageViewState extends State<MessageView> {
       _pulse = null;
       _glow = false;
     }
+    final desktop = const {
+      TargetPlatform.linux,
+      TargetPlatform.macOS,
+      TargetPlatform.windows,
+    }.contains(Theme.of(context).platform);
+    final markdown = widget.user
+        ? null
+        : MarkdownBody(
+            data: widget.text,
+            imageBuilder: safeMarkdownImageBuilder,
+            selectable: false,
+            onTapLink: (_, href, __) => unawaited(openLink(href)),
+            styleSheet: saathiMarkdownStyle(context).copyWith(
+              p: TextStyle(
+                  fontSize: 18,
+                  height: 1.5,
+                  color: Theme.of(context).colorScheme.onSurface),
+            ),
+          );
     return Semantics(
       container: true,
       label: widget.pending
@@ -1743,6 +1789,13 @@ class _MessageViewState extends State<MessageView> {
           : widget.user
               ? 'Your message'
               : 'Assistant message',
+      customSemanticsActions: {
+        const CustomSemanticsAction(label: 'Copy message'): copyMessage,
+        if (!widget.user)
+          CustomSemanticsAction(
+                  label: activity ? 'Hide activity' : 'Show activity'):
+              () => setState(() => activity = !activity),
+      },
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onLongPress: copyMessage,
@@ -1753,99 +1806,115 @@ class _MessageViewState extends State<MessageView> {
           child: Align(
             alignment:
                 widget.user ? Alignment.centerRight : Alignment.centerLeft,
-            child: AnimatedContainer(
-              duration:
-                  animate ? const Duration(milliseconds: 1400) : Duration.zero,
-              curve: Curves.easeInOut,
-              constraints: const BoxConstraints(maxWidth: 720),
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-              decoration: BoxDecoration(
-                color: widget.user
-                    ? Theme.of(context).colorScheme.secondaryContainer
-                    : Theme.of(context).colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: widget.pending
-                    ? [
-                        BoxShadow(
-                          color: Theme.of(context)
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                if (desktop && !widget.pending && widget.user)
+                  IconButton(
+                    tooltip: 'Copy message',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: copyMessage,
+                    icon: const Icon(Icons.copy_outlined, size: 16),
+                  ),
+                Flexible(
+                  child: AnimatedContainer(
+                    duration: animate
+                        ? const Duration(milliseconds: 1400)
+                        : Duration.zero,
+                    curve: Curves.easeInOut,
+                    constraints: const BoxConstraints(maxWidth: 720),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 18, vertical: 14),
+                    decoration: BoxDecoration(
+                      color: widget.user
+                          ? Theme.of(context).colorScheme.secondaryContainer
+                          : Theme.of(context)
                               .colorScheme
-                              .primary
-                              .withValues(alpha: _glow ? .22 : .08),
-                          blurRadius: _glow ? 16 : 8,
-                        )
-                      ]
-                    : null,
-              ),
-              child: Column(
-                crossAxisAlignment: widget.onCancelPending == null
-                    ? CrossAxisAlignment.start
-                    : CrossAxisAlignment.end,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (widget.user)
-                    Text(
-                      widget.text,
-                      style: TextStyle(
-                          fontSize: 17,
-                          height: 1.45,
-                          fontStyle: widget.pending ? FontStyle.italic : null,
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onSecondaryContainer),
-                    )
-                  else ...[
-                    if (widget.answerBuilder case final wrap?)
-                      wrap(
-                        MarkdownBody(
-                          data: widget.text,
-                          imageBuilder: safeMarkdownImageBuilder,
-                          selectable: false,
-                          styleSheet: saathiMarkdownStyle(context).copyWith(
-                            p: TextStyle(
-                                fontSize: 18,
-                                height: 1.5,
-                                color: Theme.of(context).colorScheme.onSurface),
+                              .surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: widget.pending
+                          ? [
+                              BoxShadow(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .primary
+                                    .withValues(alpha: _glow ? .22 : .08),
+                                blurRadius: _glow ? 16 : 8,
+                              )
+                            ]
+                          : null,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: widget.onCancelPending == null
+                          ? CrossAxisAlignment.start
+                          : CrossAxisAlignment.end,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (widget.user)
+                          Text(
+                            widget.text,
+                            style: TextStyle(
+                                fontSize: 17,
+                                height: 1.45,
+                                fontStyle:
+                                    widget.pending ? FontStyle.italic : null,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSecondaryContainer),
+                          )
+                        else ...[
+                          if (widget.answerBuilder case final wrap?)
+                            wrap(markdown!)
+                          else
+                            markdown!,
+                          if (widget.usage case final usage?)
+                            ReportedUsageLine(
+                              usage: usage,
+                              context: widget.contextMetadata,
+                            ),
+                        ],
+                        if (widget.onCancelPending case final cancel?)
+                          IconButton(
+                            tooltip: 'Cancel pending message',
+                            onPressed: cancel,
+                            icon: const Icon(Icons.close, size: 18),
                           ),
-                        ),
-                      )
-                    else
-                      MarkdownBody(
-                        data: widget.text,
-                        imageBuilder: safeMarkdownImageBuilder,
-                        selectable: false,
-                        styleSheet: saathiMarkdownStyle(context).copyWith(
-                          p: TextStyle(
-                              fontSize: 18,
-                              height: 1.5,
-                              color: Theme.of(context).colorScheme.onSurface),
-                        ),
-                      ),
-                    if (widget.usage case final usage?)
-                      ReportedUsageLine(
-                        usage: usage,
-                        context: widget.contextMetadata,
-                      ),
-                  ],
-                  if (widget.onCancelPending case final cancel?)
-                    IconButton(
-                      tooltip: 'Cancel pending message',
-                      onPressed: cancel,
-                      icon: const Icon(Icons.close, size: 18),
+                        if (activity && !widget.user)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 14),
+                            child: Text(
+                              widget.activityText ??
+                                  'Activity · Response received\nOnly observable status is shown. No private reasoning.',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant),
+                            ),
+                          ),
+                      ],
                     ),
-                  if (activity && !widget.user)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 14),
-                      child: Text(
-                        widget.activityText ??
-                            'Activity · Response received\nOnly observable status is shown. No private reasoning.',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color:
-                                Theme.of(context).colorScheme.onSurfaceVariant),
-                      ),
+                  ),
+                ),
+                if (desktop && !widget.pending && !widget.user) ...[
+                  IconButton(
+                    tooltip: 'Copy message',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: copyMessage,
+                    icon: const Icon(Icons.copy_outlined, size: 16),
+                  ),
+                  IconButton(
+                    tooltip: activity ? 'Hide activity' : 'Show activity',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => setState(() => activity = !activity),
+                    icon: Icon(
+                      activity ? Icons.info : Icons.info_outline,
+                      size: 16,
                     ),
+                  ),
                 ],
-              ),
+              ],
             ),
           ),
         ),
