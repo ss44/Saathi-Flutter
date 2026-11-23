@@ -8,7 +8,8 @@ Widget host(
         {bool busy = true,
         bool reduced = false,
         double width = 390,
-        double scale = 1}) =>
+        double scale = 1,
+        DateTime Function()? clock}) =>
     MaterialApp(
         home: MediaQuery(
             data: MediaQueryData(
@@ -18,7 +19,10 @@ Widget host(
             child: Scaffold(
                 body: SizedBox(
                     width: width,
-                    child: BusyThinking(busy: busy, random: Random(7))))));
+                    child: BusyThinking(
+                        busy: busy,
+                        random: Random(7),
+                        clock: clock ?? () => DateTime.utc(2026, 11, 21))))));
 
 void main() {
   test('rotation keeps the jokes and drops phrases that look like status', () {

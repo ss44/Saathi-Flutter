@@ -7,17 +7,23 @@ MarkdownStyleSheet saathiMarkdownStyle(BuildContext context) {
   final theme = Theme.of(context);
   final colors = theme.colorScheme;
   return MarkdownStyleSheet.fromTheme(theme).copyWith(
-    a: TextStyle(color: colors.primary),
+    a: TextStyle(
+      color: colors.primary,
+      decoration: TextDecoration.underline,
+      decorationColor: colors.primary,
+    ),
     // The dependency's legacy primaryColor can be a dark surface, not an accent.
     checkbox: TextStyle(color: colors.primary),
     code: theme.textTheme.bodyMedium!.copyWith(
       fontFamily: 'monospace',
       color: colors.onSurface,
-      backgroundColor: colors.surfaceContainerHighest,
+      backgroundColor: colors.surfaceContainerLow,
     ),
+    codeblockPadding: const EdgeInsets.all(12),
     codeblockDecoration: BoxDecoration(
-      color: colors.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(4),
+      color: colors.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: colors.outlineVariant),
     ),
   );
 }
