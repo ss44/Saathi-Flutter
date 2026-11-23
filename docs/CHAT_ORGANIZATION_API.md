@@ -1,6 +1,6 @@
 # Conversation organization integration contract
 
-Owned components for issues #28 and #14 live in `lib/chat_organization/`. They deliberately do not own transport, `ChatController`, `ChatHome`, message history, native jobs or secrets. The integration owner must wire these components into the actual app; passing these isolated tests is not end-to-end app acceptance.
+Owned components for issues #28 and #14 live in `lib/chat_organization/`. They deliberately do not own transport, `ChatController`, `ChatHome`, message history, native jobs or secrets. The shipped integration lives in `ChatController` and `ChatHome`; isolated component tests remain distinct from end-to-end app acceptance.
 
 ## State and storage
 
@@ -20,7 +20,13 @@ Owned components for issues #28 and #14 live in `lib/chat_organization/`. They d
 
 ## Drawer integration
 
-Use `ConversationActionRow` inside the existing local/server mixed drawer, or `ConversationOrganizationList` as its contents. Keep the real `Scaffold.drawer`; this preserves edge-swipe navigation. Rows physically translate over a trailing **Archive/Edit** rail; a menu exposes the same actions without swiping. `onSelect` is navigation only, never mark-seen. `onEdit` calls:
+The shipped app (`ChatHome`) composes `ConversationActionRow` directly inside its
+mixed local/server sidebar/drawer. `ConversationOrganizationList` remains an
+exported standalone helper for callers that only need a local-only list. Keep the
+real `Scaffold.drawer` on narrow viewports so edge-swipe navigation stays native.
+Rows physically translate over a trailing **Archive/Edit** rail; a menu exposes
+the same actions without swiping. `onSelect` is navigation only, never mark-seen.
+`onEdit` calls:
 
 ```dart
 showConversationEdit(
