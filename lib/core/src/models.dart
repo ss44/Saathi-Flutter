@@ -226,3 +226,8 @@ class ProviderException implements Exception {
   String toString() =>
       'ProviderException: $message${statusCode == null ? '' : ' (HTTP $statusCode)'}';
 }
+
+/// Thrown when an in-flight provider request is explicitly aborted by the caller.
+class RequestCancelledException extends ProviderException {
+  const RequestCancelledException([super.message = 'Request cancelled']);
+}

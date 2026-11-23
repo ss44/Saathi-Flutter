@@ -746,7 +746,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                   if (!wide)
                     IconButton(
                       tooltip: 'New conversation',
-                      onPressed: c.busy ? null : newChat,
+                      onPressed: c.canStartNewSession ? newChat : null,
                       icon: const Icon(Icons.add_rounded),
                     ),
                   if (!wide)
@@ -799,7 +799,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           child: FilledButton.icon(
-                            onPressed: c.busy
+                            onPressed: !c.canStartNewSession
                                 ? null
                                 : () {
                                     if (!wide) Navigator.pop(context);
@@ -969,8 +969,9 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                   child: session == null ||
                                           session.messages.isEmpty &&
                                               c.pendingText == null &&
+                                              c.outbox.isEmpty &&
                                               !thinking &&
-                                              !c.busy
+                                              (c.streamingText?.isEmpty ?? true)
                                       ? Center(
                                           child: SingleChildScrollView(
                                             padding: const EdgeInsets.all(32),
@@ -1063,8 +1064,15 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                           '${session.id}-$i'),
                                                       activityText:
                                                           precedingHistoryActivity(
-                                                              session.messages,
-                                                              i),
+                                                                session
+                                                                    .messages,
+                                                                i,
+                                                              ) ??
+                                                              (session.messages[i]
+                                                                          .metadata['stoppedByUser'] ==
+                                                                      true
+                                                                  ? 'Activity · Stopped before completion\nPartial reply kept. Nothing was resent.'
+                                                                  : null),
                                                       text: session
                                                           .messages[i].content,
                                                       user: session.messages[i]
@@ -1569,6 +1577,18 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                           onChanged: (_) => setState(() {}),
                                         ),
                                       ),
+                                      if (c.canStopDirectReply)
+                                        IconButton(
+                                          tooltip: 'Stop reply',
+                                          constraints: const BoxConstraints(
+                                            minWidth: 48,
+                                            minHeight: 48,
+                                          ),
+                                          onPressed: c.stopDirectReply,
+                                          icon: const Icon(
+                                            Icons.stop_circle_outlined,
+                                          ),
+                                        ),
                                       PromptOptimizer(
                                         key: ValueKey(session?.id),
                                         controller: c,
