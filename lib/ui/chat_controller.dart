@@ -2631,14 +2631,34 @@ class ChatController extends ChangeNotifier {
     }
   }
 
+  /// Creates and selects a new local conversation on [c].
+  ///
+  /// When [personaId] is supplied on a direct-model connection, validates and
+  /// attaches the shared persona before selecting the new session, rolling back
+  /// the created session on confirmed metadata save failures.
   Future<void> newSession(
     Map<String, dynamic> c,
     String model,
     String prompt, {
     String? upstreamProvider,
+    String? personaId,
   }) async {
     if (upstreamProvider != null && !isCurrentConnection(c)) {
       throw StateError('Stale connection');
+    }
+    final attachPersona = personaId != null &&
+        personaId.isNotEmpty &&
+        const {'openai', 'anthropic', 'gemini'}.contains(c['type']);
+    if (attachPersona) {
+      if (!organization.loaded ||
+          organization.saving ||
+          organization.hasUnsavedChanges) {
+        throw StateError(
+            'Conversation metadata is not ready for persona edits');
+      }
+      if (!organization.personas.any((p) => p.id == personaId)) {
+        throw StateError('Selected persona no longer exists');
+      }
     }
     // A new chat leaves the accepted edit's original source/session intact.
     _checkMutation(c['id'] as String, changesConnection: false);
@@ -2658,6 +2678,35 @@ class ChatController extends ChangeNotifier {
     } catch (_) {
       sessions.remove(session);
       rethrow;
+    }
+    if (attachPersona) {
+      final identity = identityOf(session);
+      try {
+        await organization.edit(
+          identity,
+          displayName: '',
+          personaId: personaId,
+          policy: PersonaEditPolicy.localInstructions,
+          pendingReason: null,
+          revalidatePersonaChange: () => pendingPersonaReason(identity),
+        );
+      } catch (err) {
+        if (err is OrganizationWriteFailure && !err.rollbackConfirmed) {
+          select(session);
+          rethrow;
+        }
+        if (organization.hasUnsavedChanges) {
+          organization.discardPendingEdit();
+        }
+        sessions.remove(session);
+        try {
+          await persist();
+        } catch (_) {
+          sessions.add(session);
+          select(session);
+        }
+        rethrow;
+      }
     }
     // Successful local creation follows the same source-bound pause policy as
     // selecting history or continuing a remote chat. A lease alone is not a pause.
