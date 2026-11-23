@@ -5,6 +5,12 @@ import 'chat_controller.dart';
 import 'optimizer_settings.dart';
 import 'prompt_optimizer.dart' show rewritePrompt;
 
+/// Returned by [PromptReview] when the user chooses to add a direct connection
+/// before picking an optimizer destination.
+final class AddDirectConnectionAction {
+  const AddDirectConnectionAction();
+}
+
 /// Captures the preview destination through the route-result await boundary.
 class _ReviewAuthority {
   bool revoked = false;
@@ -47,7 +53,7 @@ class _PromptReviewState extends State<PromptReview> {
   }
 
   Object? settingsRevision;
-  bool verified = false, loading = false, busy = false;
+  bool verified = false, loading = false, busy = false, _choosing = false;
   String? improved, error;
   SaathiCore? core;
   bool get ownerValid => mounted && widget.active.value && widget.ownerValid();
@@ -82,13 +88,13 @@ class _PromptReviewState extends State<PromptReview> {
             'Selected connection changed or was removed. Choose an explicit replacement.';
       }
     }
-    if (!identical(settingsRevision, c.optimizerRevision)) {
+    if (!_choosing && !identical(settingsRevision, c.optimizerRevision)) {
       configure();
     }
     setState(() {});
   }
 
-  void configure() {
+  void configure({VerifiedOptimizerChoice? preverified}) {
     revoke();
     core?.close();
     core = null;
@@ -114,6 +120,17 @@ class _PromptReviewState extends State<PromptReview> {
     if (connection == null || !boundedRewriteConnection(connection!['type'])) {
       error =
           'Selected destination unavailable for a bounded text-only rewrite. Choose an explicit replacement; agent tools are not used.';
+      return;
+    }
+    if (ownerValid &&
+        preverified != null &&
+        preverified.selection == selection &&
+        identical(preverified.connection, connection) &&
+        preverified.catalogGeneration == c.catalogGeneration &&
+        c.isCurrentConnection(connection!) &&
+        !c.changingConnection &&
+        c.canDiscoverModels) {
+      verified = true;
       return;
     }
     loading = true;
@@ -159,13 +176,26 @@ class _PromptReviewState extends State<PromptReview> {
   }
 
   Future<void> choose() async {
+    if (!ownerValid || _choosing) return;
+    _choosing = true;
+    VerifiedOptimizerChoice? chosen;
+    try {
+      chosen = await showDialog<VerifiedOptimizerChoice>(
+          context: context,
+          builder: (_) => OptimizerSettingsDialog(
+              controller: c,
+              chat: c.current,
+              isOwnerCurrent: () => ownerValid));
+    } finally {
+      _choosing = false;
+    }
     if (!ownerValid) return;
-    await showDialog<void>(
-        context: context,
-        builder: (_) => OptimizerSettingsDialog(
-            controller: c, chat: c.current, isOwnerCurrent: () => ownerValid));
-    if (!ownerValid) return;
-    setState(configure);
+    setState(() => configure(preverified: chosen));
+  }
+
+  void addDirectConnection() {
+    if (!ownerValid || !c.canChangeConnections) return;
+    Navigator.pop(context, const AddDirectConnectionAction());
   }
 
   Future<void> improve() async {
@@ -197,7 +227,7 @@ class _PromptReviewState extends State<PromptReview> {
     } catch (_) {
       if (current()) {
         setState(() => error =
-            'Could not improve this draft. Nothing was changed. Check the connection and model.');
+            'Could not enhance this draft. Nothing was changed. Check the connection and model.');
       }
     } finally {
       request?.close();
@@ -207,71 +237,83 @@ class _PromptReviewState extends State<PromptReview> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
-          title: const Text('Improve prompt'),
-          content: SizedBox(
-              width: 480,
-              child: SingleChildScrollView(
-                  child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
+  Widget build(BuildContext context) {
+    final hasDirect =
+        c.connections.any((e) => boundedRewriteConnection(e['type']));
+    return AlertDialog(
+        title: const Text('Enhance prompt'),
+        content: SizedBox(
+            width: 480,
+            child: SingleChildScrollView(
+                child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  const Text(
+                      'Sends only this draft (no chat history) as one additional AI request; provider charges may apply. Review before applying; nothing is sent to your conversation.'),
+                  const SizedBox(height: 12),
+                  Text(c.current != null &&
+                          c.optimizerOverride(c.current!) != null
+                      ? 'Using chat override'
+                      : 'Inheriting global setting'),
+                  if (selection != null)
+                    Text(
+                        'Destination: ${connection?['name'] ?? selection!.connectionId} · ${connection?['url'] ?? ''} · ${selection!.provider == null ? '' : '${selection!.provider} · '}${selection!.model}'),
+                  if (!hasDirect) ...[
+                    const SizedBox(height: 8),
                     const Text(
-                        'Makes one additional AI request; provider charges may apply. Only this draft is shared, without chat history. Review before applying. Nothing is sent to your conversation.'),
-                    const SizedBox(height: 16),
-                    Text(c.current != null &&
-                            c.optimizerOverride(c.current!) != null
-                        ? 'Using chat override'
-                        : 'Inheriting global setting'),
-                    if (selection != null)
-                      Text(
-                          'Destination: ${connection?['name'] ?? selection!.connectionId} · ${connection?['url'] ?? ''} · ${selection!.provider == null ? '' : '${selection!.provider} · '}${selection!.model}'),
-                    if (!c.connections
-                        .any((e) => boundedRewriteConnection(e['type'])))
-                      const Text(
-                          'No direct text connection available. Hermes and OpenClaw agent runtimes cannot safely be used for this rewrite.'),
-                    TextButton(
-                        onPressed: ownerValid ? choose : null,
-                        child: const Text('Choose optimizer')),
-                    if (loading) const Text('Checking model catalog…'),
-                    const Text('Original',
+                        'No direct text connection available. Hermes and OpenClaw agent runtimes cannot safely be used for this rewrite.'),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                        onPressed: ownerValid && c.canChangeConnections
+                            ? addDirectConnection
+                            : null,
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add direct connection')),
+                  ],
+                  TextButton(
+                      onPressed: ownerValid ? choose : null,
+                      child: const Text('Choose optimizer')),
+                  if (loading) const Text('Checking model catalog…'),
+                  const Text('Original',
+                      style: TextStyle(fontWeight: FontWeight.bold)),
+                  SelectableText(widget.draft),
+                  if (busy)
+                    const Padding(
+                        padding: EdgeInsets.all(16),
+                        child: CircularProgressIndicator()),
+                  if (error != null) Text(error!),
+                  if (!ownerValid)
+                    const Text(
+                        'Draft or conversation changed. Close this preview and try again.'),
+                  if (improved != null) ...[
+                    const Divider(),
+                    const Text('Enhanced',
                         style: TextStyle(fontWeight: FontWeight.bold)),
-                    SelectableText(widget.draft),
-                    if (busy)
-                      const Padding(
-                          padding: EdgeInsets.all(16),
-                          child: CircularProgressIndicator()),
-                    if (error != null) Text(error!),
-                    if (!ownerValid)
-                      const Text(
-                          'Draft or conversation changed. Close this preview and try again.'),
-                    if (improved != null) ...[
-                      const Divider(),
-                      const Text('Improved',
-                          style: TextStyle(fontWeight: FontWeight.bold)),
-                      SelectableText(improved!)
-                    ],
-                  ]))),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: Text(busy ? 'Cancel' : 'Keep original')),
-            if (improved == null)
-              FilledButton(
-                  onPressed: busy || !valid ? null : improve,
-                  child: const Text('Improve')),
-            if (improved != null)
-              FilledButton(
-                  onPressed: valid
-                      ? () {
-                          if (valid) {
-                            Navigator.pop(
-                                context,
-                                OptimizerPreview._(improved!, connection!,
-                                    settingsRevision!, ticket));
-                          }
+                    SelectableText(improved!)
+                  ],
+                ]))),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(busy ? 'Cancel' : 'Keep original')),
+          if (improved == null)
+            FilledButton(
+                onPressed: busy || !valid ? null : improve,
+                child: const Text('Enhance')),
+          if (improved != null)
+            FilledButton(
+                onPressed: valid
+                    ? () {
+                        if (valid) {
+                          Navigator.pop(
+                              context,
+                              OptimizerPreview._(improved!, connection!,
+                                  settingsRevision!, ticket));
                         }
-                      : null,
-                  child: const Text('Apply')),
-          ]);
+                      }
+                    : null,
+                child: const Text('Apply')),
+        ]);
+  }
 }
