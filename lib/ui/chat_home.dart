@@ -191,6 +191,19 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   int scrollRevision = 0;
   ChatController? shownOwner;
   int? shownSelection;
+  final Map<ConversationIdentity, String> _drafts = {};
+  ConversationIdentity? _draftOwner;
+  final GlobalKey<TooltipState> _sendTooltipKey = GlobalKey<TooltipState>();
+
+  void _saveCurrentDraft() {
+    final owner = _draftOwner;
+    if (owner == null) return;
+    if (composer.text.isEmpty) {
+      _drafts.remove(owner);
+    } else {
+      _drafts[owner] = composer.text;
+    }
+  }
 
   final _messageKeys = <(String, String), GlobalKey>{};
   List<String> _shownMessageIds = [];
@@ -333,7 +346,24 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
     if (selectionChanged) {
       desktopSettings = false;
       settingsSession = null;
-      if (shownOwner != null) composer.clear();
+      final nextSession = c.current;
+      final nextIdentity =
+          nextSession == null ? null : c.identityOf(nextSession);
+      if (shownOwner != null) {
+        if (identical(shownOwner, c)) {
+          _saveCurrentDraft();
+        } else {
+          _drafts.clear();
+          _draftOwner = null;
+        }
+        final restored =
+            nextIdentity == null ? '' : (_drafts[nextIdentity] ?? '');
+        composer.value = TextEditingValue(
+          text: restored,
+          selection: TextSelection.collapsed(offset: restored.length),
+        );
+      }
+      _draftOwner = nextIdentity;
       shownOwner = c;
       shownSelection = c.selectionGeneration;
       followStream = false;
@@ -407,7 +437,6 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
     if (session == null) return;
     setState(() {
       c.select(session);
-      composer.clear();
     });
   }
 
@@ -565,13 +594,14 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
         ),
       );
     }
-    if (mounted) setState(() => composer.clear());
+    if (mounted) setState(() {});
   }
 
   Future<void> send() async {
     final text = composer.text.trim();
     if (c.submit(text)) {
       followStream = true;
+      if (_draftOwner != null) _drafts.remove(_draftOwner);
       composer.clear();
       followOutput(newInput: true);
     }
@@ -601,9 +631,18 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
       ),
     );
     if (confirmed == true) {
+      final deleted = c.current == null ? null : c.identityOf(c.current!);
       try {
         await c.clear();
-        composer.clear();
+        final currentIdentity =
+            c.current == null ? null : c.identityOf(c.current!);
+        if (deleted != null && deleted != currentIdentity) {
+          _drafts.remove(deleted);
+        }
+        if (mounted && c.current == null) {
+          _draftOwner = null;
+          composer.clear();
+        }
       } catch (_) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -1527,6 +1566,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                       ) &&
                                                       mounted &&
                                                       composer.text == text) {
+                                                    if (_draftOwner != null) {
+                                                      _drafts
+                                                          .remove(_draftOwner);
+                                                    }
                                                     composer.clear();
                                                     setState(() {});
                                                   }
@@ -1569,79 +1612,105 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                               !c.organizationBlocked &&
                                               !c.readOnly &&
                                               !c.changingConnection,
-                                          onChanged: (_) => setState(() {}),
+                                          onChanged: (_) {
+                                            _saveCurrentDraft();
+                                            setState(() {});
+                                          },
+                                          onSubmit: c.readOnly ||
+                                                  c.changingConnection ||
+                                                  session == null ||
+                                                  c.unsavedChanges ||
+                                                  c.organizationBlocked ||
+                                                  c.queueStatus != null
+                                              ? null
+                                              : send,
                                         ),
                                       ),
                                       PromptOptimizer(
                                         key: ValueKey(session?.id),
                                         controller: c,
                                         composer: composer,
-                                        triggerBuilder: (context, openMenu) =>
-                                            Focus(
-                                          onKeyEvent: (node, event) {
-                                            if (openMenu != null &&
-                                                event is KeyDownEvent &&
-                                                (event.logicalKey ==
-                                                        LogicalKeyboardKey
-                                                            .contextMenu ||
-                                                    (event.logicalKey ==
-                                                            LogicalKeyboardKey
-                                                                .f10 &&
-                                                        HardwareKeyboard
-                                                            .instance
-                                                            .isShiftPressed))) {
-                                              openMenu();
-                                              return KeyEventResult.handled;
-                                            }
-                                            return KeyEventResult.ignored;
-                                          },
-                                          child: MergeSemantics(
-                                            child: Semantics(
-                                              onLongPress: openMenu,
-                                              customSemanticsActions:
-                                                  openMenu == null
-                                                      ? null
-                                                      : {
-                                                          CustomSemanticsAction(
-                                                            label:
-                                                                'Enhance prompt',
-                                                          ): openMenu,
-                                                        },
-                                              child: GestureDetector(
-                                                excludeFromSemantics: true,
-                                                // Consume a hold even when optimization is disabled.
-                                                onLongPress: () =>
-                                                    openMenu?.call(),
-                                                onSecondaryTap: openMenu,
-                                                child: Tooltip(
-                                                  message: 'Send',
-                                                  triggerMode:
-                                                      TooltipTriggerMode.manual,
-                                                  child: IconButton.filled(
-                                                    onPressed: c.readOnly ||
-                                                            c
-                                                                .changingConnection ||
-                                                            session == null ||
-                                                            c.unsavedChanges ||
-                                                            c
-                                                                .organizationBlocked ||
-                                                            c.queueStatus !=
-                                                                null ||
-                                                            composer.text
-                                                                .trim()
-                                                                .isEmpty
+                                        triggerBuilder: (context, openMenu) {
+                                          final isDesktop = const {
+                                            TargetPlatform.linux,
+                                            TargetPlatform.macOS,
+                                            TargetPlatform.windows,
+                                          }.contains(
+                                              Theme.of(context).platform);
+                                          final sendTooltip = Tooltip(
+                                            key: _sendTooltipKey,
+                                            message: 'Send',
+                                            triggerMode:
+                                                TooltipTriggerMode.manual,
+                                            child: IconButton.filled(
+                                              onPressed: c.readOnly ||
+                                                      c.changingConnection ||
+                                                      session == null ||
+                                                      c.unsavedChanges ||
+                                                      c.organizationBlocked ||
+                                                      c.queueStatus != null ||
+                                                      composer.text
+                                                          .trim()
+                                                          .isEmpty
+                                                  ? null
+                                                  : send,
+                                              icon: const Icon(
+                                                Icons.arrow_upward_rounded,
+                                              ),
+                                            ),
+                                          );
+                                          return Focus(
+                                            onKeyEvent: (node, event) {
+                                              if (openMenu != null &&
+                                                  event is KeyDownEvent &&
+                                                  (event.logicalKey ==
+                                                          LogicalKeyboardKey
+                                                              .contextMenu ||
+                                                      (event.logicalKey ==
+                                                              LogicalKeyboardKey
+                                                                  .f10 &&
+                                                          HardwareKeyboard
+                                                              .instance
+                                                              .isShiftPressed))) {
+                                                openMenu();
+                                                return KeyEventResult.handled;
+                                              }
+                                              return KeyEventResult.ignored;
+                                            },
+                                            child: MergeSemantics(
+                                              child: Semantics(
+                                                onLongPress: openMenu,
+                                                customSemanticsActions:
+                                                    openMenu == null
                                                         ? null
-                                                        : send,
-                                                    icon: const Icon(
-                                                      Icons
-                                                          .arrow_upward_rounded,
-                                                    ),
-                                                  ),
+                                                        : {
+                                                            CustomSemanticsAction(
+                                                              label:
+                                                                  'Enhance prompt',
+                                                            ): openMenu,
+                                                          },
+                                                child: GestureDetector(
+                                                  excludeFromSemantics: true,
+                                                  // Consume a hold even when optimization is disabled.
+                                                  onLongPress: () =>
+                                                      openMenu?.call(),
+                                                  onSecondaryTap: openMenu,
+                                                  child: isDesktop
+                                                      ? MouseRegion(
+                                                          onEnter: (_) =>
+                                                              _sendTooltipKey
+                                                                  .currentState
+                                                                  ?.ensureTooltipVisible(),
+                                                          onExit: (_) => Tooltip
+                                                              .dismissAllToolTips(),
+                                                          child: sendTooltip,
+                                                        )
+                                                      : sendTooltip,
                                                 ),
                                               ),
                                             ),
-                                          ),
-                                        ),
+                                          );
+                                        },
                                       ),
                                     ],
                                   ),
