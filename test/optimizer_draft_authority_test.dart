@@ -94,7 +94,7 @@ void main() {
     expect(find.textContaining('no longer in this connection'), findsOneWidget);
     expect(
         tester
-            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Improve'))
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Enhance'))
             .onPressed,
         isNull);
     expect(posts, 0);

@@ -26,7 +26,7 @@ Future<void> until(WidgetTester tester, bool Function() settled) async {
 
 bool improveEnabled(WidgetTester tester) =>
     tester
-        .widget<FilledButton>(find.widgetWithText(FilledButton, 'Improve'))
+        .widget<FilledButton>(find.widgetWithText(FilledButton, 'Enhance'))
         .onPressed !=
     null;
 
@@ -72,7 +72,7 @@ void main() {
       expect(
           tester
               .widget<FilledButton>(
-                  find.widgetWithText(FilledButton, 'Improve'))
+                  find.widgetWithText(FilledButton, 'Enhance'))
               .onPressed,
           isNull);
       expect(requests, hasLength(1));
@@ -103,7 +103,7 @@ void main() {
       expect(
           tester
               .widget<FilledButton>(
-                  find.widgetWithText(FilledButton, 'Improve'))
+                  find.widgetWithText(FilledButton, 'Enhance'))
               .onPressed,
           isNull);
       expect(requests, 0);
@@ -211,7 +211,7 @@ void main() {
           findsOneWidget);
       await until(tester, () => improveEnabled(tester));
       expect(requests.where((r) => r.method == 'POST').length, postsBefore);
-      await tester.tap(find.text('Improve'));
+      await tester.tap(find.text('Enhance'));
       await until(tester, () => find.text('Apply').evaluate().isNotEmpty);
       final posts = requests.where((r) => r.method == 'POST').toList();
       expect(posts.length, postsBefore + 1);

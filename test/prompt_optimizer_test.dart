@@ -53,14 +53,14 @@ void main() {
     final draft = TextEditingController(text: 'Original');
     await tester.pumpWidget(MaterialApp(
         home: Scaffold(body: PromptOptimizer(controller: c, composer: draft))));
-    await tester.tap(find.byTooltip('Improve prompt'));
+    await tester.tap(find.byTooltip('Enhance prompt'));
     await tester.pumpAndSettle();
     expect(find.textContaining('additional'), findsOneWidget);
     await tester
         .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 30)));
     await tester.pumpAndSettle();
     await tester.runAsync(() async {
-      await tester.tap(find.text('Improve'));
+      await tester.tap(find.text('Enhance'));
       await Future<void>.delayed(const Duration(milliseconds: 50));
     });
     await tester.pumpAndSettle();
@@ -75,7 +75,7 @@ void main() {
     expect(draft.text, 'Original');
     expect(c.current!.messages, hasLength(1));
     await tester.pumpWidget(MaterialApp(home: ChatHome(controller: c)));
-    expect(find.byTooltip('Improve prompt'), findsNothing);
+    expect(find.byTooltip('Enhance prompt'), findsNothing);
     expect(find.byTooltip('Send'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     draft.dispose();
