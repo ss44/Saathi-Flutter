@@ -228,8 +228,15 @@ class SaathiCore {
   }
 
   Future<dynamic> _json(ProviderConfig config, String path,
-      {Map<String, dynamic>? body}) async {
+      {Map<String, dynamic>? body, Future<void>? cancelTrigger}) async {
     final abort = Completer<void>();
+    var cancelled = false;
+    if (cancelTrigger != null) {
+      unawaited(cancelTrigger.then((_) {
+        cancelled = true;
+        if (!abort.isCompleted) abort.complete();
+      }));
+    }
     final request = http.AbortableRequest(
         body == null ? 'GET' : 'POST', _uri(config, path),
         abortTrigger: abort.future);
@@ -237,8 +244,11 @@ class SaathiCore {
     request.followRedirects = false;
     if (body != null) request.body = jsonEncode(body);
     try {
-      return await (() async {
+      final work = (() async {
         final response = await _client.send(request);
+        if (cancelled) {
+          throw const ProviderException('Provider request cancelled');
+        }
         if (response.statusCode < 200 || response.statusCode >= 300) {
           if (!abort.isCompleted) abort.complete();
           throw ProviderException(
@@ -249,14 +259,41 @@ class SaathiCore {
         }
         final bytes =
             await _bounded(response.stream).expand((chunk) => chunk).toList();
+        if (cancelled) {
+          throw const ProviderException('Provider request cancelled');
+        }
         final decoded = jsonDecode(utf8.decode(bytes));
         if (decoded is! Map<String, dynamic>) {
           throw const ProviderException(
               'Provider returned an invalid response object');
         }
         return decoded;
-      })()
-          .timeout(_requestTimeout);
+      })();
+      if (cancelTrigger == null) {
+        return await work.timeout(_requestTimeout);
+      }
+      final result = Completer<dynamic>();
+      final timer = Timer(_requestTimeout, () {
+        if (!abort.isCompleted) abort.complete();
+        if (!result.isCompleted) {
+          result.completeError(TimeoutException('Provider request timed out'));
+        }
+      });
+      unawaited(cancelTrigger.then((_) {
+        timer.cancel();
+        if (!result.isCompleted) {
+          result.completeError(
+              const ProviderException('Provider request cancelled'));
+        }
+      }));
+      unawaited(work.then((value) {
+        timer.cancel();
+        if (!result.isCompleted) result.complete(value);
+      }, onError: (Object error, StackTrace stack) {
+        timer.cancel();
+        if (!result.isCompleted) result.completeError(error, stack);
+      }));
+      return await result.future;
     } on ProviderException {
       rethrow;
     } on TimeoutException {
@@ -270,15 +307,25 @@ class SaathiCore {
     }
   }
 
-  Future<List<ModelInfo>> discoverModels(String providerId,
-      {bool Function()? isCurrent}) async {
+  Future<List<ModelInfo>> discoverModels(
+    String providerId, {
+    bool Function()? isCurrent,
+    Future<void>? cancelTrigger,
+  }) async {
     final config = _provider(providerId);
     if (config.type == ProviderType.hermes) {
-      return _discoverHermesModels(config, isCurrent: isCurrent);
+      return _discoverHermesModels(
+        config,
+        isCurrent: isCurrent,
+        cancelTrigger: cancelTrigger,
+      );
     }
     final isGemini = config.type == ProviderType.gemini;
-    final json =
-        await _json(config, isGemini ? '/v1beta/models' : '/v1/models');
+    final json = await _json(
+      config,
+      isGemini ? '/v1beta/models' : '/v1/models',
+      cancelTrigger: cancelTrigger,
+    );
     final rows =
         (json as Map<String, dynamic>)[isGemini ? 'models' : 'data'] as List? ??
             [];
@@ -319,8 +366,11 @@ class SaathiCore {
     return List.unmodifiable(discovered);
   }
 
-  Future<List<ModelInfo>> _discoverHermesModels(ProviderConfig config,
-      {bool Function()? isCurrent}) async {
+  Future<List<ModelInfo>> _discoverHermesModels(
+    ProviderConfig config, {
+    bool Function()? isCurrent,
+    Future<void>? cancelTrigger,
+  }) async {
     void check() {
       if ((isCurrent != null && !isCurrent()) ||
           !identical(_providers[config.id], config)) {
@@ -329,7 +379,10 @@ class SaathiCore {
     }
 
     check();
-    final capabilities = await discoverCapabilities(config.id);
+    final capabilities = await discoverCapabilities(
+      config.id,
+      cancelTrigger: cancelTrigger,
+    );
     check();
     final endpoint = capabilities['endpoints']?['model_options'];
     if (capabilities['features']?['model_options'] != true ||
@@ -339,8 +392,11 @@ class SaathiCore {
       throw const ProviderException(
           'This server does not advertise a model catalog. Update Hermes or check the original server configuration.');
     }
-    final payload =
-        await _json(config, '/api/model/options?include_unconfigured=false');
+    final payload = await _json(
+      config,
+      '/api/model/options?include_unconfigured=false',
+      cancelTrigger: cancelTrigger,
+    );
     check();
     final discovered = <String, ModelInfo>{};
     if (payload is! Map || payload['providers'] is! List) {
@@ -659,10 +715,17 @@ class SaathiCore {
     return config;
   }
 
-  Future<Map<String, dynamic>> discoverCapabilities(String providerId) async =>
+  Future<Map<String, dynamic>> discoverCapabilities(
+    String providerId, {
+    Future<void>? cancelTrigger,
+  }) async =>
       Map<String, dynamic>.unmodifiable(
-          await _json(_hermes(providerId), '/v1/capabilities')
-              as Map<String, dynamic>);
+        await _json(
+          _hermes(providerId),
+          '/v1/capabilities',
+          cancelTrigger: cancelTrigger,
+        ) as Map<String, dynamic>,
+      );
 
   Future<RemoteSessionPage> listRemoteSessions(String providerId,
       {int limit = 50,

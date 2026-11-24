@@ -2609,6 +2609,7 @@ class ChatController extends ChangeNotifier {
   Future<List<ModelInfo>> discover(
     Map<String, dynamic> c, {
     bool Function()? isCurrent,
+    Future<void>? cancelTrigger,
   }) async {
     final generation = catalogGeneration;
     bool valid() =>
@@ -2623,7 +2624,11 @@ class ChatController extends ChangeNotifier {
       final key = await store.readConnectionSecret(c['id']) ?? '';
       if (!valid()) throw StateError('Stale catalog');
       core.addProvider(config(c, key));
-      final result = await core.discoverModels(c['id'], isCurrent: valid);
+      final result = await core.discoverModels(
+        c['id'],
+        isCurrent: valid,
+        cancelTrigger: cancelTrigger,
+      );
       if (!valid()) throw StateError('Stale catalog');
       return result;
     } finally {
