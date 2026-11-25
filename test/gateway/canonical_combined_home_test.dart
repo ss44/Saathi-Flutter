@@ -78,8 +78,8 @@ void main() {
                   .length;
               await tester.tap(find.text('Review action'));
               await settle();
-              await tester.ensureVisible(find.text('once'));
-              await tester.tap(find.text('once'));
+              await tester.ensureVisible(find.text('Allow once'));
+              await tester.tap(find.text('Allow once'));
               await settle();
               expect(
                   host.requests.where((r) => r['method'] == 'approval.respond'),
