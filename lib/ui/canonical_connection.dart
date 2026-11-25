@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../gateway/hermes_gateway.dart';
 import '../gateway/host_invite.dart';
 import 'chat_controller.dart';
@@ -186,12 +187,51 @@ class _CanonicalConnectionPageState extends State<CanonicalConnectionPage> {
     }
   }
 
+  Future<void> _pasteUrl() async {
+    if (working || widget.targetSession != null) return;
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (!mounted) return;
+    final text = data?.text?.trim() ?? '';
+    if (text.isEmpty) {
+      setState(() => error = 'Clipboard is empty.');
+      return;
+    }
+    setState(() {
+      url.text = text;
+      error = null;
+    });
+  }
+
+  /// Pastes an invite JSON into the obscured invite field without ever reading
+  /// or rewriting the trusted WSS host address.
+  Future<void> _pasteInvite() async {
+    if (working) return;
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (!mounted) return;
+    final text = data?.text?.trim() ?? '';
+    if (text.isEmpty) {
+      setState(() => error =
+          'Clipboard is empty. Copy a fresh invite from your trusted host and try again.');
+      return;
+    }
+    setState(() {
+      invite.text = text;
+      error = null;
+    });
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
       appBar: AppBar(title: const Text('Hermes Desktop / CLI')),
       body: ListView(padding: const EdgeInsets.all(20), children: [
         const Text(
-            'Connect only to a host you trust. This grants access to its authorized Hermes sessions, not a new API chat.'),
+            'Connect only to a host you trust. This attaches to its authorized Hermes Desktop / CLI sessions, not a new API chat.'),
+        const SizedBox(height: 12),
+        const Text('1. Enter your host’s trusted WSS address.'),
+        const SizedBox(height: 4),
+        const Text('2. On that host, run: hermes gateway attach --json'),
+        const SizedBox(height: 4),
+        const Text('3. Paste the single-use invite JSON within 30 seconds.'),
         const SizedBox(height: 16),
         TextField(
             controller: name,
@@ -201,9 +241,18 @@ class _CanonicalConnectionPageState extends State<CanonicalConnectionPage> {
             controller: url,
             readOnly: widget.targetSession != null,
             autocorrect: false,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
                 labelText: 'Trusted WSS address',
-                hintText: 'wss://your-trusted-host/api/ws')),
+                hintText: 'wss://your-trusted-host/api/ws',
+                suffixIcon: widget.targetSession == null
+                    ? IconButton(
+                        key: const Key('paste-gateway-url'),
+                        tooltip: 'Paste WSS address',
+                        constraints:
+                            const BoxConstraints(minWidth: 48, minHeight: 48),
+                        onPressed: working ? null : _pasteUrl,
+                        icon: const Icon(Icons.content_paste))
+                    : null)),
         const SizedBox(height: 16),
         TextField(
             controller: invite,
@@ -211,11 +260,18 @@ class _CanonicalConnectionPageState extends State<CanonicalConnectionPage> {
             enableSuggestions: false,
             autocorrect: false,
             enableIMEPersonalizedLearning: false,
-            decoration:
-                const InputDecoration(labelText: 'Host-issued invite JSON')),
+            decoration: InputDecoration(
+                labelText: 'Host-issued invite JSON',
+                suffixIcon: IconButton(
+                    key: const Key('paste-gateway-invite'),
+                    tooltip: 'Paste invite JSON',
+                    constraints:
+                        const BoxConstraints(minWidth: 48, minHeight: 48),
+                    onPressed: working ? null : _pasteInvite,
+                    icon: const Icon(Icons.content_paste)))),
         const SizedBox(height: 16),
         const Text(
-            'On the trusted host: hermes gateway attach --json. Native tickets are loopback-only: the host must provide an explicitly secured TLS forwarding path. A normal API key cannot create this invite. The invite URL must exactly match the trusted address; Saathi never rewrites or follows it. Reconnect requires a fresh invite.'),
+            'Requires an explicitly secured WSS address that exactly matches the invite URL; Saathi never rewrites it. API keys cannot create invites, and reconnecting requires a fresh invite.'),
         const SizedBox(height: 16),
         FilledButton(
             onPressed: working ? null : connect,

@@ -210,6 +210,25 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                                         controller: controller))),
                         icon: const Icon(Icons.add),
                         label: const Text('Add connection')),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                        key: const Key('connect-hermes-gateway'),
+                        onPressed: !controller.canChangeConnections
+                            ? null
+                            : () => Navigator.push(
+                                context,
+                                CanonicalConnectionRoute<void>(
+                                    builder: (_) => CanonicalConnectionPage(
+                                        controller: controller))),
+                        icon: const Icon(Icons.link),
+                        label: const Text('Connect Hermes Desktop / CLI')),
+                    const SizedBox(height: 8),
+                    Text(
+                        'Use Add connection for direct models or a Hermes HTTP API server. Use Hermes Desktop / CLI with a host-issued invite to attach to desktop or terminal sessions.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant)),
                     const SizedBox(height: 24),
                     const _SettingsHeading('Application'),
                     const Text(

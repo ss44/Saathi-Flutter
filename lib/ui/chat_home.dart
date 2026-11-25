@@ -12,7 +12,7 @@ import '../chat_organization/reported_usage.dart';
 import '../agent_activity/activity_owner.dart';
 import '../agent_activity/activity_strip.dart';
 import '../agent_activity/activity_model.dart';
-import '../core/saathi_core.dart' show RemoteSession;
+import '../core/saathi_core.dart' show ProviderException, RemoteSession;
 import 'remote_sessions.dart';
 
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
@@ -142,6 +142,118 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   }
 
   final serverCaches = <Map<String, dynamic>, ConversationServerCache>{};
+  int _remoteOpenGeneration = 0;
+  bool _remoteOpenPaused = false;
+  RemoteSession? _openingRemoteSession;
+  Map<String, dynamic>? _openingRemoteConnection;
+
+  void _revokeRemoteOpen({bool clearUi = true}) {
+    _remoteOpenGeneration++;
+    if (clearUi) {
+      _openingRemoteSession = null;
+      _openingRemoteConnection = null;
+    }
+  }
+
+  /// Opens a remote Hermes session from the sidebar. Interactive API sessions
+  /// attach inline in [ChatHome] without pushing a transient [RemoteHistoryPage]
+  /// route; read-only sessions and failures open [RemoteHistoryPage] honestly.
+  Future<void> openRemoteSession(
+    Map<String, dynamic> connection,
+    RemoteSession session, {
+    required bool interactive,
+  }) async {
+    if (!c.isCurrentConnection(connection)) return;
+    if (!interactive) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => RemoteHistoryPage(
+            controller: c,
+            connection: connection,
+            session: session,
+          ),
+        ),
+      );
+      return;
+    }
+    if (_openingRemoteSession != null || c.attachingRemote) return;
+    final owner = ++_remoteOpenGeneration;
+    final selection = c.selectionGeneration;
+    setState(() {
+      desktopSettings = false;
+      _openingRemoteSession = session;
+      _openingRemoteConnection = connection;
+    });
+    bool stillOwned() =>
+        mounted &&
+        !_remoteOpenPaused &&
+        owner == _remoteOpenGeneration &&
+        selection == c.selectionGeneration &&
+        !c.changingConnection &&
+        c.isCurrentConnection(connection);
+    try {
+      await c.continueRemote(
+        connection,
+        session,
+        isOwnerCurrent: stillOwned,
+      );
+    } on RemoteContinuationUnavailable catch (failure) {
+      if (mounted && stillOwned()) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute<void>(
+            builder: (_) => RemoteHistoryPage(
+              controller: c,
+              connection: connection,
+              session: session,
+              initialAttachmentError: failure.message,
+            ),
+          ),
+        );
+      }
+    } on ProviderException catch (failure) {
+      if (mounted && stillOwned()) {
+        final loadError = failure.statusCode == 401 || failure.statusCode == 403
+            ? 'This connection does not have permission to read this conversation. Check its credentials and session access, then try again.'
+            : 'Could not read conversations. Try again.';
+        await Navigator.push(
+          context,
+          MaterialPageRoute<void>(
+            builder: (_) => RemoteHistoryPage(
+              controller: c,
+              connection: connection,
+              session: session,
+              initialLoadError: loadError,
+            ),
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted && stillOwned()) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute<void>(
+            builder: (_) => RemoteHistoryPage(
+              controller: c,
+              connection: connection,
+              session: session,
+              initialAttachmentError:
+                  'Could not connect to this conversation. Check this connection’s Runs support and session access, then try again. Nothing was sent.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted && owner == _remoteOpenGeneration) {
+        setState(() {
+          _openingRemoteSession = null;
+          _openingRemoteConnection = null;
+        });
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -339,11 +451,15 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   void syncServers() {
     // Revoke pending scrolling at mutation start, even if the source returns
     // to the same identity (including missing -> present -> missing).
-    if (c.changingConnection) scrollRevision++;
+    if (c.changingConnection) {
+      scrollRevision++;
+      _revokeRemoteOpen();
+    }
     final selectionChanged =
         !identical(shownOwner, c) || shownSelection != c.selectionGeneration;
     preserveTranscriptAnchor(selectionChanged);
     if (selectionChanged) {
+      _revokeRemoteOpen();
       desktopSettings = false;
       settingsSession = null;
       final nextSession = c.current;
@@ -367,6 +483,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
       shownOwner = c;
       shownSelection = c.selectionGeneration;
       followStream = false;
+    }
+    if (_openingRemoteConnection != null &&
+        !c.isCurrentConnection(_openingRemoteConnection!)) {
+      _revokeRemoteOpen();
     }
     final text = c.streamingText;
     if (shownStream != text) {
@@ -403,6 +523,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   void didUpdateWidget(covariant ChatHome oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (identical(oldWidget.controller, c)) return;
+    _revokeRemoteOpen();
     revokeControls();
     controlsUpdates?.cancel();
     oldWidget.controller.removeListener(syncServers);
@@ -424,10 +545,17 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    c.setQueueBackground(state != AppLifecycleState.resumed);
-    c.pauseRuns(state != AppLifecycleState.resumed);
-    activity.setPaused(state != AppLifecycleState.resumed);
-    if (state != AppLifecycleState.resumed) revokeControls();
+    final paused = state != AppLifecycleState.resumed;
+    _remoteOpenPaused = paused;
+    if (paused && _openingRemoteSession != null) {
+      setState(_revokeRemoteOpen);
+    } else if (paused) {
+      _revokeRemoteOpen();
+    }
+    c.setQueueBackground(paused);
+    c.pauseRuns(paused);
+    activity.setPaused(paused);
+    if (paused) revokeControls();
   }
 
   void openActivityParent(ActivityBinding binding) {
@@ -555,6 +683,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   ChatController get c => widget.controller;
   @override
   void dispose() {
+    _revokeRemoteOpen(clearUi: false);
     activity.dispose();
     controlsUpdates?.cancel();
     revokeControls();
@@ -944,6 +1073,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                 key: ObjectKey(cache.connection),
                                 cache: cache,
                                 closeDrawerOnOpen: !wide,
+                                onOpenSession: openRemoteSession,
                               );
                             }
                             if (localMatches.isEmpty) {
@@ -1001,6 +1131,42 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                   : Column(
                       children: [
                         const UpdateAvailabilityBanner(),
+                        if (_openingRemoteSession != null)
+                          Material(
+                            key: const Key('remote-connecting-banner'),
+                            color: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHigh,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const LinearProgressIndicator(),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 8,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          'Connecting to “${_openingRemoteSession!.title.trim().isEmpty ? 'New conversation' : _openingRemoteSession!.title}”…',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      TextButton(
+                                        key: const Key('cancel-remote-open'),
+                                        onPressed: () =>
+                                            setState(_revokeRemoteOpen),
+                                        child: const Text('Cancel'),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         Expanded(
                           child: LayoutBuilder(
                             // Use the space left after the composer and run controls,

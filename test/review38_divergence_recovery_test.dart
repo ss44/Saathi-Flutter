@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:saathi/core/saathi_core.dart' show ChatMessage;
 import 'package:saathi/ui/chat_home.dart';
-import 'package:saathi/ui/conversation_servers.dart';
 import 'package:saathi/ui/remote_sessions.dart';
 import 'package:saathi/ui/transcript_latest.dart';
 
@@ -70,12 +69,21 @@ void main() {
         f.rows[1] = {...f.rows[1], 'content': 'Externally corrected answer'};
         if (change == 'divergent extension') f.extend();
       }
-      await t.tap(find.byTooltip('Open navigation menu'));
+      await t.tap(find.byTooltip('Settings'));
+      await t.pumpAndSettle();
+      await t.scrollUntilVisible(find.byTooltip('Browse remote sessions'), 150,
+          scrollable: find.byType(Scrollable).last);
+      await t.tap(find.byTooltip('Browse remote sessions'));
       await network(t);
+      final sessionsScroll = find
+          .descendant(
+              of: find.byType(RemoteSessionsPage),
+              matching: find.byType(Scrollable))
+          .first;
       final row = find.descendant(
-          of: find.byType(ConversationServer),
+          of: find.byType(RemoteSessionsPage),
           matching: find.text('External chat'));
-      await t.ensureVisible(row);
+      await t.scrollUntilVisible(row, 150, scrollable: sessionsScroll);
       await t.tap(row);
       await network(t);
       await t.pumpAndSettle();

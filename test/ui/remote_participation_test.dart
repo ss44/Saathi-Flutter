@@ -295,7 +295,13 @@ void main() {
           await t.pump();
         }
       } else if (boundary == 'back') {
-        await t.tap(find.byTooltip('Back'));
+        // Allow the drawer close animation to finish before tapping Cancel.
+        await t.pump(const Duration(milliseconds: 300));
+        expect(
+          find.byKey(const Key('cancel-remote-open')).hitTestable(),
+          findsOneWidget,
+        );
+        await t.tap(find.byKey(const Key('cancel-remote-open')));
         await t.pumpAndSettle();
       } else {
         f.secrets.failWrite = boundary == 'failed key save';
@@ -319,7 +325,8 @@ void main() {
     });
   }
 
-  testWidgets('drawer keeps history visible while native discovery is pending',
+  testWidgets(
+      'drawer keeps current view visible while native discovery is pending',
       (t) async {
     final f = ParticipationFixture();
     await f.start();
@@ -331,7 +338,7 @@ void main() {
     f.discoveryGate = Completer<void>();
     await t.tap(find.text('External chat'));
     await network(t);
-    expect(find.text('Context 0'), findsOneWidget);
+    expect(find.byKey(const Key('remote-connecting-banner')), findsOneWidget);
     expect(find.text('Continue conversation'), findsNothing);
     expect(f.controller.current, isNull);
     expect(f.requests.every((r) => r.method == 'GET'), isTrue);

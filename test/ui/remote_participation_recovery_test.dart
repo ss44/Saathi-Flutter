@@ -44,11 +44,14 @@ void main() {
       await t.pumpWidget(MaterialApp(home: ChatHome(controller: controller)));
       await t.tap(find.byTooltip('Open navigation menu'));
       await network(t);
-      final remoteRow = find.descendant(
+      final duplicateRemoteRow = find.descendant(
           of: find.byType(ConversationServer),
           matching: find.text('External chat'));
-      await t.ensureVisible(remoteRow);
-      await t.tap(remoteRow);
+      expect(duplicateRemoteRow, findsNothing);
+      final localRow = find.descendant(
+          of: find.byType(Drawer), matching: find.text('External chat'));
+      await t.ensureVisible(localRow);
+      await t.tap(localRow);
       await network(t);
       // Unknown work may keep a live progress indicator; settle only navigation.
       await t.pump(const Duration(milliseconds: 400));
