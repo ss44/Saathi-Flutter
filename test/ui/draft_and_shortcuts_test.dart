@@ -77,7 +77,10 @@ void main() {
         expect(composerText(), 'Draft for B');
 
         // Switching to A via sidebar must not leak B's draft.
-        await tester.tap(find.text('On this device · model-a'));
+        await tester.tap(find.descendant(
+          of: find.byType(Drawer),
+          matching: find.text('Direct · model-a'),
+        ));
         await tester.pumpAndSettle();
         expect(controller.current, same(sessionA));
         expect(composerText(), isEmpty);
@@ -86,7 +89,10 @@ void main() {
         await tester.pump();
 
         // Switching back to B restores B's draft with collapsed selection at end.
-        await tester.tap(find.text('On this device · model-b'));
+        await tester.tap(find.descendant(
+          of: find.byType(Drawer),
+          matching: find.text('Direct · model-b'),
+        ));
         await tester.pumpAndSettle();
         expect(controller.current, same(sessionB));
         expect(composerText(), 'Draft for B');
@@ -148,7 +154,18 @@ void main() {
           'Keep across cancelled NewChat',
         );
 
-        // Deleting the active conversation removes its saved draft.
+        // Deleting the active conversation removes its saved draft and falls back
+        // to the remaining active conversation without leaking the deleted draft.
+        final remaining = controller.sessions.first;
+        await tester.tap(find.byTooltip('Delete conversation'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Delete'));
+        await tester.pumpAndSettle();
+
+        expect(controller.current, same(remaining));
+        expect(tester.widget<TextField>(composer).controller!.text, isEmpty);
+
+        // Deleting the last remaining conversation transitions to empty state.
         await tester.tap(find.byTooltip('Delete conversation'));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Delete'));
@@ -403,10 +420,16 @@ void main() {
         expect(tester.widget<TextField>(composer).controller!.text, isEmpty);
 
         // Switching to A and back to B must not resurrect the sent draft.
-        await tester.tap(find.text('On this device · model-a'));
+        await tester.tap(find.descendant(
+          of: find.byType(Drawer),
+          matching: find.text('Direct · model-a'),
+        ));
         await tester.pumpAndSettle();
         expect(controller.current, same(sessionA));
-        await tester.tap(find.text('On this device · model-b'));
+        await tester.tap(find.descendant(
+          of: find.byType(Drawer),
+          matching: find.text('Direct · model-b'),
+        ));
         await tester.pumpAndSettle();
         expect(controller.current, same(sessionB));
         expect(tester.widget<TextField>(composer).controller!.text, isEmpty);

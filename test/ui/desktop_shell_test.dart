@@ -58,7 +58,9 @@ void main() {
       expect(search.hitTestable(), findsOneWidget);
       expect(t.getRect(search).right, lessThan(t.getRect(composer).left));
       await t.enterText(composer, 'Owned by the second conversation');
-      await t.tap(find.text('On this device · first-model'));
+      await t.tap(find.descendant(
+          of: find.byType(Drawer),
+          matching: find.text('Desktop fixture · first-model')));
       await t.pumpAndSettle();
       expect(c.current, same(c.sessions.first));
       expect(find.byType(NavigationRail), findsOneWidget);
@@ -116,7 +118,9 @@ void main() {
         OptimizerSelection(connectionId: 'desktop', model: 'second-rewrite');
     await c.saveOptimizerSelection(firstOverride, chat: c.sessions.first);
     await c.saveOptimizerSelection(secondOverride, chat: c.sessions.last);
-    await t.tap(find.text('On this device · first-model'));
+    await t.tap(find.descendant(
+        of: find.byType(Drawer),
+        matching: find.text('Desktop fixture · first-model')));
     await t.pumpAndSettle();
     expect(find.byTooltip('Chat prompt optimizer'), findsNothing);
     expect(find.byTooltip('Settings'), findsNothing);
@@ -136,7 +140,9 @@ void main() {
       expect(c.globalOptimizerSelection, isNull);
       await t.tap(find.text('Chats'));
       await t.pumpAndSettle();
-      await t.tap(find.text('On this device · second-model'));
+      await t.tap(find.descendant(
+          of: find.byType(Drawer),
+          matching: find.text('Desktop fixture · second-model')));
       await t.pumpAndSettle();
     }
     expect(t.takeException(), isNull);
@@ -173,7 +179,9 @@ void main() {
     await t.enterText(composer, 'Still belongs to this conversation');
     await t.tap(find.text('Settings'));
     await t.pumpAndSettle();
-    await t.tap(find.text('On this device · second-model'));
+    await t.tap(find.descendant(
+        of: find.byType(Drawer),
+        matching: find.text('Desktop fixture · second-model')));
     await t.pumpAndSettle();
     expect(composer.hitTestable(), findsOneWidget);
     expect(t.widget<TextField>(composer).controller!.text,

@@ -505,6 +505,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
     if (value.trim().isEmpty) {
       setState(() => historyQuery = '');
     } else {
+      setState(() {});
       searchDebounce = Timer(const Duration(milliseconds: 200), () {
         if (mounted) setState(() => historyQuery = value);
       });
@@ -611,6 +612,14 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   }
 
   Future<void> clear() async {
+    final target = c.current;
+    if (target == null) return;
+    await deleteConversation(target);
+  }
+
+  Future<void> deleteConversation(ChatSession target) async {
+    if (!c.canDeleteSession(target)) return;
+    final owner = c;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -630,16 +639,16 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
         ],
       ),
     );
-    if (confirmed == true) {
-      final deleted = c.current == null ? null : c.identityOf(c.current!);
+    if (confirmed == true &&
+        mounted &&
+        identical(c, owner) &&
+        owner.sessions.contains(target) &&
+        owner.canDeleteSession(target)) {
+      final deleted = owner.identityOf(target);
       try {
-        await c.clear();
-        final currentIdentity =
-            c.current == null ? null : c.identityOf(c.current!);
-        if (deleted != null && deleted != currentIdentity) {
-          _drafts.remove(deleted);
-        }
-        if (mounted && c.current == null) {
+        await owner.deleteSession(target);
+        _drafts.remove(deleted);
+        if (mounted && owner.current == null) {
           _draftOwner = null;
           composer.clear();
         }
@@ -651,6 +660,21 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
         }
       }
     }
+  }
+
+  String _connectionLabel(ChatSession s) {
+    final connection = c.connections
+        .where((entry) => entry['id'] == s.connectionId)
+        .firstOrNull;
+    final name = (connection?['name'] as String?)?.trim() ?? '';
+    return name.isEmpty ? 'Unavailable connection' : name;
+  }
+
+  String _rowSubtitle(ChatSession s, {String? snippet}) {
+    final model = c.replyModel(s).trim();
+    final connection = _connectionLabel(s);
+    final meta = model.isEmpty ? connection : '$connection · $model';
+    return snippet == null ? meta : '$snippet\n$meta';
   }
 
   @override
@@ -688,6 +712,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                     c.workState(s) != ConversationWorkState.idle,
               )
               .length;
+          final showRemoteServers =
+              !archivedView && historyQuery.trim().isEmpty;
+          final visibleServerCount =
+              showRemoteServers ? serverCaches.length : 0;
           final names = c.connections.where(
             (entry) => entry['id'] == session?.connectionId,
           );
@@ -861,36 +889,39 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                           decoration: InputDecoration(
                             labelText: 'Search local chats',
                             prefixIcon: const Icon(Icons.search),
-                            suffixIcon: IconButton(
-                              tooltip: 'Clear search',
-                              onPressed: () {
-                                historySearch.clear();
-                                searchHistory('');
-                              },
-                              icon: const Icon(Icons.close),
-                            ),
+                            suffixIcon: historySearch.text.isEmpty
+                                ? null
+                                : IconButton(
+                                    tooltip: 'Clear search',
+                                    onPressed: () {
+                                      historySearch.clear();
+                                      searchHistory('');
+                                    },
+                                    icon: const Icon(Icons.close),
+                                  ),
                           ),
                         ),
                       ),
-                      TextButton(
-                        key: const Key('archived-view'),
-                        onPressed: () =>
-                            setState(() => archivedView = !archivedView),
-                        child: Text(
-                          archivedView
-                              ? 'Back to recent conversations'
-                              : 'Archived (${archived.length}${archivedAttention > 0 ? ', $archivedAttention need attention' : ''})',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
+                      if (archivedView || archived.isNotEmpty)
+                        TextButton(
+                          key: const Key('archived-view'),
+                          onPressed: () =>
+                              setState(() => archivedView = !archivedView),
+                          child: Text(
+                            archivedView
+                                ? 'Back to recent conversations'
+                                : 'Archived (${archived.length}${archivedAttention > 0 ? ', $archivedAttention need attention' : ''})',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                      ),
                       Expanded(
                         child: ListView.builder(
-                          itemCount: 3 +
+                          itemCount: (showRemoteServers ? 3 : 2) +
                               (localMatches.isEmpty && historyQuery.isNotEmpty
                                   ? 1
                                   : localMatches.length) +
-                              serverCaches.length,
+                              visibleServerCount,
                           itemBuilder: (context, index) {
                             if (index == 0) {
                               return ListTile(
@@ -905,7 +936,8 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                 localMatches.isEmpty && historyQuery.isNotEmpty
                                     ? 1
                                     : localMatches.length;
-                            if (index == 1 + localCount + serverCaches.length) {
+                            if (showRemoteServers &&
+                                index == 1 + localCount + visibleServerCount) {
                               return ListTile(
                                 leading: const Icon(Icons.link),
                                 title: const Text('Hermes Desktop / CLI'),
@@ -921,7 +953,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                 },
                               );
                             }
-                            if (index == 2 + localCount + serverCaches.length) {
+                            final footerIndex = (showRemoteServers ? 2 : 1) +
+                                localCount +
+                                visibleServerCount;
+                            if (index == footerIndex) {
                               return MediaQuery.viewInsetsOf(context).bottom ==
                                       0
                                   ? Padding(
@@ -936,7 +971,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                     )
                                   : const SizedBox.shrink();
                             }
-                            if (index > localCount) {
+                            if (showRemoteServers && index > localCount) {
                               final cache = serverCaches.values.elementAt(
                                 index - localCount - 1,
                               );
@@ -958,12 +993,14 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                               key: ValueKey(c.identityOf(s).storageKey),
                               selected: wide && identical(s, session),
                               readOnly: sessionReadOnly,
+                              deleteEnabled: c.canDeleteSession(s),
                               row: ConversationRowData(
                                 identity: c.identityOf(s),
                                 title: s.title,
-                                subtitle: match.snippet == null
-                                    ? 'On this device · ${s.model}'
-                                    : '${match.snippet}\nOn this device · ${s.model}',
+                                subtitle: _rowSubtitle(
+                                  s,
+                                  snippet: match.snippet,
+                                ),
                                 state: c.workState(s),
                                 readOnly: sessionReadOnly,
                                 latestMessageAt: s.latestMessageAt,
@@ -971,6 +1008,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                               presentation:
                                   c.organization.entry(c.identityOf(s)),
                               onEdit: () => editConversation(s),
+                              onDelete: () => deleteConversation(s),
                               onArchive: () async {
                                 try {
                                   await c.organization.setArchived(
@@ -1382,10 +1420,35 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                   'Reconnect to original host'),
                                             ),
                                         ] else if (c.readOnly)
-                                          const Padding(
-                                            padding: EdgeInsets.all(16),
-                                            child: Text(
-                                              'Read-only · This connection was removed or changed. Start a new conversation to send messages.',
+                                          Padding(
+                                            padding: const EdgeInsets.all(16),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                const Text(
+                                                  'Read-only · This connection was removed or changed. Start a new conversation to send messages.',
+                                                ),
+                                                if (!c.loadFailed) ...[
+                                                  const SizedBox(height: 8),
+                                                  TextButton.icon(
+                                                    key: const Key(
+                                                        'readonly-new-chat'),
+                                                    onPressed:
+                                                        c.busy ? null : newChat,
+                                                    icon: Icon(
+                                                      c.connections.isEmpty
+                                                          ? Icons.add_link
+                                                          : Icons.add,
+                                                    ),
+                                                    label: Text(
+                                                      c.connections.isEmpty
+                                                          ? 'Add connection'
+                                                          : 'New conversation',
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
                                             ),
                                           ),
                                         if (c.runObservationProblem != null)
