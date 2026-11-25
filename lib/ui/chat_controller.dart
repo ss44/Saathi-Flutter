@@ -2769,12 +2769,15 @@ class ChatController extends ChangeNotifier {
   Future<void>? _persistTail;
   int _persistVersion = 0;
 
-  Future<void> persist() {
+  Future<void> persist() async {
     if (_loadFailed) {
-      return Future.error(
-          StateError('Saved data must be recovered before writing'));
+      throw StateError('Saved data must be recovered before writing');
     }
-    Future<void> write() async {
+    final previous = _persistTail;
+    final done = Completer<void>();
+    _persistTail = done.future;
+    try {
+      if (previous != null) await previous;
       if (_loadFailed) {
         throw StateError('Saved data must be recovered before writing');
       }
@@ -2785,12 +2788,10 @@ class ChatController extends ChangeNotifier {
           _canonicalSaveRetry == null) {
         unsavedChanges = false;
       }
+    } finally {
+      if (identical(_persistTail, done.future)) _persistTail = null;
+      done.complete();
     }
-
-    final before = _persistTail;
-    final operation = before == null ? write() : before.then((_) => write());
-    _persistTail = operation.catchError((Object _) {});
-    return operation;
   }
 
   Future<void> retrySave() async {

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import '../chat_organization/reported_usage.dart';
@@ -261,9 +262,13 @@ class SaathiStore {
 
   Future<void>? _chatsTail;
 
-  Future<void> saveChats(List<Map<String, dynamic>> chats) {
+  Future<void> saveChats(List<Map<String, dynamic>> chats) async {
     // Serialize chat snapshots so overlapping saves cannot roll back a newer commit.
-    Future<void> write() async {
+    final previous = _chatsTail;
+    final done = Completer<void>();
+    _chatsTail = done.future;
+    try {
+      if (previous != null) await previous;
       // Persist only displayable conversation data, never arbitrary provider metadata.
       final safe = [
         for (final chat in chats)
@@ -331,11 +336,9 @@ class SaathiStore {
         } catch (_) {}
         rethrow;
       }
+    } finally {
+      if (identical(_chatsTail, done.future)) _chatsTail = null;
+      done.complete();
     }
-
-    final before = _chatsTail;
-    final operation = before == null ? write() : before.then((_) => write());
-    _chatsTail = operation.catchError((Object _) {});
-    return operation;
   }
 }
