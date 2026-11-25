@@ -964,8 +964,10 @@ class ChatController extends ChangeNotifier {
         _canonicalHeldOwners.remove(item);
         _foregroundHeld.remove(item);
         if (result == _DispatchResult.stopped) {
-          if (_outbox
-              .any((queued) => identical(queued.session, item.session))) {
+          if (!_uncertain.containsKey(item.session) &&
+              !unsavedChanges &&
+              _outbox
+                  .any((queued) => identical(queued.session, item.session))) {
             _paused[item.session] = _stopQueueNotice;
           }
           break;
@@ -2764,12 +2766,31 @@ class ChatController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> persist() async {
+  Future<void>? _persistTail;
+  int _persistVersion = 0;
+
+  Future<void> persist() {
     if (_loadFailed) {
-      throw StateError('Saved data must be recovered before writing');
+      return Future.error(
+          StateError('Saved data must be recovered before writing'));
     }
-    await store.saveChats(sessions.map((s) => s.toJson()).toList());
-    unsavedChanges = false;
+    Future<void> write() async {
+      if (_loadFailed) {
+        throw StateError('Saved data must be recovered before writing');
+      }
+      final version = ++_persistVersion;
+      await store.saveChats(sessions.map((s) => s.toJson()).toList());
+      if (version == _persistVersion &&
+          _canonicalQueueSaveRetry == null &&
+          _canonicalSaveRetry == null) {
+        unsavedChanges = false;
+      }
+    }
+
+    final before = _persistTail;
+    final operation = before == null ? write() : before.then((_) => write());
+    _persistTail = operation.catchError((Object _) {});
+    return operation;
   }
 
   Future<void> retrySave() async {
@@ -3092,8 +3113,8 @@ class ChatController extends ChangeNotifier {
                     : chunk.text.substring(0, remaining),
               );
               _directStreamPreview = previewBuffer.toString();
+              notifyListeners();
             }
-            notifyListeners();
           }
         }
       } on RequestCancelledException {
@@ -3105,6 +3126,7 @@ class ChatController extends ChangeNotifier {
           _directStreamPreview = null;
           _directStreamSession = null;
           _directCancel = null;
+          _directStoppedByUser = false;
           responseCompleted = true;
           await _completeStoppedDirectReply(
             session,
@@ -3120,6 +3142,7 @@ class ChatController extends ChangeNotifier {
       _directStreamPreview = null;
       _directStreamSession = null;
       _directCancel = null;
+      _directStoppedByUser = false;
       responseCompleted = true;
       await _completeReply(
         session,
@@ -3159,8 +3182,8 @@ class ChatController extends ChangeNotifier {
         _directStreamSession = null;
         _directStreamPreview = null;
         _directCancel = null;
-        _directStoppedByUser = false;
       }
+      _directStoppedByUser = false;
       _dispatchRun = null;
       core?.close();
       busy = false;
@@ -3169,6 +3192,11 @@ class ChatController extends ChangeNotifier {
         _uncertain[session] = permission.source;
         _paused[session] =
             'Outcome unknown. The last request may have executed. It will not be sent again. Start a new conversation safely, or explicitly abandon this held outbox.';
+      }
+      if (!_draining &&
+          !_uncertain.containsKey(session) &&
+          !_outbox.any((item) => identical(item.session, session))) {
+        _paused.remove(session);
       }
       if (!_draining && unsavedChanges && runs[session.id] == null) {
         pauseQueue(

@@ -821,7 +821,9 @@ class SaathiCore {
             metadata['groundingMetadata'] = candidate['groundingMetadata'];
           }
           final finish = candidate['finishReason'];
-          if (finish is String) {
+          if (finish is String &&
+              finish.isNotEmpty &&
+              finish.toUpperCase() != 'FINISH_REASON_UNSPECIFIED') {
             if (const {'ERROR', 'CANCELLED', 'CANCELED'}
                 .contains(finish.toUpperCase())) {
               throw const ProviderException(
@@ -852,6 +854,7 @@ class SaathiCore {
         done = true;
         break;
       }
+      if (event.data.trim().isEmpty) continue;
       if (event.event.isNotEmpty &&
           event.event != 'message' &&
           event.event != 'error') {
@@ -864,7 +867,11 @@ class SaathiCore {
         throw const ProviderException(
             'Provider returned malformed streaming JSON');
       }
-      if (event.event == 'error' || (json is Map && json['error'] != null)) {
+      if (json is! Map) {
+        throw const ProviderException(
+            'Provider returned malformed streaming JSON');
+      }
+      if (event.event == 'error' || json['error'] != null) {
         throw const ProviderException('Provider stream reported an error');
       }
       final choices = json['choices'] as List? ?? [];
@@ -969,6 +976,7 @@ class SaathiCore {
             in _parseSseStream(config.type, bytesStream, output, metadata)) {
           yield chunk;
         }
+        if (cancelled) throw const RequestCancelledException();
         if (revision == _revision) {
           _commit(text, ChatResult(output.toString(), metadata: metadata));
         }
@@ -987,6 +995,7 @@ class SaathiCore {
           )) {
             yield chunk;
           }
+          if (cancelled) throw const RequestCancelledException();
           if (revision == _revision) {
             _commit(text, ChatResult(output.toString(), metadata: metadata));
           }
@@ -1010,6 +1019,7 @@ class SaathiCore {
             throw const ProviderException(
                 'Provider returned an invalid response object');
           }
+          if (cancelled) throw const RequestCancelledException();
           yield ChatChunk(result.text, metadata: result.metadata);
           if (revision == _revision) {
             _commit(text, result);

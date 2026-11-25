@@ -70,7 +70,9 @@ void main() {
   for (final provider in ['openai', 'anthropic', 'gemini']) {
     testWidgets('$provider streams SSE chunks progressively and commits once',
         (tester) async {
+      final previousOverrides = HttpOverrides.current;
       HttpOverrides.global = null;
+      addTearDown(() => HttpOverrides.global = previousOverrides);
       late HttpServer server;
       late ChatController controller;
       final clients = <http.Client>[];
@@ -324,7 +326,9 @@ void main() {
   testWidgets(
       'Stop mid-stream aborts transport, keeps partial truthfully, never marks authoritative completion, and pauses queued followers',
       (tester) async {
+    final previousOverrides = HttpOverrides.current;
     HttpOverrides.global = null;
+    addTearDown(() => HttpOverrides.global = previousOverrides);
     late HttpServer server;
     late ChatController controller;
     final clients = <http.Client>[];
@@ -536,7 +540,9 @@ void main() {
   test(
       'mid-stream truncation, SSE error, timeout, and save failure preserve uncertain-outcome and no-resend invariants',
       () async {
+    final previousOverrides = HttpOverrides.current;
     HttpOverrides.global = null;
+    addTearDown(() => HttpOverrides.global = previousOverrides);
     for (final mode in ['truncated', 'sse_error', 'timeout']) {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       var posts = 0;
@@ -941,5 +947,267 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       c.dispose();
     }
+  });
+
+  test(
+      'stoppedByUser and incomplete metadata survive store.load() restart and send()->stopDirectReply() prunes _paused',
+      () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    final store = SaathiStore(preferences: prefs, secrets: MemorySecrets());
+    final firstStream = StreamController<List<int>>();
+    var callCount = 0;
+    final c = ChatController(
+      store,
+      coreFactory: () => SaathiCore(
+        client: MockClient.streaming((request, _) async {
+          callCount++;
+          if (callCount == 1) {
+            return http.StreamedResponse(
+              firstStream.stream,
+              200,
+              headers: {'content-type': 'text/event-stream'},
+            );
+          }
+          return http.StreamedResponse(
+            Stream.value(utf8.encode(
+                '{"choices":[{"message":{"content":"Second reply"}}]}')),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }),
+      ),
+    );
+    await c.load();
+    final conn = {
+      'id': 'restart-stop',
+      'name': 'Direct',
+      'type': 'openai',
+      'url': 'https://example.com',
+    };
+    await c.addConnection(conn, '');
+    await c.newSession(conn, 'm1', '');
+
+    // Invoke send() directly (outside _drainOutbox) with an empty outbox.
+    final sendFuture = c.send('First prompt');
+    while (!c.canStopDirectReply) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    firstStream.add(utf8.encode(
+        'data: {"choices":[{"delta":{"content":"Partial answer"}}]}\n\n'));
+    while (c.streamingText != 'Partial answer') {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    c.stopDirectReply();
+    await sendFuture;
+    unawaited(firstStream.close());
+
+    // Stopped metadata survives cold reload via SaathiStore.load().
+    final reloaded = ChatController(
+      SaathiStore(preferences: prefs, secrets: MemorySecrets()),
+    );
+    await reloaded.load();
+    final restoredAssistant = reloaded.sessions.single.messages.last;
+    expect(restoredAssistant.content, 'Partial answer');
+    expect(restoredAssistant.metadata['stoppedByUser'], isTrue);
+    expect(restoredAssistant.metadata['incomplete'], isTrue);
+    expect(restoredAssistant.metadata['authoritativeCompletion'], isNull);
+    reloaded.dispose();
+
+    // Subsequent send() works cleanly because orphaned _paused was pruned.
+    expect(await c.send('Follow-up prompt'), isTrue);
+    expect(c.current!.messages.last.content, 'Second reply');
+    c.dispose();
+  });
+
+  test(
+      'stopping with queued follower preserves storage-failure pause notices instead of clobbering them',
+      () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    final store = _FailingStore(prefs);
+    final streamCtrl = StreamController<List<int>>();
+    final c = ChatController(
+      store,
+      coreFactory: () => SaathiCore(
+        client: MockClient.streaming((request, _) async {
+          return http.StreamedResponse(
+            streamCtrl.stream,
+            200,
+            headers: {'content-type': 'text/event-stream'},
+          );
+        }),
+      ),
+    );
+    await c.load();
+    final conn = {
+      'id': 'fail-stop',
+      'name': 'Direct',
+      'type': 'openai',
+      'url': 'https://example.com',
+    };
+    await c.addConnection(conn, '');
+    await c.newSession(conn, 'm1', '');
+
+    expect(c.submit('First'), isTrue);
+    while (!c.canStopDirectReply) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(c.submit('Follower'), isTrue);
+    streamCtrl.add(utf8.encode(
+        'data: {"choices":[{"delta":{"content":"Unsaved part"}}]}\n\n'));
+    while (c.streamingText != 'Unsaved part') {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    store.failSaveChats = true;
+    c.stopDirectReply();
+    while (c.busy) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    unawaited(streamCtrl.close());
+
+    expect(c.unsavedChanges, isTrue);
+    expect(c.queueStatus,
+        'Queue paused until the response is saved. Then choose Resume.');
+    c.dispose();
+  });
+
+  test(
+      'overlapping newSession() during stream completion serializes persist() without losing committed replies',
+      () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    final store = SaathiStore(preferences: prefs, secrets: MemorySecrets());
+    final streamCtrl = StreamController<List<int>>();
+    final c = ChatController(
+      store,
+      coreFactory: () => SaathiCore(
+        client: MockClient.streaming((request, _) async {
+          return http.StreamedResponse(
+            streamCtrl.stream,
+            200,
+            headers: {'content-type': 'text/event-stream'},
+          );
+        }),
+      ),
+    );
+    await c.load();
+    final conn = {
+      'id': 'concurrent',
+      'name': 'Direct',
+      'type': 'openai',
+      'url': 'https://example.com',
+    };
+    await c.addConnection(conn, '');
+    await c.newSession(conn, 'm1', '');
+    final sessionA = c.current!;
+
+    expect(c.submit('Hello A'), isTrue);
+    while (!c.canStopDirectReply) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    streamCtrl.add(utf8.encode(
+        'data: {"choices":[{"delta":{"content":"Answer A"}}]}\n\ndata: [DONE]\n\n'));
+    // Fire newSession concurrently with stream completion.
+    final newSessionFuture = c.newSession(conn, 'm2', '');
+    await streamCtrl.close();
+    await newSessionFuture;
+    while (c.busy) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+
+    final reloaded = ChatController(
+      SaathiStore(preferences: prefs, secrets: MemorySecrets()),
+    );
+    await reloaded.load();
+    expect(reloaded.sessions, hasLength(2));
+    final persistedA =
+        reloaded.sessions.singleWhere((s) => s.id == sessionA.id);
+    expect(persistedA.messages.last.content, 'Answer A');
+    reloaded.dispose();
+    c.dispose();
+  });
+
+  test(
+      'Gemini ignores FINISH_REASON_UNSPECIFIED and OpenAI skips empty keepalive frames and rejects non-Map JSON',
+      () async {
+    final geminiCore = SaathiCore(
+      client: MockClient.streaming((request, _) async {
+        return http.StreamedResponse(
+          Stream.value(utf8.encode(
+            'data: {"candidates":[{"content":{"parts":[{"text":"Half"}]},"finishReason":"FINISH_REASON_UNSPECIFIED"}]}\n\n',
+          )),
+          200,
+          headers: {'content-type': 'text/event-stream'},
+        );
+      }),
+    );
+    geminiCore.addProvider(const ProviderConfig(
+      id: 'g',
+      name: 'Gemini',
+      type: ProviderType.gemini,
+      baseUrl: 'https://example.com',
+      apiKey: 'k',
+    ));
+    const geminiModel = ModelInfo(providerId: 'g', name: 'gemini-pro');
+    geminiCore.registerModel(geminiModel);
+    geminiCore.selectModel(geminiModel.id);
+    await expectLater(
+      geminiCore.streamMessage('hi').toList(),
+      throwsA(isA<ProviderException>()),
+    );
+    geminiCore.close();
+
+    final openaiCore = SaathiCore(
+      client: MockClient.streaming((request, _) async {
+        return http.StreamedResponse(
+          Stream.value(utf8.encode(
+            'data: \n\n'
+            'data: {"choices":[{"delta":{"content":"OK"}}]}\n\n'
+            'data: [DONE]\n\n',
+          )),
+          200,
+          headers: {'content-type': 'text/event-stream'},
+        );
+      }),
+    );
+    openaiCore.addProvider(const ProviderConfig(
+      id: 'o',
+      name: 'OpenAI',
+      type: ProviderType.openai,
+      baseUrl: 'https://example.com',
+      apiKey: 'k',
+    ));
+    const openaiModel = ModelInfo(providerId: 'o', name: 'gpt-4o');
+    openaiCore.registerModel(openaiModel);
+    openaiCore.selectModel(openaiModel.id);
+    final chunks = await openaiCore.streamMessage('hi').toList();
+    expect(chunks.map((c) => c.text).join(), 'OK');
+    openaiCore.close();
+
+    final badJsonCore = SaathiCore(
+      client: MockClient.streaming((request, _) async {
+        return http.StreamedResponse(
+          Stream.value(utf8.encode('data: null\n\ndata: [DONE]\n\n')),
+          200,
+          headers: {'content-type': 'text/event-stream'},
+        );
+      }),
+    );
+    badJsonCore.addProvider(const ProviderConfig(
+      id: 'o2',
+      name: 'OpenAI',
+      type: ProviderType.openai,
+      baseUrl: 'https://example.com',
+      apiKey: 'k',
+    ));
+    const badJsonModel = ModelInfo(providerId: 'o2', name: 'gpt-4o');
+    badJsonCore.registerModel(badJsonModel);
+    badJsonCore.selectModel(badJsonModel.id);
+    await expectLater(
+      badJsonCore.streamMessage('hi').toList(),
+      throwsA(isA<ProviderException>()),
+    );
+    badJsonCore.close();
   });
 }
