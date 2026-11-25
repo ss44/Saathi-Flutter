@@ -636,6 +636,13 @@ class _NewChatPageState extends State<NewChatPage> {
   bool _userEditedModel = false;
   int catalogRevision = 0;
   int? catalogGeneration;
+  Completer<void>? _discoverCancel;
+
+  void _cancelDiscovery() {
+    final cancel = _discoverCancel;
+    _discoverCancel = null;
+    if (cancel != null && !cancel.isCompleted) cancel.complete();
+  }
 
   bool get catalogCurrent =>
       widget.controller.canDiscoverModels &&
@@ -736,6 +743,7 @@ class _NewChatPageState extends State<NewChatPage> {
 
   @override
   void dispose() {
+    _cancelDiscovery();
     widget.controller.removeListener(syncController);
     catalogRevision++;
     model.dispose();
@@ -749,6 +757,9 @@ class _NewChatPageState extends State<NewChatPage> {
         connection?['type'] == 'openclaw') {
       return;
     }
+    _cancelDiscovery();
+    final cancel = Completer<void>();
+    _discoverCancel = cancel;
     final target = connection!;
     catalogGeneration = widget.controller.catalogGeneration;
     final revision = ++catalogRevision;
@@ -766,7 +777,11 @@ class _NewChatPageState extends State<NewChatPage> {
       error = null;
     });
     try {
-      final result = await widget.controller.discover(target, isCurrent: valid);
+      final result = await widget.controller.discover(
+        target,
+        isCurrent: valid,
+        cancelTrigger: cancel.future,
+      );
       if (valid()) {
         setState(() {
           models = result;
