@@ -97,7 +97,8 @@ void main() {
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 
   for (final size in [const Size(390, 844), const Size(1440, 900)]) {
-    testWidgets('mobile has no new contextual interaction at $size', (t) async {
+    testWidgets('mobile exposes unified chat settings safely at $size',
+        (t) async {
       t.view.physicalSize = size;
       t.view.devicePixelRatio = 1;
       addTearDown(t.view.reset);
@@ -105,9 +106,17 @@ void main() {
       await setupChat(c);
       await t.pumpWidget(MaterialApp(home: ChatHome(controller: c)));
       await t.pumpAndSettle();
-      expect(find.byTooltip('Chat settings'), findsNothing);
+      expect(find.byTooltip('Chat settings'), findsOneWidget);
       expect(find.byKey(const Key('chat-settings-panel')), findsNothing);
       expect(find.byTooltip('Send'), findsOneWidget);
+      await t.tap(find.byTooltip('Chat settings'));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('chat-settings-panel')), findsOneWidget);
+      await t.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await t.pumpAndSettle();
+      expect(find.byKey(const Key('chat-settings-panel')), findsNothing);
+      expect(find.byTooltip('Send'), findsOneWidget);
+      expect(c.replyModel(c.current!), 'original');
       await t.pumpWidget(const SizedBox());
       c.dispose();
     }, variant: TargetPlatformVariant.only(TargetPlatform.android));

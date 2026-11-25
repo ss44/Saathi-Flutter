@@ -114,16 +114,20 @@ void main() {
     expect(find.byKey(const Key('chat-settings-panel')), findsNothing);
     expect(t.takeException(), isNull);
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
-  testWidgets('resize retains unsaved settings without adding a mobile surface',
+  testWidgets('resize retains unsaved settings across wide and compact layouts',
       (t) async {
     final c = await openPanel(t);
     await t.enterText(
         find.byKey(const Key('chat-reply-model')), 'unsaved-resize');
     t.view.physicalSize = const Size(390, 844);
     await t.pumpAndSettle();
-    expect(find.byKey(const Key('chat-settings-panel')), findsNothing);
-    expect(find.byTooltip('Chat settings'), findsNothing);
-    expect(find.byTooltip('Settings'), findsOneWidget);
+    expect(find.byKey(const Key('chat-settings-panel')), findsOneWidget);
+    expect(
+        t
+            .widget<TextField>(find.byKey(const Key('chat-reply-model')))
+            .controller!
+            .text,
+        'unsaved-resize');
     expect(c.replyModel(c.current!), 'original-model');
     t.view.physicalSize = const Size(1440, 900);
     await t.pumpAndSettle();
@@ -137,6 +141,10 @@ void main() {
     await t.sendKeyEvent(LogicalKeyboardKey.escape);
     await t.pumpAndSettle();
     expect(find.byKey(const Key('chat-settings-panel')), findsNothing);
+    t.view.physicalSize = const Size(390, 844);
+    await t.pumpAndSettle();
+    expect(find.byTooltip('Chat settings'), findsOneWidget);
+    expect(find.byTooltip('Settings'), findsOneWidget);
     expect(t.takeException(), isNull);
   }, variant: TargetPlatformVariant.only(TargetPlatform.linux));
 

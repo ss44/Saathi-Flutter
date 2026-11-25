@@ -14,10 +14,12 @@ class AdaptiveChatShell extends StatelessWidget {
     required this.onSettingsChanged,
     required this.onDrawerChanged,
     this.chatSettings,
+    this.onChatSettingsDismiss,
   });
 
   final bool wide;
   final Widget? chatSettings;
+  final VoidCallback? onChatSettingsDismiss;
   final GlobalKey<ScaffoldState> scaffoldKey;
   final PreferredSizeWidget appBar;
   final Widget sidebar, body, settings;
@@ -44,26 +46,67 @@ class AdaptiveChatShell extends StatelessWidget {
         ),
       ),
     );
+    if (!wide) {
+      return Stack(
+        children: [
+          ExcludeFocus(
+            excluding: chatSettings != null,
+            child: ExcludeSemantics(
+              excluding: chatSettings != null,
+              child: conversation,
+            ),
+          ),
+          if (chatSettings != null) ...[
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onChatSettingsDismiss,
+                child: const ColoredBox(color: Colors.black54),
+              ),
+            ),
+            Positioned.fill(
+              child: SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    top: 24,
+                    bottom: MediaQuery.viewInsetsOf(context).bottom,
+                  ),
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: Material(
+                      elevation: 8,
+                      clipBehavior: Clip.antiAlias,
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(20),
+                      ),
+                      color: Theme.of(context).colorScheme.surface,
+                      child: SafeArea(top: false, child: chatSettings!),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      );
+    }
+
     final workspace = Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Expanded(child: conversation),
-        if (chatSettings != null)
-          Offstage(
-            offstage: !wide,
-            child: ExcludeFocus(
-              excluding: !wide,
-              child: SizedBox(
-                width: (340 * MediaQuery.textScalerOf(context).scale(1))
-                    .clamp(340, 480)
-                    .toDouble(),
-                child: chatSettings,
-              ),
-            ),
+        if (chatSettings != null) ...[
+          const VerticalDivider(width: 1),
+          SizedBox(
+            width: (340 * MediaQuery.textScalerOf(context).scale(1))
+                .clamp(340, 480)
+                .toDouble(),
+            child: chatSettings,
           ),
+        ],
       ],
     );
-    if (!wide) return workspace;
 
     return PopScope<void>(
       canPop: !showSettings,
