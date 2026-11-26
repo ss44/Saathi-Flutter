@@ -8,6 +8,7 @@ import '../gateway/canonical_chat.dart';
 import '../gateway/hermes_gateway.dart';
 import '../gateway/host_invite.dart';
 import '../agent_runs/run_client.dart';
+import '../agent_runs/run_history_sync.dart';
 import 'transcript_presentation.dart';
 import '../agent_controls/agent_controls.dart';
 
@@ -1122,12 +1123,23 @@ class ChatController extends ChangeNotifier {
   final _streamCursors = <String, BigInt>{};
   final _observationProblems = <String, String>{};
   final _statusFailures = <String, int>{};
+  final _syncReceived = <String>{};
   final _reportedActivity = <String, String>{};
   RunOperation? _dispatchRun;
   Completer<void>? _directCancel;
   ChatSession? _directStreamSession;
   String? _directStreamPreview;
   bool _directStoppedByUser = false;
+
+  bool _needsReceiptSync(RunOperation op) =>
+      !op.committed &&
+      !op.snapshot.terminal &&
+      op.runId == null &&
+      op.data['attempted'] == true;
+
+  int _pollLimit(RunOperation op) =>
+      _needsReceiptSync(op) && _syncReceived.contains(op.key) ? 6 : 3;
+
   bool get _directStreaming =>
       busy && _directCancel != null && !_directCancel!.isCompleted;
 
@@ -1191,20 +1203,25 @@ class ChatController extends ChangeNotifier {
     if (op == null) return busy && identical(_dispatchingSession, current);
     if (op.snapshot.terminal || _awaitingRunDecision) return false;
     if (busy && identical(_dispatchingSession, current)) return true;
+    final failures = _statusFailures[op.key] ?? 0;
+    final limit = _pollLimit(op);
     return runPending &&
         (op.snapshot.state == RunState.queued ||
             op.snapshot.state == RunState.running ||
-            (_statusFailures[op.key] ?? 0) > 0) &&
-        (_statusFailures[op.key] ?? 0) <= 3;
+            _needsReceiptSync(op) ||
+            failures > 0) &&
+        failures <= limit;
   }
 
-  bool _canPoll(RunOperation op) =>
-      !op.committed &&
-      op.runId != null &&
-      !op.snapshot.terminal &&
-      (op.snapshot.state != RunState.unknown ||
-          (_statusFailures[op.key] ?? 0) > 0) &&
-      (_statusFailures[op.key] ?? 0) <= 3;
+  bool _canPoll(RunOperation op) {
+    if (op.committed || op.snapshot.terminal) return false;
+    final failures = _statusFailures[op.key] ?? 0;
+    if (failures > _pollLimit(op)) return false;
+    if (op.runId != null) {
+      return op.snapshot.state != RunState.unknown || failures > 0;
+    }
+    return op.data['attempted'] == true;
+  }
 
   void _statusUnavailable(ChatSession session, RunOperation op) {
     final failures = (_statusFailures[op.key] ?? 0) + 1;
@@ -1219,13 +1236,54 @@ class ChatController extends ChangeNotifier {
     _schedulePoll();
   }
 
+  void _syncUnavailable(
+    ChatSession session,
+    RunOperation op, {
+    bool receivedOnServer = false,
+    bool manual = false,
+  }) {
+    if (receivedOnServer) {
+      final newlyConfirmed = _syncReceived.add(op.key);
+      final previous = _statusFailures[op.key] ?? 0;
+      final limit = _pollLimit(op);
+      final failures =
+          newlyConfirmed || (manual && previous > limit) ? 1 : previous + 1;
+      _statusFailures[op.key] = failures;
+      if (failures <= limit) {
+        _observationProblems[op.key] =
+            'Message received. Refreshing chat for your reply';
+        _recoveryPauses[session] =
+            'Syncing your reply before queued messages continue.';
+      } else {
+        _observationProblems[op.key] =
+            'Message received, but the reply is not ready yet. Tap Refresh to sync again; your message will not be sent again.';
+        _recoveryPauses[session] =
+            'Sync your reply before resuming queued messages.';
+      }
+    } else {
+      final failures = (_statusFailures[op.key] ?? 0) + 1;
+      _statusFailures[op.key] = failures;
+      if (failures <= _pollLimit(op)) {
+        _observationProblems[op.key] = 'Refreshing chat to sync your reply';
+        _recoveryPauses[session] =
+            'Syncing your reply before queued messages continue.';
+      } else {
+        _observationProblems[op.key] =
+            'Could not sync your reply yet. Tap Refresh to sync again; your message will not be sent again.';
+        _recoveryPauses[session] =
+            'Sync your reply before resuming queued messages.';
+      }
+    }
+    _schedulePoll();
+  }
+
   String? get runObservationProblem => _observationProblems[currentRun?.key];
 
   // Only call after a validated original-run status GET, never a control ACK.
   // Recovery belongs to the existing poll owner, not to the UI that read it.
   void _statusObserved(RunOperation op, {required bool Function() isCurrent}) {
     if (!isCurrent()) throw StateError('Stale observation');
-    if (op.snapshot.data.containsKey('pending_controls')) {
+    if (op.runId != null && op.snapshot.data.containsKey('pending_controls')) {
       final controls = PendingControlsSnapshot.fromJson(
         ControlScope(
           sourceId: op.localId,
@@ -1241,6 +1299,7 @@ class ChatController extends ChangeNotifier {
       }
     }
     _statusFailures.remove(op.key);
+    _syncReceived.remove(op.key);
     _observationProblems.remove(op.key);
     // This does not grant dispatch authority or remove intentional queue pauses.
     _schedulePoll();
@@ -1256,10 +1315,17 @@ class ChatController extends ChangeNotifier {
           : _awaitingRunDecision
               ? 'Your decision is needed'
               : runObservationProblem != null
-                  ? ((_statusFailures[currentRun?.key] ?? 0) <= 3 &&
-                          currentRun?.runId != null
-                      ? 'Reconnecting to check your reply'
-                      : 'Check your message’s status')
+                  ? ((_statusFailures[currentRun?.key] ?? 0) <=
+                              (currentRun == null
+                                  ? 3
+                                  : _pollLimit(currentRun!)) &&
+                          (currentRun?.runId != null ||
+                              (currentRun != null &&
+                                  _needsReceiptSync(currentRun!)))
+                      ? runObservationProblem!
+                      : currentRun != null && _needsReceiptSync(currentRun!)
+                          ? 'Refresh chat to sync your reply'
+                          : 'Check your message’s status')
                   : switch (currentRun?.snapshot.state) {
                       RunState.queued => 'Waiting for its turn',
                       RunState.running => 'Working on your reply',
@@ -2056,10 +2122,14 @@ class ChatController extends ChangeNotifier {
       for (final op in runs.values) {
         if (!op.committed &&
             !op.snapshot.terminal &&
-            op.runId != null &&
-            (_statusFailures[op.key] ?? 0) > 3) {
+            (op.runId != null || op.data['attempted'] == true) &&
+            (_statusFailures[op.key] ?? 0) > _pollLimit(op)) {
           _statusFailures[op.key] = 1;
-          _observationProblems[op.key] = 'Reconnecting to check your reply';
+          _observationProblems[op.key] = op.runId != null
+              ? 'Reconnecting to check your reply'
+              : _syncReceived.contains(op.key)
+                  ? 'Message received. Refreshing chat for your reply'
+                  : 'Refreshing chat to sync your reply';
         }
       }
     }
@@ -2087,13 +2157,13 @@ class ChatController extends ChangeNotifier {
         .where(_canPoll)
         .map((op) => _statusFailures[op.key] ?? 0)
         .reduce((a, b) => a < b ? a : b);
-    _poll =
-        Timer(Duration(seconds: failures == 0 ? 2 : 1 << failures), () async {
+    final delaySeconds = failures == 0 ? 2 : min(1 << failures, 8);
+    _poll = Timer(Duration(seconds: delaySeconds), () async {
       for (final session in sessions.toList()) {
         if (_runsPaused || _disposed) break;
         final op = runs[session.id];
         if (op != null && _canPoll(op)) {
-          await checkRunStatus(sessionId: session.id);
+          await checkRunStatus(sessionId: session.id, automatic: true);
         }
       }
       _schedulePoll();
@@ -2154,8 +2224,11 @@ class ChatController extends ChangeNotifier {
   Future<void> _reconcile(
     ChatSession session,
     Map<String, dynamic> connection,
-    RunOperation op,
-  ) async {
+    RunOperation op, {
+    String? inputMessageId,
+    String? replyMessageId,
+    DateTime? replyTimestamp,
+  }) async {
     final generation = _runsGeneration;
     bool isCurrent() =>
         generation == _runsGeneration && _active(session, connection, op);
@@ -2165,6 +2238,8 @@ class ChatController extends ChangeNotifier {
       _streamText.remove(op.key);
       _streamCursors.remove(op.key);
       _observationProblems.remove(op.key);
+      _statusFailures.remove(op.key);
+      _syncReceived.remove(op.key);
     }
     if (!_runUpdates.isClosed) _runUpdates.add(snapshot);
     if (!_scopedRunUpdates.isClosed) {
@@ -2204,19 +2279,24 @@ class ChatController extends ChangeNotifier {
       final marker = 'run-${op.key}';
       if (!session.messages.any((m) => m.id == marker)) {
         final now = DateTime.now().toUtc().toIso8601String();
+        final replyIso = replyTimestamp?.toUtc().toIso8601String() ?? now;
         session.messages.addAll([
           ChatMessage(
             role: 'user',
             content: op.input,
             id: 'input-${op.key}',
-            metadata: {'timestamp': now},
+            metadata: {
+              'timestamp': now,
+              if (inputMessageId != null) 'serverMessageId': inputMessageId,
+            },
           ),
           ChatMessage(
             role: 'model',
             content: snapshot.output,
             id: marker,
             metadata: {
-              'timestamp': now,
+              'timestamp': replyIso,
+              if (replyMessageId != null) 'serverMessageId': replyMessageId,
               if (snapshot.output.trim().isNotEmpty)
                 'authoritativeCompletion': true,
             },
@@ -2276,9 +2356,127 @@ class ChatController extends ChangeNotifier {
     if (isCurrent()) notifyListeners();
   }
 
+  /// Refreshes server session history for an attempted run whose admission ACK
+  /// was lost, matching the pending input by string match to recover a missing
+  /// run ID or completed reply without ever resending the prompt.
+  ///
+  /// Returns `true` when a valid `run_id` was recovered while the reply is
+  /// still in progress so the caller can immediately poll `/v1/runs/{run_id}`.
+  Future<bool> _syncAttemptedRun(
+    ChatSession session,
+    Map<String, dynamic> connection,
+    RunOperation op,
+    RunClient client, {
+    required bool Function() isCurrent,
+    required bool manual,
+  }) async {
+    final rows = <Map<String, dynamic>>[];
+    final seen = <Object>{};
+    var offset = 0;
+    for (var pages = 0;; pages++) {
+      if (pages == 256) {
+        throw StateError('History exceeds the bounded sync window');
+      }
+      final page = await client.sessionMessages(
+        op,
+        offset: offset,
+        isCurrent: isCurrent,
+      );
+      if (!isCurrent() || page.sessionId != op.sessionId) {
+        throw StateError('Session identity changed');
+      }
+      final pagination = page.pagination;
+      final returned = pagination['returned'] as int? ?? page.messages.length;
+      final limit = pagination['limit'] as int? ?? 100;
+      for (final row in page.messages) {
+        final id = row['id'];
+        if (id is! String && id is! int || seen.add(id!)) rows.add(row);
+      }
+      offset += returned;
+      final more = pagination['has_more'];
+      if (returned == 0 || (more is bool ? !more : returned < limit)) break;
+    }
+    if (!isCurrent()) return false;
+    final match = matchAttemptedRunInHistory(
+      existingMessages: session.messages,
+      pendingInput: op.input,
+      rawRows: rows,
+    );
+    switch (match.status) {
+      case RunHistorySyncStatus.matchedReply:
+        if (match.recoveredRunId != null && op.runId == null) {
+          op.data['run'] = match.recoveredRunId;
+        }
+        if (match.precedingMessages.isNotEmpty) {
+          session.messages.addAll(match.precedingMessages);
+        }
+        op.data['snapshot'] = {
+          if (op.runId != null) 'run_id': op.runId,
+          'status': 'completed',
+          'output': match.replyText!,
+        };
+        try {
+          await _ledger.save(op, isCurrent: isCurrent);
+        } catch (_) {
+          // A durability failure must not discard the answer already synced.
+          op.data['journalDirty'] = true;
+        }
+        if (!isCurrent()) return false;
+        _statusObserved(op, isCurrent: isCurrent);
+        await _reconcile(
+          session,
+          connection,
+          op,
+          inputMessageId: match.matchedUserMessageId,
+          replyMessageId: match.matchedReplyMessageId,
+          replyTimestamp: match.replyTimestamp,
+        );
+        if (match.trailingMessages.isNotEmpty &&
+            isCurrent() &&
+            op.committed &&
+            !unsavedChanges) {
+          session.messages.addAll(match.trailingMessages);
+          try {
+            await persist();
+          } catch (_) {
+            if (!isCurrent()) return false;
+            unsavedChanges = true;
+            error =
+                'Updated history could not be saved. Try saving again; nothing was sent.';
+          }
+        }
+        return false;
+      case RunHistorySyncStatus.matchedUserPending:
+        if (match.recoveredRunId != null && op.runId == null) {
+          op.data['run'] = match.recoveredRunId;
+          await _ledger.save(op, isCurrent: isCurrent);
+          if (!isCurrent()) return false;
+          _syncReceived.remove(op.key);
+          return true;
+        }
+        _syncUnavailable(
+          session,
+          op,
+          receivedOnServer: true,
+          manual: manual,
+        );
+        return false;
+      case RunHistorySyncStatus.notFound:
+      case RunHistorySyncStatus.diverged:
+        _syncUnavailable(
+          session,
+          op,
+          receivedOnServer: false,
+          manual: manual,
+        );
+        return false;
+    }
+  }
+
   Future<void> checkRunStatus({
     String? sessionId,
     bool acknowledgeUnknown = false,
+    bool automatic = false,
   }) async {
     if (_disposed || _runsPaused || busy) return;
     final session =
@@ -2298,7 +2496,7 @@ class ChatController extends ChangeNotifier {
         if (op.data['authorityEpoch'] == c['authorityEpoch']) return true;
         const problem =
             'This reply belongs to a removed or replaced connection. Nothing was sent again.';
-        _statusFailures[op.key] = 4;
+        _statusFailures[op.key] = _pollLimit(op) + 1;
         _observationProblems[op.key] = problem;
         _recoveryPauses[session] = problem;
         if (identical(current, session)) error = problem;
@@ -2319,13 +2517,20 @@ class ChatController extends ChangeNotifier {
       _rememberRunFeatures(c, client);
       if (op.runId == null) {
         if (op.data['attempted'] == true) {
-          _observationProblems[op.key] =
-              'Could not confirm receipt of your message. This server cannot look it up without its reply ID. Check the original session; nothing will be sent again.';
-          return;
+          final recoveredRunId = await _syncAttemptedRun(
+            session,
+            c,
+            op,
+            client,
+            isCurrent: isCurrent,
+            manual: !automatic,
+          );
+          if (!recoveredRunId || !isCurrent()) return;
+        } else {
+          // A prepared operation that provably never reached dispatch may still
+          // be sent by an explicit user action. Uncertain sends never are.
+          await client.submit(op, _ledger, isCurrent: isCurrent);
         }
-        // A prepared operation that provably never reached dispatch may still
-        // be sent by an explicit user action. Uncertain sends never are.
-        await client.submit(op, _ledger, isCurrent: isCurrent);
       }
       if (op.runId != null) {
         if (acknowledgeUnknown) {
@@ -2347,7 +2552,7 @@ class ChatController extends ChangeNotifier {
         await _reconcile(session, c, op);
       }
       error ??= op.runId == null
-          ? 'Admission saved; outcome unknown. Reconnect without sending again.'
+          ? 'Admission saved; outcome unknown. Refresh without sending again.'
           : null;
     } catch (_) {
       final connection =
@@ -2366,9 +2571,11 @@ class ChatController extends ChangeNotifier {
       }
       if (op.runId != null) {
         _statusUnavailable(session, op);
+      } else if (op.data['attempted'] == true) {
+        _syncUnavailable(session, op, manual: !automatic);
       } else {
         _observationProblems[op.key] =
-            'Could not confirm receipt of your message. Keep the original connection; nothing was sent again.';
+            'Could not reach the server to send your message. Keep the original connection and try again.';
       }
     } finally {
       client?.close();
@@ -3253,9 +3460,11 @@ class ChatController extends ChangeNotifier {
         final op = runs[session.id]!;
         if (op.runId != null && !op.snapshot.terminal) {
           _statusUnavailable(session, op);
+        } else if (op.data['attempted'] == true) {
+          _syncUnavailable(session, op);
         } else {
           _observationProblems[op.key] =
-              'Could not confirm receipt of your message. Check the original session; your message will not be sent again.';
+              'Could not reach the server to send your message. Keep the original connection and try again.';
           _paused[session] =
               'Check your message before resuming queued messages.';
         }

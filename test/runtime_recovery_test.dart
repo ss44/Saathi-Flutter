@@ -226,16 +226,21 @@ void main() {
     expect(await store.secrets.read(journalKey), journal);
     f.completed = true;
     // Policy reconciliation: the old second-identical-POST assertion did not
-    // prove single execution. Runs has no read-only key lookup; no run ID means
-    // retain uncertainty, even when the peer now has a completed response.
+    // prove single execution. Runs refreshes read-only session history to match
+    // the missing message without resending; when the server history does not
+    // contain the turn, uncertainty and exact journal bytes are retained.
     expect(c.submit('held follower'), isTrue);
-    for (var i = 0; i < 3; i++) {
+    for (var i = 0; i < 4; i++) {
       await c.checkRunStatus();
       expect(c.runPending, isTrue);
       expect(c.currentRun!.runId, isNull);
       expect(c.currentRun!.committed, isFalse);
-      expect(c.showPendingThinking, isFalse);
-      expect(c.runObservationProblem, contains('without its reply ID'));
+      expect(c.showPendingThinking, i < 3);
+      expect(
+          c.runObservationProblem,
+          i < 3
+              ? contains('Refreshing chat')
+              : contains('Tap Refresh to sync again'));
       expect(c.currentRun!.data, operationData);
       expect(await store.secrets.read(journalKey), journal);
     }

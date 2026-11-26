@@ -131,7 +131,7 @@ void main() {
         expect(controller.connections.single, originalSource);
         expect(controller.currentRun!.data, operation);
         expect(await controller.send('new work'), isFalse);
-        for (var check = 0; check < 3; check++) {
+        for (var check = 0; check < 4; check++) {
           await controller.checkRunStatus();
         }
       });
@@ -149,6 +149,10 @@ void main() {
         tester.binding.handleAppLifecycleStateChanged(state);
       }
       await tester.pump(const Duration(seconds: 30));
+      for (var i = 0; i < 4; i++) {
+        await tester.runAsync(() => controller.checkRunStatus());
+      }
+      await tester.pump();
       await tester.runAsync(() async {
         expect(await secrets.read(journalKey), rawJournal);
       });
@@ -159,9 +163,8 @@ void main() {
       expect(controller.showPendingThinking, isFalse);
       expect(controller.current!.messages, isEmpty);
       expect(controller.pendingText, 'original');
-      expect(
-          controller.runObservationProblem, contains('without its reply ID'));
-      expect(find.textContaining('without its reply ID'), findsOneWidget);
+      expect(controller.runObservationProblem, contains('Tap Refresh'));
+      expect(find.textContaining('Tap Refresh'), findsOneWidget);
       expect(find.byType(BusyThinking), findsNothing);
       expect(find.text('actual'), findsNothing);
       expect(requests.where((r) => r.url.path.startsWith('/v1/runs/')), isEmpty,
