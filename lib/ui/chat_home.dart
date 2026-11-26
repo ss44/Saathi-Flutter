@@ -191,6 +191,19 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   int scrollRevision = 0;
   ChatController? shownOwner;
   int? shownSelection;
+  final Map<ConversationIdentity, String> _drafts = {};
+  ConversationIdentity? _draftOwner;
+  final GlobalKey<TooltipState> _sendTooltipKey = GlobalKey<TooltipState>();
+
+  void _saveCurrentDraft() {
+    final owner = _draftOwner;
+    if (owner == null) return;
+    if (composer.text.isEmpty) {
+      _drafts.remove(owner);
+    } else {
+      _drafts[owner] = composer.text;
+    }
+  }
 
   final _messageKeys = <(String, String), GlobalKey>{};
   List<String> _shownMessageIds = [];
@@ -333,7 +346,24 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
     if (selectionChanged) {
       desktopSettings = false;
       settingsSession = null;
-      if (shownOwner != null) composer.clear();
+      final nextSession = c.current;
+      final nextIdentity =
+          nextSession == null ? null : c.identityOf(nextSession);
+      if (shownOwner != null) {
+        if (identical(shownOwner, c)) {
+          _saveCurrentDraft();
+        } else {
+          _drafts.clear();
+          _draftOwner = null;
+        }
+        final restored =
+            nextIdentity == null ? '' : (_drafts[nextIdentity] ?? '');
+        composer.value = TextEditingValue(
+          text: restored,
+          selection: TextSelection.collapsed(offset: restored.length),
+        );
+      }
+      _draftOwner = nextIdentity;
       shownOwner = c;
       shownSelection = c.selectionGeneration;
       followStream = false;
@@ -407,7 +437,6 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
     if (session == null) return;
     setState(() {
       c.select(session);
-      composer.clear();
     });
   }
 
@@ -438,16 +467,16 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
     final accepted = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Acknowledge unknown outcome?'),
+        title: const Text('Mark status as stopped?'),
         content: const Text(
-          'Prior work may already have had side effects. This marks the lost execution interrupted; it does not undo or repeat its work.',
+          'Prior work may already have had side effects. This marks the lost run as stopped; it does not undo or repeat that work.',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
             child: const Text('Keep checking'),
           ),
-          TextButton(
+          FilledButton(
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Acknowledge'),
           ),
@@ -552,23 +581,27 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
     if (c.connections.isEmpty) {
       await Navigator.push(
         context,
-        MaterialPageRoute<void>(builder: (_) => ConnectionsPage(controller: c)),
+        MaterialPageRoute<void>(
+            builder: (_) => AddConnectionPage(controller: c)),
       );
       if (!mounted || c.connections.isEmpty) return;
     }
     if (mounted) {
       await Navigator.push(
         context,
-        MaterialPageRoute<void>(builder: (_) => NewChatPage(controller: c)),
+        MaterialPageRoute<void>(
+          builder: (_) => NewChatPage(controller: c, autoDiscover: true),
+        ),
       );
     }
-    if (mounted) setState(() => composer.clear());
+    if (mounted) setState(() {});
   }
 
   Future<void> send() async {
     final text = composer.text.trim();
     if (c.submit(text)) {
       followStream = true;
+      if (_draftOwner != null) _drafts.remove(_draftOwner);
       composer.clear();
       followOutput(newInput: true);
     }
@@ -598,9 +631,18 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
       ),
     );
     if (confirmed == true) {
+      final deleted = c.current == null ? null : c.identityOf(c.current!);
       try {
         await c.clear();
-        composer.clear();
+        final currentIdentity =
+            c.current == null ? null : c.identityOf(c.current!);
+        if (deleted != null && deleted != currentIdentity) {
+          _drafts.remove(deleted);
+        }
+        if (mounted && c.current == null) {
+          _draftOwner = null;
+          composer.clear();
+        }
       } catch (_) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -627,6 +669,29 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
             });
           }
           final thinking = c.showPendingThinking;
+          final transcriptShowsPendingStatus = thinking &&
+              (c.streamingText?.isEmpty ?? true) &&
+              (defaultTargetPlatform != TargetPlatform.android ||
+                  c.runObservationProblem != null);
+          final showObservationBanner = c.runObservationProblem != null &&
+              !(transcriptShowsPendingStatus &&
+                  c.runObservationProblem == c.pendingStatus);
+          final hasFeedbackBanners = c.queueStatus != null ||
+              c.uncertainInput != null ||
+              c.readOnly ||
+              c.error != null ||
+              showObservationBanner ||
+              c.unsavedChanges ||
+              c.organizationProblem != null ||
+              c.canonical != null;
+          final hideRunBarStatus = transcriptShowsPendingStatus ||
+              c.runObservationProblem == c.pendingStatus ||
+              (defaultTargetPlatform == TargetPlatform.android &&
+                  const {
+                    'Sending your message',
+                    'Waiting for its turn',
+                    'Working on your reply',
+                  }.contains(c.pendingStatus));
           final localMatches = searchLocalHistory(
             c.orderedSessions().where(
                   (s) =>
@@ -677,9 +742,13 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                           key: chatSettingsKey,
                           controller: c,
                           session: session!,
+                          isModal: !wide,
                           onClose: () => setChatSettings(null),
                         )
                       : null,
+              onChatSettingsDismiss: () {
+                if (!c.organization.saving) setChatSettings(null);
+              },
               onDrawerChanged: (open) {
                 setState(() {
                   drawerOpen = open;
@@ -729,16 +798,12 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                   ],
                 ),
                 actions: [
-                  if (wide &&
-                      session != null &&
-                      {
-                        TargetPlatform.linux,
-                        TargetPlatform.macOS,
-                        TargetPlatform.windows
-                      }.contains(Theme.of(context).platform))
+                  if (session != null)
                     TextFieldTapRegion(
                       child: IconButton(
                         tooltip: 'Chat settings',
+                        constraints:
+                            const BoxConstraints(minWidth: 48, minHeight: 48),
                         onPressed: () => setChatSettings(session),
                         icon: const Icon(Icons.tune_rounded),
                       ),
@@ -746,7 +811,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                   if (!wide)
                     IconButton(
                       tooltip: 'New conversation',
-                      onPressed: c.busy ? null : newChat,
+                      onPressed: c.canStartNewSession ? newChat : null,
                       icon: const Icon(Icons.add_rounded),
                     ),
                   if (!wide)
@@ -760,7 +825,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                           builder: (_) => ConnectionsPage(controller: c),
                         ),
                       ),
-                      icon: const Icon(Icons.tune_rounded),
+                      icon: const Icon(Icons.settings_outlined),
                     ),
                   if (session != null)
                     IconButton(
@@ -799,7 +864,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 16),
                           child: FilledButton.icon(
-                            onPressed: c.busy
+                            onPressed: !c.canStartNewSession
                                 ? null
                                 : () {
                                     if (!wide) Navigator.pop(context);
@@ -969,8 +1034,9 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                   child: session == null ||
                                           session.messages.isEmpty &&
                                               c.pendingText == null &&
+                                              c.outbox.isEmpty &&
                                               !thinking &&
-                                              !c.busy
+                                              (c.streamingText?.isEmpty ?? true)
                                       ? Center(
                                           child: SingleChildScrollView(
                                             padding: const EdgeInsets.all(32),
@@ -1063,8 +1129,15 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                           '${session.id}-$i'),
                                                       activityText:
                                                           precedingHistoryActivity(
-                                                              session.messages,
-                                                              i),
+                                                                session
+                                                                    .messages,
+                                                                i,
+                                                              ) ??
+                                                              (session.messages[i]
+                                                                          .metadata['stoppedByUser'] ==
+                                                                      true
+                                                                  ? 'Activity · Stopped before completion\nPartial reply kept. Nothing was resent.'
+                                                                  : null),
                                                       text: session
                                                           .messages[i].content,
                                                       user: session.messages[i]
@@ -1195,14 +1268,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                           ),
                                         ),
                                 ),
-                                if (c.queueStatus != null ||
-                                    c.uncertainInput != null ||
-                                    c.readOnly ||
-                                    c.error != null ||
-                                    c.runObservationProblem != null ||
-                                    c.unsavedChanges ||
-                                    c.organizationProblem != null ||
-                                    c.canonical != null)
+                                if (hasFeedbackBanners)
                                   ConstrainedBox(
                                     // Feedback scrolls within a bounded share of the body;
                                     // short feedback gives its unused space to the transcript.
@@ -1217,172 +1283,268 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                       ),
                                       children: [
                                         if (c.canonical != null)
-                                          Padding(
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 16),
-                                            child: Row(
+                                          _FeedbackBanner(
+                                            tone: c.canonical!.problem !=
+                                                        null &&
+                                                    !c.canonical!.reconciling
+                                                ? _FeedbackTone.notice
+                                                : _FeedbackTone.neutral,
+                                            icon: c.canonical!.problem !=
+                                                        null &&
+                                                    !c.canonical!.reconciling
+                                                ? Icons.warning_amber_rounded
+                                                : Icons.link,
+                                            body: Text(
+                                              (c.canonical!.reconciling
+                                                      ? c.canonical!
+                                                          .pendingStatus
+                                                      : c.canonical!.problem) ??
+                                                  (c.runPending &&
+                                                          !(transcriptShowsPendingStatus &&
+                                                              c.canonical!
+                                                                      .pendingStatus ==
+                                                                  c.pendingStatus)
+                                                      ? c.canonical!.pendingStatus
+                                                      : 'Attached to Hermes'),
+                                            ),
+                                            trailing: IconButton(
+                                              tooltip: 'Resync Hermes session',
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              icon: const Icon(Icons.sync),
+                                              onPressed: c.refreshCanonical,
+                                            ),
+                                          ),
+                                        if (c.queueStatus != null ||
+                                            c.uncertainInput != null)
+                                          _FeedbackBanner(
+                                            tone: _FeedbackTone.notice,
+                                            icon: c.uncertainInput != null
+                                                ? Icons.warning_amber_rounded
+                                                : Icons.pause_circle_outline,
+                                            body: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              mainAxisSize: MainAxisSize.min,
                                               children: [
-                                                Expanded(
-                                                  child: Text(
-                                                    (c.canonical!.reconciling
-                                                            ? c.canonical!
-                                                                .pendingStatus
-                                                            : c.canonical!
-                                                                .problem) ??
-                                                        (c.runPending
-                                                            ? c.canonical!
-                                                                .pendingStatus
-                                                            : 'Attached to Hermes'),
+                                                if (c.queueStatus != null)
+                                                  Text(c.queueStatus!),
+                                                if (c.uncertainInput != null)
+                                                  Padding(
+                                                    padding: EdgeInsets.only(
+                                                      top: c.queueStatus != null
+                                                          ? 4
+                                                          : 0,
+                                                    ),
+                                                    child: SelectableText(
+                                                      'Not sent again: ${c.uncertainInput!.text}',
+                                                    ),
                                                   ),
-                                                ),
-                                                IconButton(
-                                                  tooltip:
-                                                      'Resync Hermes session',
-                                                  icon: const Icon(Icons.sync),
-                                                  onPressed: c.refreshCanonical,
-                                                ),
                                               ],
                                             ),
-                                          ),
-                                        if (c.queueStatus != null)
-                                          Text(c.queueStatus!),
-                                        if (c.canResumeQueue &&
-                                            c.queueStatus != null)
-                                          TextButton(
-                                            onPressed: c.resumeQueue,
-                                            child: const Text('Resume queue'),
-                                          ),
-                                        if (c.uncertainInput != null)
-                                          SelectableText(
-                                            'Not sent again: ${c.uncertainInput!.text}',
-                                          ),
-                                        if (c.uncertainInput != null)
-                                          TextButton(
-                                            child: const Text(
-                                              'Abandon held outbox',
-                                            ),
-                                            onPressed: () async {
-                                              final source =
-                                                  c.uncertainInput!.session;
-                                              final confirmed =
-                                                  await showDialog<bool>(
-                                                context: context,
-                                                builder: (context) =>
-                                                    AlertDialog(
-                                                  scrollable: true,
-                                                  title: const Text(
-                                                    'Discard held recovery input?',
-                                                  ),
-                                                  content: const Text(
-                                                    'This removes the retained input and ALL queued followers for this conversation only. Nothing will be resent. If a request was dispatched, it may have executed: discarding does not stop the server or establish its outcome. You can instead keep this blocked and start a new conversation.',
-                                                  ),
-                                                  actions: [
-                                                    TextButton(
-                                                      onPressed: () =>
-                                                          Navigator.pop(
-                                                        context,
-                                                        false,
-                                                      ),
-                                                      child: const Text(
-                                                        'Keep blocked',
-                                                      ),
+                                            actions: [
+                                              if (c.canResumeQueue &&
+                                                  c.queueStatus != null)
+                                                FilledButton.tonal(
+                                                  style: FilledButton.styleFrom(
+                                                    visualDensity:
+                                                        VisualDensity.compact,
+                                                    tapTargetSize:
+                                                        MaterialTapTargetSize
+                                                            .shrinkWrap,
+                                                    minimumSize:
+                                                        const Size(0, 32),
+                                                    padding: const EdgeInsets
+                                                        .symmetric(
+                                                      horizontal: 12,
+                                                      vertical: 4,
                                                     ),
-                                                    TextButton(
-                                                      onPressed: () =>
-                                                          Navigator.pop(
-                                                        context,
-                                                        true,
-                                                      ),
-                                                      child: const Text(
-                                                        'Abandon all',
-                                                      ),
-                                                    ),
-                                                  ],
+                                                  ),
+                                                  onPressed: c.resumeQueue,
+                                                  child: const Text(
+                                                    'Resume queue',
+                                                  ),
                                                 ),
-                                              );
-                                              if (confirmed == true) {
-                                                await c
-                                                    .abandonHeldOutbox(source);
-                                              }
-                                            },
+                                              if (c.uncertainInput != null)
+                                                OutlinedButton(
+                                                  style:
+                                                      OutlinedButton.styleFrom(
+                                                    foregroundColor:
+                                                        Theme.of(context)
+                                                            .colorScheme
+                                                            .error,
+                                                    visualDensity:
+                                                        VisualDensity.compact,
+                                                    tapTargetSize:
+                                                        MaterialTapTargetSize
+                                                            .shrinkWrap,
+                                                    minimumSize:
+                                                        const Size(0, 32),
+                                                    padding: const EdgeInsets
+                                                        .symmetric(
+                                                      horizontal: 12,
+                                                      vertical: 4,
+                                                    ),
+                                                  ),
+                                                  child: const Text(
+                                                    'Abandon held outbox',
+                                                  ),
+                                                  onPressed: () async {
+                                                    final source = c
+                                                        .uncertainInput!
+                                                        .session;
+                                                    final confirmed =
+                                                        await showDialog<bool>(
+                                                      context: context,
+                                                      builder: (context) =>
+                                                          AlertDialog(
+                                                        scrollable: true,
+                                                        title: const Text(
+                                                          'Discard held messages?',
+                                                        ),
+                                                        content: const Text(
+                                                          'This clears the held message and all queued follow-ups in this conversation only. Nothing will be sent again. If a request already reached the server, discarding does not stop the server or confirm its result. You can keep this paused and start a new conversation instead.',
+                                                        ),
+                                                        actions: [
+                                                          TextButton(
+                                                            onPressed: () =>
+                                                                Navigator.pop(
+                                                              context,
+                                                              false,
+                                                            ),
+                                                            child: const Text(
+                                                              'Keep blocked',
+                                                            ),
+                                                          ),
+                                                          FilledButton(
+                                                            onPressed: () =>
+                                                                Navigator.pop(
+                                                              context,
+                                                              true,
+                                                            ),
+                                                            child: const Text(
+                                                              'Abandon all',
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    );
+                                                    if (confirmed == true) {
+                                                      await c.abandonHeldOutbox(
+                                                        source,
+                                                      );
+                                                    }
+                                                  },
+                                                ),
+                                            ],
                                           ),
                                         if (c.readOnly &&
                                             names.firstOrNull?['type'] ==
-                                                'hermesGateway') ...[
-                                          Padding(
-                                            padding: const EdgeInsets.all(16),
-                                            child: Text(session
-                                                        ?.canonicalProfileId ==
-                                                    null
-                                                ? 'This saved conversation has no verified host profile. Connect through Hermes Desktop / CLI and select the authorized session. Its old history will not be reassigned.'
-                                                : 'Reconnect to this conversation’s original Hermes host with a fresh invite. Nothing will be resent.'),
-                                          ),
-                                          if (session?.canonicalProfileId !=
-                                              null)
-                                            TextButton(
-                                              onPressed: !c.canChangeConnections
-                                                  ? null
-                                                  : () => Navigator.push(
-                                                        context,
-                                                        CanonicalConnectionRoute<
-                                                                void>(
-                                                            builder: (_) =>
-                                                                CanonicalConnectionPage(
-                                                                  controller: c,
-                                                                  connection:
-                                                                      names
-                                                                          .first,
-                                                                  targetSession:
-                                                                      session,
-                                                                )),
-                                                      ),
-                                              child: const Text(
-                                                  'Reconnect to original host'),
+                                                'hermesGateway')
+                                          _FeedbackBanner(
+                                            tone: _FeedbackTone.neutral,
+                                            icon: Icons.lock_outline,
+                                            body: Text(
+                                              session?.canonicalProfileId ==
+                                                      null
+                                                  ? 'This saved chat has no verified host profile. Connect through Hermes Desktop / CLI and choose the authorized session. Old history will not be moved.'
+                                                  : 'Reconnect to this chat’s original Hermes host with a fresh invite. Nothing will be sent again.',
                                             ),
-                                        ] else if (c.readOnly)
-                                          const Padding(
-                                            padding: EdgeInsets.all(16),
-                                            child: Text(
+                                            actions: [
+                                              if (session?.canonicalProfileId !=
+                                                  null)
+                                                TextButton(
+                                                  onPressed: !c
+                                                          .canChangeConnections
+                                                      ? null
+                                                      : () => Navigator.push(
+                                                            context,
+                                                            CanonicalConnectionRoute<
+                                                                void>(
+                                                              builder: (_) =>
+                                                                  CanonicalConnectionPage(
+                                                                controller: c,
+                                                                connection:
+                                                                    names.first,
+                                                                targetSession:
+                                                                    session,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                  child: const Text(
+                                                    'Reconnect to original host',
+                                                  ),
+                                                ),
+                                            ],
+                                          )
+                                        else if (c.readOnly)
+                                          const _FeedbackBanner(
+                                            tone: _FeedbackTone.neutral,
+                                            icon: Icons.lock_outline,
+                                            body: Text(
                                               'Read-only · This connection was removed or changed. Start a new conversation to send messages.',
                                             ),
                                           ),
-                                        if (c.runObservationProblem != null)
-                                          Text(c.runObservationProblem!),
-                                        if (c.organizationProblem != null) ...[
-                                          Text(c.organizationProblem!),
-                                          TextButton(
-                                            onPressed: c.organization.saving
-                                                ? null
-                                                : c.retryOrganizationSave,
-                                            child: const Text(
-                                              'Try saving details again',
+                                        if (showObservationBanner)
+                                          _FeedbackBanner(
+                                            tone: _FeedbackTone.notice,
+                                            icon: Icons.sync_problem_outlined,
+                                            body: Text(
+                                              c.runObservationProblem!,
                                             ),
                                           ),
-                                        ],
-                                        if (c.error != null)
-                                          Container(
-                                            width: double.infinity,
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .errorContainer,
-                                            padding: const EdgeInsets.all(16),
-                                            child: Text(
-                                              c.error!,
-                                              key: const Key('chat-error'),
-                                              style: TextStyle(
-                                                color: Theme.of(context)
-                                                    .colorScheme
-                                                    .onErrorContainer,
+                                        if (c.organizationProblem != null)
+                                          _FeedbackBanner(
+                                            tone: _FeedbackTone.notice,
+                                            icon: Icons.info_outline,
+                                            body: Text(c.organizationProblem!),
+                                            actions: [
+                                              OutlinedButton(
+                                                style: OutlinedButton.styleFrom(
+                                                  visualDensity:
+                                                      VisualDensity.compact,
+                                                ),
+                                                onPressed: c.organization.saving
+                                                    ? null
+                                                    : c.retryOrganizationSave,
+                                                child: const Text(
+                                                  'Try saving details again',
+                                                ),
                                               ),
-                                            ),
+                                            ],
                                           ),
-                                        if (c.unsavedChanges)
-                                          TextButton.icon(
-                                            onPressed: c.retrySave,
-                                            icon:
-                                                const Icon(Icons.save_outlined),
-                                            label:
-                                                const Text('Try saving again'),
+                                        if (c.error != null || c.unsavedChanges)
+                                          _FeedbackBanner(
+                                            tone: _FeedbackTone.error,
+                                            icon: Icons.error_outline,
+                                            body: c.error != null
+                                                ? Text(
+                                                    c.error!,
+                                                    key: const Key(
+                                                      'chat-error',
+                                                    ),
+                                                  )
+                                                : const Text(
+                                                    'Changes on this device have not been saved yet.',
+                                                  ),
+                                            actions: [
+                                              if (c.unsavedChanges)
+                                                OutlinedButton.icon(
+                                                  style:
+                                                      OutlinedButton.styleFrom(
+                                                    visualDensity:
+                                                        VisualDensity.compact,
+                                                  ),
+                                                  onPressed: c.retrySave,
+                                                  icon: const Icon(
+                                                    Icons.save_outlined,
+                                                    size: 18,
+                                                  ),
+                                                  label: const Text(
+                                                    'Try saving again',
+                                                  ),
+                                                ),
+                                            ],
                                           ),
                                       ],
                                     ),
@@ -1393,64 +1555,138 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                         ),
                         if (c.currentRun != null && c.runPending)
                           Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
                             child: !c.currentRun!.snapshot.terminal &&
                                     c.currentRun!.snapshot.pendingControls
                                         .isNotEmpty
-                                ? Row(
-                                    children: [
-                                      Expanded(
-                                        child: TextButton.icon(
-                                          onPressed: reviewControls,
-                                          icon:
-                                              const Icon(Icons.pending_actions),
-                                          label: Text(
-                                            c.currentRun!.snapshot
-                                                    .pendingControls
-                                                    .any(
-                                              (p) => p['kind'] == 'approval',
-                                            )
-                                                ? 'Review action'
-                                                : 'Answer needed',
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
+                                ? _RunStatusChrome(
+                                    tone: _FeedbackTone.notice,
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: FilledButton.tonalIcon(
+                                            style: FilledButton.styleFrom(
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                            ),
+                                            onPressed: reviewControls,
+                                            icon: const Icon(
+                                              Icons.pending_actions,
+                                              size: 18,
+                                            ),
+                                            label: Text(
+                                              c.currentRun!.snapshot
+                                                      .pendingControls
+                                                      .any(
+                                                (p) => p['kind'] == 'approval',
+                                              )
+                                                  ? 'Review action'
+                                                  : 'Answer needed',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                      IconButton(
-                                        tooltip: 'Check status',
-                                        onPressed: c.busy
-                                            ? null
-                                            : () => c.checkRunStatus(),
-                                        icon: const Icon(Icons.refresh),
-                                      ),
-                                    ],
+                                        const SizedBox(width: 4),
+                                        IconButton(
+                                          tooltip: 'Check status',
+                                          visualDensity: VisualDensity.compact,
+                                          onPressed: c.busy
+                                              ? null
+                                              : () => c.checkRunStatus(),
+                                          icon: const Icon(Icons.refresh),
+                                        ),
+                                      ],
+                                    ),
                                   )
-                                : Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: defaultTargetPlatform ==
-                                                        TargetPlatform
-                                                            .android &&
-                                                    const {
-                                                      'Sending your message',
-                                                      'Waiting for its turn',
-                                                      'Working on your reply',
-                                                    }.contains(c.pendingStatus)
-                                                ? const SizedBox.shrink()
-                                                : Text(
-                                                    c.pendingStatus,
-                                                    maxLines: 1,
-                                                    overflow:
-                                                        TextOverflow.ellipsis,
+                                : !hideRunBarStatus ||
+                                        (c.currentRun!.snapshot.status ==
+                                                'unknown' &&
+                                            c.currentRun!.runId != null)
+                                    ? _RunStatusChrome(
+                                        tone: _FeedbackTone.neutral,
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.stretch,
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Expanded(
+                                                  child: hideRunBarStatus
+                                                      ? const SizedBox.shrink()
+                                                      : Text(
+                                                          c.pendingStatus,
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                        ),
+                                                ),
+                                                if (c.currentRun!.runId == null)
+                                                  TextButton(
+                                                    style: TextButton.styleFrom(
+                                                      visualDensity:
+                                                          VisualDensity.compact,
+                                                    ),
+                                                    onPressed: c.busy
+                                                        ? null
+                                                        : () =>
+                                                            c.checkRunStatus(),
+                                                    child: Text(
+                                                      c.currentRun!.data[
+                                                                  'attempted'] ==
+                                                              true
+                                                          ? 'Refresh'
+                                                          : 'Reconnect',
+                                                    ),
+                                                  )
+                                                else
+                                                  IconButton(
+                                                    tooltip: 'Check status',
+                                                    visualDensity:
+                                                        VisualDensity.compact,
+                                                    onPressed: c.busy
+                                                        ? null
+                                                        : () =>
+                                                            c.checkRunStatus(),
+                                                    icon: const Icon(
+                                                      Icons.refresh,
+                                                    ),
                                                   ),
-                                          ),
+                                              ],
+                                            ),
+                                            if (c.currentRun!.snapshot.status ==
+                                                    'unknown' &&
+                                                c.currentRun!.runId != null)
+                                              Align(
+                                                alignment: Alignment.centerLeft,
+                                                child: OutlinedButton(
+                                                  style:
+                                                      OutlinedButton.styleFrom(
+                                                    visualDensity:
+                                                        VisualDensity.compact,
+                                                  ),
+                                                  onPressed: c.busy
+                                                      ? null
+                                                      : acknowledgeUnknown,
+                                                  child: const Text(
+                                                    'Acknowledge unknown outcome',
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                      )
+                                    : Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.end,
+                                        children: [
                                           if (c.currentRun!.runId == null)
                                             TextButton(
+                                              style: TextButton.styleFrom(
+                                                visualDensity:
+                                                    VisualDensity.compact,
+                                              ),
                                               onPressed: c.busy
                                                   ? null
                                                   : () => c.checkRunStatus(),
@@ -1465,6 +1701,8 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                           else
                                             IconButton(
                                               tooltip: 'Check status',
+                                              visualDensity:
+                                                  VisualDensity.compact,
                                               onPressed: c.busy
                                                   ? null
                                                   : () => c.checkRunStatus(),
@@ -1472,19 +1710,6 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                             ),
                                         ],
                                       ),
-                                      if (c.currentRun!.snapshot.status ==
-                                              'unknown' &&
-                                          c.currentRun!.runId != null)
-                                        TextButton(
-                                          onPressed: c.busy
-                                              ? null
-                                              : acknowledgeUnknown,
-                                          child: const Text(
-                                            'Acknowledge unknown outcome',
-                                          ),
-                                        ),
-                                    ],
-                                  ),
                           ),
                         SafeArea(
                           top: false,
@@ -1513,40 +1738,85 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                     ),
                                   ),
                                 if (c.canGuideRun || c.canStopRun)
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.end,
-                                    children: [
-                                      if (c.canGuideRun)
-                                        IconButton(
-                                          tooltip: 'Guide current work',
-                                          onPressed: composer.text
-                                                  .trim()
-                                                  .isEmpty
-                                              ? null
-                                              : () async {
-                                                  final text = composer.text;
-                                                  if (await c.controlRun(
-                                                        guidance: text,
-                                                      ) &&
-                                                      mounted &&
-                                                      composer.text == text) {
-                                                    composer.clear();
-                                                    setState(() {});
-                                                  }
-                                                },
-                                          icon: const Icon(
-                                            Icons.assistant_direction_outlined,
-                                          ),
-                                        ),
-                                      if (c.canStopRun)
-                                        IconButton(
-                                          tooltip: 'Stop current work',
-                                          onPressed: () => c.controlRun(),
-                                          icon: const Icon(
-                                            Icons.stop_circle_outlined,
-                                          ),
-                                        ),
-                                    ],
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 6),
+                                    child: Align(
+                                      alignment: Alignment.centerRight,
+                                      child: Wrap(
+                                        alignment: WrapAlignment.end,
+                                        spacing: 8,
+                                        runSpacing: 4,
+                                        children: [
+                                          if (c.canGuideRun)
+                                            Tooltip(
+                                              message: 'Guide current work',
+                                              child: OutlinedButton.icon(
+                                                style: OutlinedButton.styleFrom(
+                                                  visualDensity:
+                                                      VisualDensity.compact,
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
+                                                    horizontal: 10,
+                                                  ),
+                                                ),
+                                                onPressed: composer.text
+                                                        .trim()
+                                                        .isEmpty
+                                                    ? null
+                                                    : () async {
+                                                        final text =
+                                                            composer.text;
+                                                        if (await c.controlRun(
+                                                              guidance: text,
+                                                            ) &&
+                                                            mounted &&
+                                                            composer.text ==
+                                                                text) {
+                                                          if (_draftOwner !=
+                                                              null) {
+                                                            _drafts.remove(
+                                                              _draftOwner,
+                                                            );
+                                                          }
+                                                          composer.clear();
+                                                          setState(() {});
+                                                        }
+                                                      },
+                                                icon: const Icon(
+                                                  Icons
+                                                      .assistant_direction_outlined,
+                                                  size: 18,
+                                                ),
+                                                label: const Text('Guide'),
+                                              ),
+                                            ),
+                                          if (c.canStopRun)
+                                            Tooltip(
+                                              message: 'Stop current work',
+                                              child: OutlinedButton.icon(
+                                                style: OutlinedButton.styleFrom(
+                                                  foregroundColor:
+                                                      Theme.of(context)
+                                                          .colorScheme
+                                                          .error,
+                                                  visualDensity:
+                                                      VisualDensity.compact,
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
+                                                    horizontal: 10,
+                                                  ),
+                                                ),
+                                                onPressed: () => c.controlRun(),
+                                                icon: const Icon(
+                                                  Icons.stop_circle_outlined,
+                                                  size: 18,
+                                                ),
+                                                label: const Text('Stop'),
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
                                   ),
                                 Container(
                                   padding:
@@ -1572,79 +1842,117 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                               !c.organizationBlocked &&
                                               !c.readOnly &&
                                               !c.changingConnection,
-                                          onChanged: (_) => setState(() {}),
+                                          onChanged: (_) {
+                                            _saveCurrentDraft();
+                                            setState(() {});
+                                          },
+                                          onSubmit: c.readOnly ||
+                                                  c.changingConnection ||
+                                                  session == null ||
+                                                  c.unsavedChanges ||
+                                                  c.organizationBlocked ||
+                                                  c.queueStatus != null
+                                              ? null
+                                              : send,
                                         ),
                                       ),
+                                      if (c.canStopDirectReply)
+                                        IconButton(
+                                          tooltip: 'Stop reply',
+                                          constraints: const BoxConstraints(
+                                            minWidth: 48,
+                                            minHeight: 48,
+                                          ),
+                                          onPressed: c.stopDirectReply,
+                                          icon: const Icon(
+                                            Icons.stop_circle_outlined,
+                                          ),
+                                        ),
                                       PromptOptimizer(
                                         key: ValueKey(session?.id),
                                         controller: c,
                                         composer: composer,
-                                        triggerBuilder: (context, openMenu) =>
-                                            Focus(
-                                          onKeyEvent: (node, event) {
-                                            if (openMenu != null &&
-                                                event is KeyDownEvent &&
-                                                (event.logicalKey ==
-                                                        LogicalKeyboardKey
-                                                            .contextMenu ||
-                                                    (event.logicalKey ==
-                                                            LogicalKeyboardKey
-                                                                .f10 &&
-                                                        HardwareKeyboard
-                                                            .instance
-                                                            .isShiftPressed))) {
-                                              openMenu();
-                                              return KeyEventResult.handled;
-                                            }
-                                            return KeyEventResult.ignored;
-                                          },
-                                          child: MergeSemantics(
-                                            child: Semantics(
-                                              onLongPress: openMenu,
-                                              customSemanticsActions:
-                                                  openMenu == null
-                                                      ? null
-                                                      : {
-                                                          CustomSemanticsAction(
-                                                            label:
-                                                                'Enhance prompt',
-                                                          ): openMenu,
-                                                        },
-                                              child: GestureDetector(
-                                                excludeFromSemantics: true,
-                                                // Consume a hold even when optimization is disabled.
-                                                onLongPress: () =>
-                                                    openMenu?.call(),
-                                                onSecondaryTap: openMenu,
-                                                child: Tooltip(
-                                                  message: 'Send',
-                                                  triggerMode:
-                                                      TooltipTriggerMode.manual,
-                                                  child: IconButton.filled(
-                                                    onPressed: c.readOnly ||
-                                                            c
-                                                                .changingConnection ||
-                                                            session == null ||
-                                                            c.unsavedChanges ||
-                                                            c
-                                                                .organizationBlocked ||
-                                                            c.queueStatus !=
-                                                                null ||
-                                                            composer.text
-                                                                .trim()
-                                                                .isEmpty
+                                        triggerBuilder: (context, openMenu) {
+                                          final isDesktop = const {
+                                            TargetPlatform.linux,
+                                            TargetPlatform.macOS,
+                                            TargetPlatform.windows,
+                                          }.contains(
+                                              Theme.of(context).platform);
+                                          final sendTooltip = Tooltip(
+                                            key: _sendTooltipKey,
+                                            message: 'Send',
+                                            triggerMode:
+                                                TooltipTriggerMode.manual,
+                                            child: IconButton.filled(
+                                              onPressed: c.readOnly ||
+                                                      c.changingConnection ||
+                                                      session == null ||
+                                                      c.unsavedChanges ||
+                                                      c.organizationBlocked ||
+                                                      c.queueStatus != null ||
+                                                      composer.text
+                                                          .trim()
+                                                          .isEmpty
+                                                  ? null
+                                                  : send,
+                                              icon: const Icon(
+                                                Icons.arrow_upward_rounded,
+                                              ),
+                                            ),
+                                          );
+                                          return Focus(
+                                            onKeyEvent: (node, event) {
+                                              if (openMenu != null &&
+                                                  event is KeyDownEvent &&
+                                                  (event.logicalKey ==
+                                                          LogicalKeyboardKey
+                                                              .contextMenu ||
+                                                      (event.logicalKey ==
+                                                              LogicalKeyboardKey
+                                                                  .f10 &&
+                                                          HardwareKeyboard
+                                                              .instance
+                                                              .isShiftPressed))) {
+                                                openMenu();
+                                                return KeyEventResult.handled;
+                                              }
+                                              return KeyEventResult.ignored;
+                                            },
+                                            child: MergeSemantics(
+                                              child: Semantics(
+                                                onLongPress: openMenu,
+                                                customSemanticsActions:
+                                                    openMenu == null
                                                         ? null
-                                                        : send,
-                                                    icon: const Icon(
-                                                      Icons
-                                                          .arrow_upward_rounded,
-                                                    ),
-                                                  ),
+                                                        : {
+                                                            CustomSemanticsAction(
+                                                              label:
+                                                                  'Enhance prompt',
+                                                            ): openMenu,
+                                                          },
+                                                child: GestureDetector(
+                                                  excludeFromSemantics: true,
+                                                  // Consume a hold even when optimization is disabled.
+                                                  onLongPress: () =>
+                                                      openMenu?.call(),
+                                                  onSecondaryTap: openMenu,
+                                                  child: isDesktop
+                                                      ? MouseRegion(
+                                                          onEnter: (_) =>
+                                                              _sendTooltipKey
+                                                                  .currentState
+                                                                  ?.ensureTooltipVisible(),
+                                                          onExit: (_) => Tooltip
+                                                              .dismissAllToolTips(),
+                                                          child: sendTooltip,
+                                                        )
+                                                      : sendTooltip,
                                                 ),
                                               ),
                                             ),
-                                          ),
-                                        ),
+                                          );
+                                        },
                                       ),
                                     ],
                                   ),
@@ -1673,6 +1981,130 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
       );
 }
 
+enum _FeedbackTone { neutral, notice, error }
+
+class _FeedbackBanner extends StatelessWidget {
+  const _FeedbackBanner({
+    required this.tone,
+    required this.icon,
+    required this.body,
+    this.actions = const [],
+    this.trailing,
+  });
+
+  final _FeedbackTone tone;
+  final IconData icon;
+  final Widget body;
+  final List<Widget> actions;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final (background, foreground) = switch (tone) {
+      _FeedbackTone.neutral => (
+          colors.surfaceContainerHigh,
+          colors.onSurface,
+        ),
+      _FeedbackTone.notice => (
+          colors.secondaryContainer,
+          colors.onSecondaryContainer,
+        ),
+      _FeedbackTone.error => (
+          colors.errorContainer,
+          colors.onErrorContainer,
+        ),
+    };
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 1),
+            child: Icon(icon, size: 18, color: foreground),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: DefaultTextStyle.merge(
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.35,
+                color: foreground,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  body,
+                  if (actions.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: actions,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          if (trailing != null) trailing!,
+        ],
+      ),
+    );
+  }
+}
+
+class _RunStatusChrome extends StatelessWidget {
+  const _RunStatusChrome({
+    required this.tone,
+    required this.child,
+  });
+
+  final _FeedbackTone tone;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final (background, foreground) = switch (tone) {
+      _FeedbackTone.neutral => (
+          colors.surfaceContainerHigh,
+          colors.onSurface,
+        ),
+      _FeedbackTone.notice => (
+          colors.secondaryContainer,
+          colors.onSecondaryContainer,
+        ),
+      _FeedbackTone.error => (
+          colors.errorContainer,
+          colors.onErrorContainer,
+        ),
+    };
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: colors.outlineVariant),
+      ),
+      child: DefaultTextStyle.merge(
+        style: TextStyle(color: foreground),
+        child: child,
+      ),
+    );
+  }
+}
+
 class MessageView extends StatefulWidget {
   const MessageView({
     super.key,
@@ -1684,11 +2116,15 @@ class MessageView extends StatefulWidget {
     this.contextMetadata,
     this.pending = false,
     this.onCancelPending,
+    this.onOpenLink,
   });
   final String text;
   final bool user;
   final bool pending;
   final VoidCallback? onCancelPending;
+
+  /// Optional test/host hook for opening validated external Markdown links.
+  final Future<bool> Function(Uri)? onOpenLink;
   final String? activityText;
   final Widget Function(Widget)? answerBuilder;
   final ReportedUsage? usage;
@@ -1724,6 +2160,29 @@ class _MessageViewState extends State<MessageView> {
     }
   }
 
+  Future<void> openLink(String? href) async {
+    final uri = parseSafeMarkdownLink(href);
+    if (uri == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(
+            const SnackBar(
+                content: Text('Only web links (http/https) can be opened.')),
+          );
+      }
+      return;
+    }
+    final opened = await openSafeMarkdownUri(uri, launch: widget.onOpenLink);
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(content: Text('Could not open this link.')),
+        );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final animate = widget.pending &&
@@ -1742,6 +2201,25 @@ class _MessageViewState extends State<MessageView> {
       _pulse = null;
       _glow = false;
     }
+    final desktop = const {
+      TargetPlatform.linux,
+      TargetPlatform.macOS,
+      TargetPlatform.windows,
+    }.contains(Theme.of(context).platform);
+    final markdown = widget.user
+        ? null
+        : MarkdownBody(
+            data: widget.text,
+            imageBuilder: safeMarkdownImageBuilder,
+            selectable: false,
+            onTapLink: (_, href, __) => unawaited(openLink(href)),
+            styleSheet: saathiMarkdownStyle(context).copyWith(
+              p: TextStyle(
+                  fontSize: 18,
+                  height: 1.5,
+                  color: Theme.of(context).colorScheme.onSurface),
+            ),
+          );
     return Semantics(
       container: true,
       label: widget.pending
@@ -1749,6 +2227,13 @@ class _MessageViewState extends State<MessageView> {
           : widget.user
               ? 'Your message'
               : 'Assistant message',
+      customSemanticsActions: {
+        const CustomSemanticsAction(label: 'Copy message'): copyMessage,
+        if (!widget.user)
+          CustomSemanticsAction(
+                  label: activity ? 'Hide activity' : 'Show activity'):
+              () => setState(() => activity = !activity),
+      },
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onLongPress: copyMessage,
@@ -1759,99 +2244,115 @@ class _MessageViewState extends State<MessageView> {
           child: Align(
             alignment:
                 widget.user ? Alignment.centerRight : Alignment.centerLeft,
-            child: AnimatedContainer(
-              duration:
-                  animate ? const Duration(milliseconds: 1400) : Duration.zero,
-              curve: Curves.easeInOut,
-              constraints: const BoxConstraints(maxWidth: 720),
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-              decoration: BoxDecoration(
-                color: widget.user
-                    ? Theme.of(context).colorScheme.secondaryContainer
-                    : Theme.of(context).colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: widget.pending
-                    ? [
-                        BoxShadow(
-                          color: Theme.of(context)
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                if (desktop && !widget.pending && widget.user)
+                  IconButton(
+                    tooltip: 'Copy message',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: copyMessage,
+                    icon: const Icon(Icons.copy_outlined, size: 16),
+                  ),
+                Flexible(
+                  child: AnimatedContainer(
+                    duration: animate
+                        ? const Duration(milliseconds: 1400)
+                        : Duration.zero,
+                    curve: Curves.easeInOut,
+                    constraints: const BoxConstraints(maxWidth: 720),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 18, vertical: 14),
+                    decoration: BoxDecoration(
+                      color: widget.user
+                          ? Theme.of(context).colorScheme.secondaryContainer
+                          : Theme.of(context)
                               .colorScheme
-                              .primary
-                              .withValues(alpha: _glow ? .22 : .08),
-                          blurRadius: _glow ? 16 : 8,
-                        )
-                      ]
-                    : null,
-              ),
-              child: Column(
-                crossAxisAlignment: widget.onCancelPending == null
-                    ? CrossAxisAlignment.start
-                    : CrossAxisAlignment.end,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (widget.user)
-                    Text(
-                      widget.text,
-                      style: TextStyle(
-                          fontSize: 17,
-                          height: 1.45,
-                          fontStyle: widget.pending ? FontStyle.italic : null,
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onSecondaryContainer),
-                    )
-                  else ...[
-                    if (widget.answerBuilder case final wrap?)
-                      wrap(
-                        MarkdownBody(
-                          data: widget.text,
-                          imageBuilder: safeMarkdownImageBuilder,
-                          selectable: false,
-                          styleSheet: saathiMarkdownStyle(context).copyWith(
-                            p: TextStyle(
-                                fontSize: 18,
-                                height: 1.5,
-                                color: Theme.of(context).colorScheme.onSurface),
+                              .surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: widget.pending
+                          ? [
+                              BoxShadow(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .primary
+                                    .withValues(alpha: _glow ? .22 : .08),
+                                blurRadius: _glow ? 16 : 8,
+                              )
+                            ]
+                          : null,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: widget.onCancelPending == null
+                          ? CrossAxisAlignment.start
+                          : CrossAxisAlignment.end,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (widget.user)
+                          Text(
+                            widget.text,
+                            style: TextStyle(
+                                fontSize: 17,
+                                height: 1.45,
+                                fontStyle:
+                                    widget.pending ? FontStyle.italic : null,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSecondaryContainer),
+                          )
+                        else ...[
+                          if (widget.answerBuilder case final wrap?)
+                            wrap(markdown!)
+                          else
+                            markdown!,
+                          if (widget.usage case final usage?)
+                            ReportedUsageLine(
+                              usage: usage,
+                              context: widget.contextMetadata,
+                            ),
+                        ],
+                        if (widget.onCancelPending case final cancel?)
+                          IconButton(
+                            tooltip: 'Cancel pending message',
+                            onPressed: cancel,
+                            icon: const Icon(Icons.close, size: 18),
                           ),
-                        ),
-                      )
-                    else
-                      MarkdownBody(
-                        data: widget.text,
-                        imageBuilder: safeMarkdownImageBuilder,
-                        selectable: false,
-                        styleSheet: saathiMarkdownStyle(context).copyWith(
-                          p: TextStyle(
-                              fontSize: 18,
-                              height: 1.5,
-                              color: Theme.of(context).colorScheme.onSurface),
-                        ),
-                      ),
-                    if (widget.usage case final usage?)
-                      ReportedUsageLine(
-                        usage: usage,
-                        context: widget.contextMetadata,
-                      ),
-                  ],
-                  if (widget.onCancelPending case final cancel?)
-                    IconButton(
-                      tooltip: 'Cancel pending message',
-                      onPressed: cancel,
-                      icon: const Icon(Icons.close, size: 18),
+                        if (activity && !widget.user)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 14),
+                            child: Text(
+                              widget.activityText ??
+                                  'Activity · Response received\nOnly observable status is shown. No private reasoning.',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant),
+                            ),
+                          ),
+                      ],
                     ),
-                  if (activity && !widget.user)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 14),
-                      child: Text(
-                        widget.activityText ??
-                            'Activity · Response received\nOnly observable status is shown. No private reasoning.',
-                        style: TextStyle(
-                            fontSize: 12,
-                            color:
-                                Theme.of(context).colorScheme.onSurfaceVariant),
-                      ),
+                  ),
+                ),
+                if (desktop && !widget.pending && !widget.user) ...[
+                  IconButton(
+                    tooltip: 'Copy message',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: copyMessage,
+                    icon: const Icon(Icons.copy_outlined, size: 16),
+                  ),
+                  IconButton(
+                    tooltip: activity ? 'Hide activity' : 'Show activity',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => setState(() => activity = !activity),
+                    icon: Icon(
+                      activity ? Icons.info : Icons.info_outline,
+                      size: 16,
                     ),
+                  ),
                 ],
-              ),
+              ],
             ),
           ),
         ),

@@ -46,32 +46,34 @@ class ReportedUsageLine extends StatelessWidget {
             ? 'Input ${usage.input}'
             : 'Output ${usage.output}';
     final info = this.context;
-    return ExpansionTile(
-        tilePadding: EdgeInsets.zero,
-        childrenPadding: const EdgeInsets.only(bottom: 8),
-        dense: true,
-        title: Text('Reported tokens · $summary',
-            style: Theme.of(context).textTheme.labelSmall),
-        children: [
-          Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                  [
-                    'Input ${usage.input ?? 'unavailable'} · Output ${usage.output ?? 'unavailable'} · Total ${usage.total ?? 'unavailable'}',
-                    if (info?.serverOwned == true)
-                      'Server-owned context; local history does not measure the server’s active model context.'
-                    else
-                      'Local history is display/context retained by this app, not an exact active model token count.',
-                    if (info?.retainedMessages case final int count
-                        when count >= 0)
-                      '$count locally retained messages.',
-                    if (info?.modelLimit case final int limit
-                        when limit > 0 && limit <= 1000000000)
-                      'Reported model context limit: $limit tokens.'
-                    else
-                      'The model context limit is unavailable.',
-                  ].join('\n'),
-                  style: Theme.of(context).textTheme.bodySmall))
-        ]);
+    return Material(
+        type: MaterialType.transparency,
+        child: ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: const EdgeInsets.only(bottom: 8),
+            dense: true,
+            title: Text('Reported tokens · $summary',
+                style: Theme.of(context).textTheme.labelSmall),
+            children: [
+              Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                      [
+                        'Input ${usage.input ?? 'unavailable'} · Output ${usage.output ?? 'unavailable'} · Total ${usage.total ?? 'unavailable'}',
+                        if (info?.serverOwned == true)
+                          'Server-owned context; local history does not measure the server’s active model context.'
+                        else
+                          'Local history is display/context retained by this app, not an exact active model token count.',
+                        if (info?.retainedMessages case final int count
+                            when count >= 0)
+                          '$count locally retained messages.',
+                        if (info?.modelLimit case final int limit
+                            when limit > 0 && limit <= 1000000000)
+                          'Reported model context limit: $limit tokens.'
+                        else
+                          'The model context limit is unavailable.',
+                      ].join('\n'),
+                      style: Theme.of(context).textTheme.bodySmall))
+            ]));
   }
 }

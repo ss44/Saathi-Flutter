@@ -448,19 +448,22 @@ class ChatOrganization extends ChangeNotifier {
   }
 
   /// Commit one conversation's direct reply settings atomically with its persona
-  /// choice. A selected shared persona remains shared and is not edited here.
+  /// choice and optional display name. A selected shared persona remains shared
+  /// and is not edited here.
   Future<void> saveChatSettings(
     ConversationIdentity key, {
     required String replyModel,
     required String instructions,
     required String? personaId,
     required String? Function() restriction,
+    String? displayName,
   }) async {
     _checkIdentity(key);
     if (replyModel.trim().isEmpty ||
         replyModel.length > 256 ||
-        instructions.length > 16000) {
-      throw ArgumentError('Check the model and instruction lengths');
+        instructions.length > 16000 ||
+        (displayName != null && displayName.length > 120)) {
+      throw ArgumentError('Check the model, name and instruction lengths');
     }
     final reason = restriction();
     if (reason != null) throw StateError(reason);
@@ -470,6 +473,7 @@ class ChatOrganization extends ChangeNotifier {
     final next = {
       ..._entries,
       key.storageKey: entry(key).copyWith(
+        displayName: displayName?.trim(),
         replyModel: replyModel.trim(),
         instructions: instructions,
         personaId: personaId,
@@ -484,6 +488,38 @@ class ChatOrganization extends ChangeNotifier {
     } catch (error) {
       // Only a confirmed rollback permits dropping this candidate. Otherwise
       // keep the existing recovery barrier; cached values do not prove durability.
+      final uncertain =
+          error is OrganizationWriteFailure && !error.rollbackConfirmed;
+      if (!uncertain && identical(_pending, next) && !saving) {
+        discardPendingEdit();
+      }
+      rethrow;
+    }
+  }
+
+  /// Commit only a conversation's local display name without mutating its reply
+  /// model, persona, instructions, or server configuration.
+  Future<void> renameConversation(
+    ConversationIdentity key,
+    String displayName, {
+    String? Function()? restriction,
+  }) async {
+    _checkIdentity(key);
+    if (displayName.length > 120) {
+      throw ArgumentError('Name is too long');
+    }
+    final reason = restriction?.call();
+    if (reason != null) throw StateError(reason);
+    final next = {
+      ..._entries,
+      key.storageKey: entry(key).copyWith(displayName: displayName.trim()),
+    };
+    try {
+      await _save(next, validate: () {
+        final reason = restriction?.call();
+        if (reason != null) throw StateError(reason);
+      });
+    } catch (error) {
       final uncertain =
           error is OrganizationWriteFailure && !error.rollbackConfirmed;
       if (!uncertain && identical(_pending, next) && !saving) {

@@ -100,7 +100,7 @@ void main() {
     expect(
         tester
             .widget<FilledButton>(find.ancestor(
-                of: find.text('Improve'), matching: find.byType(FilledButton)))
+                of: find.text('Enhance'), matching: find.byType(FilledButton)))
             .onPressed,
         isNull);
     expect(requests, 0);

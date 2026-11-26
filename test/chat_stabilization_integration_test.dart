@@ -252,7 +252,7 @@ void main() {
       await t.pumpAndSettle();
       await t.tap(find.byTooltip('Enhance prompt'));
       await network();
-      await t.tap(find.text('Improve'));
+      await t.tap(find.text('Enhance'));
       await network();
       keyboard.value = 0;
       await t.pumpAndSettle();

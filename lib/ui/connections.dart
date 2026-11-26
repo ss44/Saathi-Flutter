@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'canonical_connection.dart';
 import '../update_host.dart';
@@ -15,6 +16,14 @@ const providerLabels = {
   'hermes': 'Hermes',
   'hermesGateway': 'Hermes Desktop / CLI',
   'openclaw': 'OpenClaw'
+};
+
+/// Documented default API roots for supported connection types.
+const defaultProviderBaseUrls = {
+  'openai': 'https://api.openai.com',
+  'anthropic': 'https://api.anthropic.com',
+  'gemini': 'https://generativelanguage.googleapis.com',
+  'hermes': 'http://127.0.0.1:8642',
 };
 
 class ConnectionsPage extends StatefulWidget {
@@ -253,15 +262,48 @@ class _AddConnectionPageState extends State<AddConnectionPage>
       url = TextEditingController(),
       keyInput = TextEditingController();
   String type = 'openai';
-  String? error;
-  bool saving = false, showKey = false, keyReady = false, clearKey = false;
+  String? error, testStatus;
+  bool saving = false,
+      testing = false,
+      showKey = false,
+      keyReady = false,
+      clearKey = false;
   String? initialKey;
+  SaathiCore? _activeTestCore;
+  int _testGeneration = 0;
+
+  void _invalidateTest() {
+    _testGeneration++;
+    _activeTestCore?.close();
+    _activeTestCore = null;
+    testing = false;
+    testStatus = null;
+  }
+
+  String? _validateUrl(String? v) {
+    final uri = Uri.tryParse((v ?? '').trim());
+    if (uri == null ||
+        !['http', 'https'].contains(uri.scheme) ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment) {
+      return 'Use an http(s) URL without credentials or query';
+    }
+    if (uri.scheme == 'http' &&
+        !['localhost', '127.0.0.1', '::1', '[::1]'].contains(uri.host)) {
+      return 'Use HTTPS for remote servers. HTTP is only supported on loopback.';
+    }
+    return null;
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     final c = widget.connection;
     if (c == null) {
+      url.text = defaultProviderBaseUrls[type] ?? '';
       keyReady = true;
       return;
     }
@@ -310,6 +352,7 @@ class _AddConnectionPageState extends State<AddConnectionPage>
 
   @override
   void dispose() {
+    _invalidateTest();
     WidgetsBinding.instance.removeObserver(this);
     name.dispose();
     url.dispose();
@@ -317,8 +360,79 @@ class _AddConnectionPageState extends State<AddConnectionPage>
     super.dispose();
   }
 
+  Future<void> testConnection() async {
+    if (testing ||
+        saving ||
+        !keyReady ||
+        type == 'openclaw' ||
+        !ProviderType.values.asNameMap().containsKey(type)) {
+      return;
+    }
+    final urlError = _validateUrl(url.text);
+    if (urlError != null) {
+      setState(() {
+        error = urlError;
+        testStatus = null;
+      });
+      return;
+    }
+    final generation = ++_testGeneration;
+    _activeTestCore?.close();
+    final core = widget.controller.coreFactory();
+    _activeTestCore = core;
+    setState(() {
+      testing = true;
+      error = null;
+      testStatus = null;
+    });
+    try {
+      final normalizedKey = keyInput.text.trim();
+      final token = clearKey
+          ? ''
+          : (widget.connection != null &&
+                  (normalizedKey.isEmpty ||
+                      normalizedKey == initialKey?.trim()))
+              ? (initialKey ?? '')
+              : normalizedKey;
+      core.addProvider(ProviderConfig(
+        id: 'connection-test',
+        name: name.text.trim().isEmpty ? 'Test' : name.text.trim(),
+        type: ProviderType.values.byName(type),
+        apiKey: token,
+        baseUrl: url.text.trim(),
+      ));
+      final found = await core.discoverModels(
+        'connection-test',
+        isCurrent: () => mounted && generation == _testGeneration,
+      );
+      if (!mounted || generation != _testGeneration) return;
+      setState(() {
+        testStatus = found.isEmpty
+            ? 'Connection verified. No models returned.'
+            : 'Connection verified · ${found.length} ${found.length == 1 ? 'model' : 'models'} available.';
+      });
+    } on ProviderException catch (e) {
+      if (mounted && generation == _testGeneration) {
+        setState(() => error = e.message);
+      }
+    } catch (_) {
+      if (mounted && generation == _testGeneration) {
+        setState(() => error =
+            'Could not reach this server. Check the URL and credentials.');
+      }
+    } finally {
+      core.close();
+      if (identical(_activeTestCore, core)) _activeTestCore = null;
+      if (mounted && generation == _testGeneration) {
+        setState(() => testing = false);
+      }
+    }
+  }
+
   Future<void> save() async {
+    if (!widget.controller.canChangeConnections) return;
     if (!form.currentState!.validate()) return;
+    _invalidateTest();
     setState(() {
       saving = true;
       error = null;
@@ -372,36 +486,41 @@ class _AddConnectionPageState extends State<AddConnectionPage>
                 isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Provider type'),
                 items: providerLabels.entries
-                    .where((entry) => entry.key != 'hermesGateway')
+                    .where((entry) =>
+                        entry.key != 'hermesGateway' &&
+                        (entry.key != 'openclaw' ||
+                            widget.connection?['type'] == 'openclaw'))
                     .map((e) =>
                         DropdownMenuItem(value: e.key, child: Text(e.value)))
                     .toList(),
-                onChanged: (v) => setState(() => type = v!)),
+                onChanged: (v) => setState(() {
+                      if (v == null) return;
+                      _invalidateTest();
+                      final currentUrl = url.text.trim();
+                      if (widget.connection == null &&
+                          (currentUrl.isEmpty ||
+                              defaultProviderBaseUrls.values
+                                  .contains(currentUrl))) {
+                        url.text = defaultProviderBaseUrls[v] ?? '';
+                      }
+                      type = v;
+                      error = null;
+                    })),
             const SizedBox(height: 18),
             TextFormField(
                 controller: url,
                 autocorrect: false,
                 keyboardType: TextInputType.url,
-                decoration: const InputDecoration(
+                onChanged: (_) {
+                  if (testing || testStatus != null) {
+                    setState(_invalidateTest);
+                  }
+                },
+                decoration: InputDecoration(
                     labelText: 'API base URL',
-                    hintText: 'https://api.example.com'),
-                validator: (v) {
-                  final uri = Uri.tryParse(v!.trim());
-                  if (uri == null ||
-                      !['http', 'https'].contains(uri.scheme) ||
-                      uri.host.isEmpty ||
-                      uri.userInfo.isNotEmpty ||
-                      uri.hasQuery ||
-                      uri.hasFragment) {
-                    return 'Use an http(s) URL without credentials or query';
-                  }
-                  if (uri.scheme == 'http' &&
-                      !['localhost', '127.0.0.1', '::1', '[::1]']
-                          .contains(uri.host)) {
-                    return 'Use HTTPS for remote servers. HTTP is only supported on loopback.';
-                  }
-                  return null;
-                }),
+                    hintText: defaultProviderBaseUrls[type] ??
+                        'https://api.example.com'),
+                validator: _validateUrl),
             const SizedBox(height: 18),
             if (widget.connection != null)
               const Padding(
@@ -416,7 +535,12 @@ class _AddConnectionPageState extends State<AddConnectionPage>
                 enableIMEPersonalizedLearning: false,
                 autocorrect: false,
                 enableSuggestions: false,
-                onChanged: (_) => clearKey = false,
+                onChanged: (_) {
+                  clearKey = false;
+                  if (testing || testStatus != null) {
+                    setState(_invalidateTest);
+                  }
+                },
                 decoration: InputDecoration(
                     suffixIcon: IconButton(
                         tooltip: showKey ? 'Hide API key' : 'Show API key',
@@ -432,6 +556,7 @@ class _AddConnectionPageState extends State<AddConnectionPage>
               TextButton(
                   onPressed: keyReady && !saving
                       ? () => setState(() {
+                            _invalidateTest();
                             clearKey = true;
                             keyInput.clear();
                             showKey = false;
@@ -442,16 +567,41 @@ class _AddConnectionPageState extends State<AddConnectionPage>
                       : 'Clear stored key')),
             const SizedBox(height: 20),
             const Text(
-                'Use HTTPS for remote servers. HTTP sends messages and credentials without encryption. Hermes and OpenClaw support depends on the server protocol; unsupported operations are reported, not simulated.'),
+                'Use HTTPS for remote servers. HTTP is only supported on loopback. Hermes support depends on the server protocol; unsupported operations are reported, not simulated.'),
+            if (!widget.controller.canChangeConnections)
+              Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(
+                      'Resolve unsaved changes or storage errors before saving connections.',
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.error))),
+            if (testStatus != null)
+              Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(testStatus!,
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.primary))),
             if (error != null)
               Padding(
                   padding: const EdgeInsets.only(top: 16),
                   child: Text(error!,
                       style: TextStyle(
                           color: Theme.of(context).colorScheme.error))),
-            const SizedBox(height: 24),
+            const SizedBox(height: 20),
+            if (type != 'openclaw') ...[
+              OutlinedButton.icon(
+                  onPressed:
+                      saving || testing || !keyReady ? null : testConnection,
+                  icon: const Icon(Icons.network_check),
+                  label: Text(testing ? 'Testing…' : 'Test connection')),
+              const SizedBox(height: 12),
+            ],
             FilledButton(
-                onPressed: saving || !keyReady ? null : save,
+                onPressed: saving ||
+                        !keyReady ||
+                        !widget.controller.canChangeConnections
+                    ? null
+                    : save,
                 child: Text(saving ? 'Saving securely…' : 'Save connection')),
             TextButton(
                 onPressed: saving
@@ -465,8 +615,13 @@ class _AddConnectionPageState extends State<AddConnectionPage>
 }
 
 class NewChatPage extends StatefulWidget {
-  const NewChatPage({super.key, required this.controller});
+  const NewChatPage(
+      {super.key, required this.controller, this.autoDiscover = false});
   final ChatController controller;
+
+  /// When true, automatically discovers models for the selected connection on
+  /// page entry and connection changes.
+  final bool autoDiscover;
   @override
   State<NewChatPage> createState() => _NewChatPageState();
 }
@@ -475,14 +630,34 @@ class _NewChatPageState extends State<NewChatPage> {
   Map<String, dynamic>? connection;
   List<ModelInfo> models = [];
   ModelInfo? selectedModel;
+  String? selectedPersonaId;
+  String? _preferredModel;
+  String? _preferredUpstreamProvider;
+  bool _userEditedModel = false;
   int catalogRevision = 0;
   int? catalogGeneration;
+  Completer<void>? _discoverCancel;
+
+  void _cancelDiscovery() {
+    final cancel = _discoverCancel;
+    _discoverCancel = null;
+    if (cancel != null && !cancel.isCompleted) cancel.complete();
+  }
 
   bool get catalogCurrent =>
       widget.controller.canDiscoverModels &&
       catalogGeneration == widget.controller.catalogGeneration &&
       connection != null &&
       widget.controller.isCurrentConnection(connection!);
+
+  bool get _isDirectConnection =>
+      const {'openai', 'anthropic', 'gemini'}.contains(connection?['type']);
+
+  String? get _effectivePersonaId => selectedPersonaId != null &&
+          widget.controller.organization.personas
+              .any((p) => p.id == selectedPersonaId)
+      ? selectedPersonaId
+      : null;
 
   void clearCatalog() {
     models = [];
@@ -509,7 +684,9 @@ class _NewChatPageState extends State<NewChatPage> {
             connection = connections
                     .where((c) => c['id'] == connection!['id'])
                     .firstOrNull ??
-                connections.firstOrNull;
+                connections
+                    .where((c) => c['type'] != 'hermesGateway')
+                    .firstOrNull;
           }
         }
       });
@@ -522,15 +699,51 @@ class _NewChatPageState extends State<NewChatPage> {
   @override
   void initState() {
     super.initState();
-    connection = widget.controller.connections
+    final eligible = widget.controller.connections
         .where((c) => c['type'] != 'hermesGateway')
-        .firstOrNull;
+        .toList();
+    final candidates = [
+      if (widget.controller.current != null) widget.controller.current!,
+      ...widget.controller.orderedSessions(),
+    ];
+    ChatSession? prior;
+    for (final session in candidates) {
+      final match = eligible
+          .where(
+              (c) => c['id'] == session.connectionId && c['type'] != 'openclaw')
+          .firstOrNull;
+      if (match != null) {
+        connection = match;
+        prior = session;
+        break;
+      }
+    }
+    connection ??= eligible.where((c) => c['type'] != 'openclaw').firstOrNull ??
+        eligible.firstOrNull;
+    if (prior != null && connection != null) {
+      final priorModel = widget.controller.replyModel(prior).trim();
+      if (priorModel.isNotEmpty) {
+        _preferredModel = priorModel;
+        _preferredUpstreamProvider = prior.upstreamProvider;
+        if (connection!['type'] != 'hermes') {
+          model.text = priorModel;
+        }
+      }
+    }
     catalogGeneration = widget.controller.catalogGeneration;
     widget.controller.addListener(syncController);
+    if (widget.autoDiscover &&
+        connection != null &&
+        connection!['type'] != 'openclaw') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !discovering) unawaited(discover());
+      });
+    }
   }
 
   @override
   void dispose() {
+    _cancelDiscovery();
     widget.controller.removeListener(syncController);
     catalogRevision++;
     model.dispose();
@@ -539,7 +752,14 @@ class _NewChatPageState extends State<NewChatPage> {
   }
 
   Future<void> discover() async {
-    if (!widget.controller.canDiscoverModels || connection == null) return;
+    if (!widget.controller.canDiscoverModels ||
+        connection == null ||
+        connection?['type'] == 'openclaw') {
+      return;
+    }
+    _cancelDiscovery();
+    final cancel = Completer<void>();
+    _discoverCancel = cancel;
     final target = connection!;
     catalogGeneration = widget.controller.catalogGeneration;
     final revision = ++catalogRevision;
@@ -553,11 +773,15 @@ class _NewChatPageState extends State<NewChatPage> {
       discovering = true;
       models = [];
       selectedModel = null;
-      model.clear();
+      if (target['type'] == 'hermes') model.clear();
       error = null;
     });
     try {
-      final result = await widget.controller.discover(target, isCurrent: valid);
+      final result = await widget.controller.discover(
+        target,
+        isCurrent: valid,
+        cancelTrigger: cancel.future,
+      );
       if (valid()) {
         setState(() {
           models = result;
@@ -565,6 +789,18 @@ class _NewChatPageState extends State<NewChatPage> {
             error = target['type'] == 'hermes'
                 ? 'No configured models returned. Add a provider on the Hermes server, then try again.'
                 : 'No models returned. Enter a model ID manually.';
+          } else if (_preferredModel != null && !_userEditedModel) {
+            final matches = result
+                .where((m) =>
+                    m.name == _preferredModel &&
+                    (target['type'] != 'hermes' ||
+                        m.upstreamProvider == _preferredUpstreamProvider))
+                .toList();
+            if (matches.length == 1 ||
+                (target['type'] != 'hermes' && matches.isNotEmpty)) {
+              selectedModel = matches.first;
+              model.text = matches.first.name;
+            }
           }
         });
       }
@@ -595,9 +831,14 @@ class _NewChatPageState extends State<NewChatPage> {
       error = null;
     });
     try {
+      final effectivePersona = _isDirectConnection ? _effectivePersonaId : null;
       await widget.controller.newSession(
-          connection!, model.text.trim(), prompt.text.trim(),
-          upstreamProvider: selectedModel?.upstreamProvider);
+        connection!,
+        model.text.trim(),
+        effectivePersona == null ? prompt.text.trim() : '',
+        upstreamProvider: selectedModel?.upstreamProvider,
+        personaId: effectivePersona,
+      );
       if (mounted) Navigator.pop(context);
     } catch (_) {
       if (mounted) {
@@ -625,15 +866,26 @@ class _NewChatPageState extends State<NewChatPage> {
                 .toList(),
             onChanged: discovering
                 ? null
-                : (id) => setState(() {
+                : (id) {
+                    setState(() {
                       connection = widget.controller.connections
                           .firstWhere((c) => c['id'] == id);
                       models = [];
                       selectedModel = null;
+                      selectedPersonaId = null;
+                      _preferredModel = null;
+                      _preferredUpstreamProvider = null;
+                      _userEditedModel = false;
                       catalogRevision++;
                       model.clear();
                       error = null;
-                    })),
+                    });
+                    if (widget.autoDiscover &&
+                        connection != null &&
+                        connection!['type'] != 'openclaw') {
+                      unawaited(discover());
+                    }
+                  }),
         if (connection?['type'] == 'openclaw')
           const Padding(
               padding: EdgeInsets.symmetric(vertical: 16),
@@ -643,7 +895,7 @@ class _NewChatPageState extends State<NewChatPage> {
           const Padding(
               padding: EdgeInsets.symmetric(vertical: 16),
               child: Text(
-                  'This starts a new app-owned conversation. To inspect an existing desktop / CLI session, use Browse remote sessions in Connections. Live attachment is not available.')),
+                  'This starts a new app-owned conversation. Existing server sessions appear in the sidebar; for Desktop / CLI sessions, use Hermes Desktop / CLI.')),
         const SizedBox(height: 16),
         OutlinedButton.icon(
             onPressed: connection == null ||
@@ -656,6 +908,8 @@ class _NewChatPageState extends State<NewChatPage> {
             label: Text(discovering ? 'Discovering…' : 'Discover models')),
         if (models.isNotEmpty)
           DropdownButtonFormField<String>(
+              key: ValueKey((connection?['id'], selectedModel?.id)),
+              initialValue: selectedModel?.id,
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'Available models'),
               items: models
@@ -663,7 +917,7 @@ class _NewChatPageState extends State<NewChatPage> {
                       DropdownMenuItem(value: m.id, child: Text(m.displayName)))
                   .toList(),
               onChanged: (v) => setState(() {
-                    if (!catalogCurrent) return;
+                    if (!catalogCurrent || v == null) return;
                     selectedModel = models.singleWhere((m) => m.id == v);
                     model.text = selectedModel!.name;
                   })),
@@ -671,22 +925,63 @@ class _NewChatPageState extends State<NewChatPage> {
         TextField(
             controller: model,
             readOnly: connection?['type'] == 'hermes',
-            onChanged: (_) => setState(() {}),
+            onChanged: (_) => setState(() {
+                  _userEditedModel = true;
+                  if (connection?['type'] != 'hermes') selectedModel = null;
+                }),
             decoration: InputDecoration(
                 labelText: 'Model ID',
                 helperText: connection?['type'] == 'hermes'
                     ? 'Choose a model from this server’s catalog.'
                     : 'Pick a discovered model or enter an exact ID.')),
+        if (_isDirectConnection &&
+            widget.controller.organization.personas.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          KeyedSubtree(
+            key: const Key('new-chat-persona'),
+            child: DropdownButtonFormField<String>(
+                key: ValueKey((
+                  _effectivePersonaId,
+                  widget.controller.organization.personas.length,
+                )),
+                initialValue: _effectivePersonaId ?? '',
+                isExpanded: true,
+                decoration:
+                    const InputDecoration(labelText: 'Assistant persona'),
+                items: [
+                  const DropdownMenuItem(
+                      value: '', child: Text('Custom instructions')),
+                  for (final persona in widget.controller.organization.personas)
+                    DropdownMenuItem(
+                        value: persona.id,
+                        child: Text(persona.name,
+                            overflow: TextOverflow.ellipsis)),
+                ],
+                onChanged: (value) => setState(
+                    () => selectedPersonaId = value == '' ? null : value)),
+          ),
+        ],
         const SizedBox(height: 16),
-        TextField(
-            controller: prompt,
-            maxLines: 4,
-            decoration: const InputDecoration(
-                labelText: 'System prompt (optional)',
-                alignLabelWithHint: true)),
+        if (_effectivePersonaId == null)
+          TextField(
+              controller: prompt,
+              maxLines: 4,
+              decoration: const InputDecoration(
+                  labelText: 'System prompt (optional)',
+                  alignLabelWithHint: true))
+        else
+          Text(
+            widget.controller.organization.personas
+                    .where((p) => p.id == _effectivePersonaId)
+                    .firstOrNull
+                    ?.instructions ??
+                '',
+            style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant),
+          ),
         const SizedBox(height: 16),
         const Text(
-            'This conversation keeps its connection, model and instructions. Start a new conversation to change them. Direct-model context is managed on this device.'),
+            'This conversation stays on its original connection. Direct-model context is managed on this device.'),
         if (error != null)
           Padding(
               padding: const EdgeInsets.only(top: 16),

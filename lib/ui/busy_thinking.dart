@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'thinking_phrases.dart';
 
@@ -77,15 +76,13 @@ class _BusyThinkingState extends State<BusyThinking>
     _loader ??= Timer.periodic(const Duration(milliseconds: 800), (_) {
       setState(() => _turns += .5);
     });
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      // Local waiting time, not a claim about server execution or progress.
-      _elapsedTimer ??= Timer.periodic(const Duration(milliseconds: 100), (_) {
-        final seconds =
-            max(0, _now().difference(_startedAt).inMilliseconds) / 1000;
-        final elapsed = '${seconds.toStringAsFixed(1)}s';
-        if (elapsed != _elapsed) setState(() => _elapsed = elapsed);
-      });
-    }
+    // Local waiting time, not a claim about server execution or progress.
+    _elapsedTimer ??= Timer.periodic(const Duration(milliseconds: 100), (_) {
+      final seconds =
+          max(0, _now().difference(_startedAt).inMilliseconds) / 1000;
+      final elapsed = '${seconds.toStringAsFixed(1)}s';
+      if (elapsed != _elapsed) setState(() => _elapsed = elapsed);
+    });
     _timer ??= Timer.periodic(const Duration(seconds: 10), (_) {
       setState(() => _quip = _bag.next());
     });
@@ -104,59 +101,55 @@ class _BusyThinkingState extends State<BusyThinking>
   Widget build(BuildContext context) {
     if (!widget.busy) return const SizedBox.shrink();
     final quip = '$_quip...';
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      final colors = Theme.of(context).colorScheme;
-      return Semantics(
-        label: 'Waiting for reply',
-        liveRegion: false,
-        child: ExcludeSemantics(
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Container(
-              key: const Key('pending-response-bubble'),
-              constraints: const BoxConstraints(maxWidth: 720),
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-              decoration: BoxDecoration(
-                color: colors.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (_reduced || !_foreground)
-                        Icon(Icons.hourglass_empty_rounded,
-                            size: 18, color: colors.primary)
-                      else
-                        AnimatedRotation(
-                          key: const Key('thinking-loader'),
-                          turns: _turns,
-                          duration: const Duration(milliseconds: 500),
-                          child: SizedBox.square(
-                            dimension: 18,
-                            child: CircularProgressIndicator(
-                                value: .7,
-                                strokeWidth: 2,
-                                color: colors.primary),
-                          ),
+    final colors = Theme.of(context).colorScheme;
+    return Semantics(
+      label: 'Waiting for reply',
+      liveRegion: false,
+      child: ExcludeSemantics(
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Container(
+            key: const Key('pending-response-bubble'),
+            constraints: const BoxConstraints(maxWidth: 720),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+            decoration: BoxDecoration(
+              color: colors.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (_reduced || !_foreground)
+                      Icon(Icons.hourglass_empty_rounded,
+                          size: 18, color: colors.primary)
+                    else
+                      AnimatedRotation(
+                        key: const Key('thinking-loader'),
+                        turns: _turns,
+                        duration: const Duration(milliseconds: 500),
+                        child: SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(
+                              value: .7, strokeWidth: 2, color: colors.primary),
                         ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(quip,
-                            key: const Key('thinking-quip'),
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyLarge
-                                ?.copyWith(
-                                  fontStyle: FontStyle.italic,
-                                  color: colors.primary.withValues(alpha: .5),
-                                )),
                       ),
-                    ],
-                  ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(quip,
+                          key: const Key('thinking-quip'),
+                          style:
+                              Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                    fontStyle: FontStyle.italic,
+                                    color: colors.onSurfaceVariant,
+                                  )),
+                    ),
+                  ],
+                ),
+                if (!_reduced)
                   Align(
                     alignment: Alignment.centerRight,
                     child: Text(_elapsed,
@@ -166,47 +159,11 @@ class _BusyThinkingState extends State<BusyThinking>
                               color: colors.onSurfaceVariant,
                             )),
                   ),
-                ],
-              ),
+              ],
             ),
           ),
         ),
-      );
-    }
-    return Semantics(
-      label: 'Waiting for reply',
-      liveRegion: false,
-      child: ExcludeSemantics(
-          child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (_reduced || !_foreground)
-            const Icon(Icons.hourglass_empty_rounded, size: 18)
-          else
-            AnimatedRotation(
-              key: const Key('thinking-loader'),
-              turns: _turns,
-              duration: const Duration(milliseconds: 500),
-              child: const SizedBox.square(
-                dimension: 18,
-                child: CircularProgressIndicator(value: .7, strokeWidth: 2),
-              ),
-            ),
-          const SizedBox(width: 12),
-          Expanded(
-              child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Waiting for reply'),
-              const SizedBox(height: 4),
-              Text(quip,
-                  key: const Key('thinking-quip'),
-                  style: Theme.of(context).textTheme.bodySmall),
-            ],
-          )),
-        ],
-      )),
+      ),
     );
   }
 }

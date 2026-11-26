@@ -119,6 +119,8 @@ void main() {
     expect(requests, hasLength(1));
     expect(jsonDecode(requests.single), {
       'model': 'small',
+      'stream': true,
+      'stream_options': {'include_usage': true},
       'messages': [
         {'role': 'user', 'content': 'Original accepted text'}
       ]

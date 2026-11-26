@@ -238,4 +238,25 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     c.dispose();
   });
+
+  testWidgets(
+      'actual ChatHome drawer edge-swipe shows archived attention count',
+      (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final c = await makeController();
+    final session = c.current!;
+    final identity = c.identityOf(session);
+    await c.organization.recordCompletion(identity, 'unread-reply');
+    await c.organization.setArchived(identity, true);
+    await tester.pumpWidget(MaterialApp(home: ChatHome(controller: c)));
+    await tester.pumpAndSettle();
+    expect(find.text('Archived (1, 1 need attention)'), findsNothing);
+    await tester.dragFrom(const Offset(1, 350), const Offset(300, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('Archived (1, 1 need attention)'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+  });
 }

@@ -93,7 +93,7 @@ void main() {
       expect(markdown.styleSheet?.a?.color, scheme.primary);
       expect(markdown.styleSheet?.code?.color, scheme.onSurface);
       expect(markdown.styleSheet?.code?.backgroundColor,
-          scheme.surfaceContainerHighest);
+          scheme.surfaceContainerLow);
     }
   });
   testWidgets('historical bubbles composer and Markdown use paired theme roles',
@@ -133,9 +133,9 @@ void main() {
       expect(markdown.styleSheet!.a?.color, scheme.primary);
       expect(markdown.styleSheet!.code!.color, scheme.onSurface);
       expect(markdown.styleSheet!.code!.backgroundColor,
-          scheme.surfaceContainerHighest);
+          scheme.surfaceContainerLow);
       expect((markdown.styleSheet!.codeblockDecoration! as BoxDecoration).color,
-          scheme.surfaceContainerHighest);
+          scheme.surfaceContainerLow);
       expect(find.text('[Image blocked: automatic loading is disabled]'),
           findsOneWidget);
       for (final pair in [

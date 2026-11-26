@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'chat_controller.dart';
+import 'connections.dart';
 import 'optimizer_review.dart';
 import 'optimizer_settings.dart';
 import 'send_action_group.dart';
@@ -167,7 +168,7 @@ class _PromptOptimizerState extends State<PromptOptimizer> {
     }
 
     c.addListener(checkSession);
-    final result = await showDialog<OptimizerPreview>(
+    final result = await showDialog<Object?>(
         context: context,
         builder: (_) => PromptReview(
             controller: c,
@@ -184,6 +185,20 @@ class _PromptOptimizerState extends State<PromptOptimizer> {
     final wasActive = active.value;
     active.dispose();
     if (!mounted || result == null) return;
+    if (result is AddDirectConnectionAction) {
+      if (!wasActive || !c.canChangeConnections) return;
+      await Navigator.of(context).push(MaterialPageRoute<void>(
+          builder: (_) => AddConnectionPage(controller: c)));
+      if (!mounted ||
+          !enabled ||
+          revision != version ||
+          !identical(session, c.current)) {
+        return;
+      }
+      await open();
+      return;
+    }
+    if (result is! OptimizerPreview) return;
     if (!wasActive ||
         !result.isCurrent ||
         !identical(result.settingsRevision, c.optimizerRevision) ||
@@ -214,7 +229,7 @@ class _PromptOptimizerState extends State<PromptOptimizer> {
               child: widget.triggerBuilder!(context, enabled ? menu : null))
         else
           IconButton(
-              tooltip: 'Improve prompt',
+              tooltip: 'Enhance prompt',
               icon: const Icon(Icons.auto_fix_high_outlined),
               onPressed: enabled ? open : null),
         if (applied != null &&

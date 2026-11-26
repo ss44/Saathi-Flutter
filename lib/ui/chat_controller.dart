@@ -89,7 +89,13 @@ class ChatSession {
 
 typedef CoreFactory = SaathiCore Function();
 
-enum _DispatchResult { completed, admitted, dispatchedUnknown, notDispatched }
+enum _DispatchResult {
+  completed,
+  admitted,
+  stopped,
+  dispatchedUnknown,
+  notDispatched,
+}
 
 class _DispatchPermission {
   final QueuedFollowup source;
@@ -178,6 +184,9 @@ class ChatController extends ChangeNotifier {
   final _quarantinedInputs = <ChatSession>{};
   static const preparedInputsKey = 'saathi.prepared-inputs.v1';
   static const maxInputLength = 256 * 1024;
+  static const maxStreamPreviewLength = 256 * 1024;
+  static const _stopQueueNotice =
+      'Stopped work pauses the queue. Review the result before choosing Resume.';
 
   ConversationIdentity identityOf(ChatSession session) =>
       ConversationIdentity(session.connectionId, session.id);
@@ -252,8 +261,9 @@ class ChatController extends ChangeNotifier {
     return pendingPersonaReason(identityOf(session));
   }
 
-  /// Save only future direct replies. Existing work and connection ownership are
-  /// immutable; native session mutation requires a separate verified adapter API.
+  /// Save only future direct replies and optional local display name. Existing
+  /// work and connection ownership are immutable; native session mutation
+  /// requires a separate verified adapter API.
   Future<void> saveChatSettings(
     ChatSession session, {
     required Map<String, dynamic>? originalConnection,
@@ -261,6 +271,7 @@ class ChatController extends ChangeNotifier {
     required String model,
     required String instructions,
     required String? personaId,
+    String? displayName,
   }) async {
     if (selection != selectionGeneration || !identical(current, session)) {
       throw StateError('The conversation changed. Reopen chat settings.');
@@ -270,6 +281,7 @@ class ChatController extends ChangeNotifier {
       replyModel: model,
       instructions: instructions,
       personaId: personaId,
+      displayName: displayName,
       restriction: () {
         // Once Save is accepted, recovery belongs to this original conversation,
         // not whichever chat is selected when the user retries its storage write.
@@ -278,6 +290,39 @@ class ChatController extends ChangeNotifier {
           return 'The original connection changed. Recover its settings before sending.';
         }
         return chatSettingsRestriction(session);
+      },
+    );
+  }
+
+  /// Save a local display name for [session] without modifying model, persona,
+  /// instructions, or server configuration.
+  Future<void> renameConversation(
+    ChatSession session, {
+    required Map<String, dynamic>? originalConnection,
+    required int selection,
+    required String displayName,
+  }) async {
+    if (selection != selectionGeneration || !identical(current, session)) {
+      throw StateError('The conversation changed. Reopen chat settings.');
+    }
+    await organization.renameConversation(
+      identityOf(session),
+      displayName,
+      restriction: () {
+        if (_disposed ||
+            _loadFailed ||
+            loading ||
+            !sessions.contains(session)) {
+          return 'The original conversation is unavailable.';
+        }
+        if (originalConnection != null &&
+            !isCurrentConnection(originalConnection)) {
+          return 'The original connection changed. Recover its settings before sending.';
+        }
+        if (changingConnection || unsavedChanges) {
+          return 'Finish connection changes or recover unsaved replies first.';
+        }
+        return null;
       },
     );
   }
@@ -955,6 +1000,15 @@ class ChatController extends ChangeNotifier {
         }
         _canonicalHeldOwners.remove(item);
         _foregroundHeld.remove(item);
+        if (result == _DispatchResult.stopped) {
+          if (!_uncertain.containsKey(item.session) &&
+              !unsavedChanges &&
+              _outbox
+                  .any((queued) => identical(queued.session, item.session))) {
+            _paused[item.session] = _stopQueueNotice;
+          }
+          break;
+        }
         if (result == _DispatchResult.dispatchedUnknown) {
           _uncertain[item.session] = item;
           _paused[item.session] =
@@ -1020,6 +1074,14 @@ class ChatController extends ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    final directCancel = _directCancel;
+    if (directCancel != null && !directCancel.isCompleted) {
+      directCancel.complete();
+    }
+    _directCancel = null;
+    _directStreamSession = null;
+    _directStreamPreview = null;
+    _directStoppedByUser = false;
     unawaited(_canonical?.close());
     _poll?.cancel();
     _runUpdates.close();
@@ -1064,6 +1126,10 @@ class ChatController extends ChangeNotifier {
   final _syncReceived = <String>{};
   final _reportedActivity = <String, String>{};
   RunOperation? _dispatchRun;
+  Completer<void>? _directCancel;
+  ChatSession? _directStreamSession;
+  String? _directStreamPreview;
+  bool _directStoppedByUser = false;
 
   bool _needsReceiptSync(RunOperation op) =>
       !op.committed &&
@@ -1073,6 +1139,42 @@ class ChatController extends ChangeNotifier {
 
   int _pollLimit(RunOperation op) =>
       _needsReceiptSync(op) && _syncReceived.contains(op.key) ? 6 : 3;
+
+  bool get _directStreaming =>
+      busy && _directCancel != null && !_directCancel!.isCompleted;
+
+  /// True while the currently selected conversation has an active, abortable
+  /// direct-model HTTP request in flight.
+  bool get canStopDirectReply =>
+      !_disposed &&
+      _directStreaming &&
+      identical(_directStreamSession, current);
+
+  /// True when starting a new conversation is safe, including while an
+  /// independent direct-model stream is running in another conversation.
+  bool get canStartNewSession =>
+      !_disposed &&
+      !loading &&
+      !changingConnection &&
+      !_loadFailed &&
+      !unsavedChanges &&
+      (!busy || _directStreaming);
+
+  /// Aborts the currently selected conversation's in-flight direct-model reply.
+  ///
+  /// Pauses any queued follow-ups for that conversation for user review and
+  /// never auto-resends or mutates unrelated conversations.
+  bool stopDirectReply() {
+    if (!canStopDirectReply) return false;
+    final session = _directStreamSession!;
+    _directStoppedByUser = true;
+    _paused[session] = _stopQueueNotice;
+    pauseQueue(_stopQueueNotice, session: session);
+    final cancel = _directCancel;
+    if (cancel != null && !cancel.isCompleted) cancel.complete();
+    notifyListeners();
+    return true;
+  }
 
   bool get _preparingReply =>
       busy && identical(_dispatchingSession, current) && _dispatchRun == null;
@@ -1241,7 +1343,11 @@ class ChatController extends ChangeNotifier {
                     };
   String? get streamingText =>
       canonical?.streamText ??
-      (runPending ? _streamText[currentRun?.key] : null);
+      (runPending
+          ? _streamText[currentRun?.key]
+          : (identical(current, _directStreamSession)
+              ? _directStreamPreview
+              : null));
 
   /// Observations from the existing activity attachment, never a second stream
   /// or inference. Only an authoritative status read can settle the journal.
@@ -2736,10 +2842,16 @@ class ChatController extends ChangeNotifier {
   bool get readOnly =>
       _loadFailed || (current != null && isSessionReadOnly(current!));
 
-  void _checkMutation(String id, {bool changesConnection = true}) {
+  void _checkMutation(
+    String id, {
+    bool changesConnection = true,
+    bool allowDuringDirectStream = false,
+  }) {
+    final busyBlocked = busy &&
+        !(allowDuringDirectStream && _directStreaming && !unsavedChanges);
     if (_disposed ||
         loading ||
-        busy ||
+        busyBlocked ||
         changingConnection ||
         _loadFailed ||
         (changesConnection &&
@@ -2816,6 +2928,7 @@ class ChatController extends ChangeNotifier {
   Future<List<ModelInfo>> discover(
     Map<String, dynamic> c, {
     bool Function()? isCurrent,
+    Future<void>? cancelTrigger,
   }) async {
     final generation = catalogGeneration;
     bool valid() =>
@@ -2830,7 +2943,11 @@ class ChatController extends ChangeNotifier {
       final key = await store.readConnectionSecret(c['id']) ?? '';
       if (!valid()) throw StateError('Stale catalog');
       core.addProvider(config(c, key));
-      final result = await core.discoverModels(c['id'], isCurrent: valid);
+      final result = await core.discoverModels(
+        c['id'],
+        isCurrent: valid,
+        cancelTrigger: cancelTrigger,
+      );
       if (!valid()) throw StateError('Stale catalog');
       return result;
     } finally {
@@ -2838,17 +2955,41 @@ class ChatController extends ChangeNotifier {
     }
   }
 
+  /// Creates and selects a new local conversation on [c].
+  ///
+  /// When [personaId] is supplied on a direct-model connection, validates and
+  /// attaches the shared persona before selecting the new session, rolling back
+  /// the created session on confirmed metadata save failures.
   Future<void> newSession(
     Map<String, dynamic> c,
     String model,
     String prompt, {
     String? upstreamProvider,
+    String? personaId,
   }) async {
     if (upstreamProvider != null && !isCurrentConnection(c)) {
       throw StateError('Stale connection');
     }
+    final attachPersona = personaId != null &&
+        personaId.isNotEmpty &&
+        const {'openai', 'anthropic', 'gemini'}.contains(c['type']);
+    if (attachPersona) {
+      if (!organization.loaded ||
+          organization.saving ||
+          organization.hasUnsavedChanges) {
+        throw StateError(
+            'Conversation metadata is not ready for persona edits');
+      }
+      if (!organization.personas.any((p) => p.id == personaId)) {
+        throw StateError('Selected persona no longer exists');
+      }
+    }
     // A new chat leaves the accepted edit's original source/session intact.
-    _checkMutation(c['id'] as String, changesConnection: false);
+    _checkMutation(
+      c['id'] as String,
+      changesConnection: false,
+      allowDuringDirectStream: true,
+    );
     // Starting a new-chat transition spends native input/control authority even
     // when its subsequent history write fails and the old chat remains visible.
     if (identical(current, _canonicalSession)) _canonical?.revokeInput();
@@ -2865,6 +3006,35 @@ class ChatController extends ChangeNotifier {
     } catch (_) {
       sessions.remove(session);
       rethrow;
+    }
+    if (attachPersona) {
+      final identity = identityOf(session);
+      try {
+        await organization.edit(
+          identity,
+          displayName: '',
+          personaId: personaId,
+          policy: PersonaEditPolicy.localInstructions,
+          pendingReason: null,
+          revalidatePersonaChange: () => pendingPersonaReason(identity),
+        );
+      } catch (err) {
+        if (err is OrganizationWriteFailure && !err.rollbackConfirmed) {
+          select(session);
+          rethrow;
+        }
+        if (organization.hasUnsavedChanges) {
+          organization.discardPendingEdit();
+        }
+        sessions.remove(session);
+        try {
+          await persist();
+        } catch (_) {
+          sessions.add(session);
+          select(session);
+        }
+        rethrow;
+      }
     }
     // Successful local creation follows the same source-bound pause policy as
     // selecting history or continuing a remote chat. A lease alone is not a pause.
@@ -2893,12 +3063,32 @@ class ChatController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void>? _persistTail;
+  int _persistVersion = 0;
+
   Future<void> persist() async {
     if (_loadFailed) {
       throw StateError('Saved data must be recovered before writing');
     }
-    await store.saveChats(sessions.map((s) => s.toJson()).toList());
-    unsavedChanges = false;
+    final previous = _persistTail;
+    final done = Completer<void>();
+    _persistTail = done.future;
+    try {
+      if (previous != null) await previous;
+      if (_loadFailed) {
+        throw StateError('Saved data must be recovered before writing');
+      }
+      final version = ++_persistVersion;
+      await store.saveChats(sessions.map((s) => s.toJson()).toList());
+      if (version == _persistVersion &&
+          _canonicalQueueSaveRetry == null &&
+          _canonicalSaveRetry == null) {
+        unsavedChanges = false;
+      }
+    } finally {
+      if (identical(_persistTail, done.future)) _persistTail = null;
+      done.complete();
+    }
   }
 
   Future<void> retrySave() async {
@@ -3032,6 +3222,66 @@ class ChatController extends ChangeNotifier {
     return true;
   }
 
+  /// Persists the truthful outcome of a user-stopped direct-model stream.
+  ///
+  /// Partial output is kept with explicit incomplete metadata and is never
+  /// marked as an authoritative completion or unread alert. When no text
+  /// arrived before stopping, no fake reply is inserted and the prepared input
+  /// is discarded (failing closed into [_uncertain] if storage discard fails).
+  Future<void> _completeStoppedDirectReply(
+    ChatSession session, {
+    required String input,
+    required String partialText,
+    required QueuedFollowup source,
+    Map<String, dynamic> metadata = const {},
+  }) async {
+    if (partialText.trim().isNotEmpty) {
+      final now = DateTime.now().toUtc().toIso8601String();
+      session.messages.addAll([
+        ChatMessage(
+          role: 'user',
+          content: input,
+          metadata: {'timestamp': now},
+        ),
+        ChatMessage(
+          role: 'model',
+          content: partialText,
+          id: source.replyId,
+          metadata: {
+            ...ReportedUsage.fromMetadata(metadata).toMetadata(),
+            'timestamp': parseMessageTimestamp(metadata['timestamp'])
+                    ?.toIso8601String() ??
+                now,
+            'stoppedByUser': true,
+            'incomplete': true,
+          },
+        ),
+      ]);
+      _terminalProblems[session] =
+          'Stopped. Partial reply kept and may be incomplete. Nothing was resent.';
+      try {
+        await persist();
+        await _clearSavedPrepared();
+      } catch (_) {
+        unsavedChanges = true;
+        pauseQueue(
+          'Queue paused until the response is saved. Then choose Resume.',
+          allSources: true,
+        );
+        error =
+            'Stopped reply could not be saved. Keep this conversation open and try saving again before closing Saathi.';
+      }
+      return;
+    }
+    _terminalProblems[session] =
+        'Reply stopped before any text arrived. Nothing was resent.';
+    if (!await _discardPrepared(source)) {
+      _uncertain[session] = source;
+      _paused[session] =
+          'The held input could not be removed from storage. Try abandoning it or start a new conversation; nothing will be sent again.';
+    }
+  }
+
   // Only the drain may bypass public FIFO admission for its captured head.
   Future<_DispatchResult> _dispatch(
     String text, {
@@ -3134,14 +3384,70 @@ class ChatController extends ChangeNotifier {
       }
       _preparing = null;
       dispatched = true;
-      final result = await core.sendMessage(text);
+      final cancel = Completer<void>();
+      _directCancel = cancel;
+      _directStreamSession = session;
+      _directStreamPreview = null;
+      _directStoppedByUser = false;
+      notifyListeners();
+      final buffer = StringBuffer();
+      final previewBuffer = StringBuffer();
+      var streamMetadata = const <String, dynamic>{};
+      try {
+        await for (final chunk in core.streamMessage(
+          text,
+          cancelTrigger: cancel.future,
+        )) {
+          if (chunk.metadata.isNotEmpty) {
+            streamMetadata = chunk.metadata;
+          }
+          if (chunk.text.isNotEmpty) {
+            buffer.write(chunk.text);
+            final remaining = maxStreamPreviewLength - previewBuffer.length;
+            if (remaining > 0) {
+              previewBuffer.write(
+                chunk.text.length <= remaining
+                    ? chunk.text
+                    : chunk.text.substring(0, remaining),
+              );
+              _directStreamPreview = previewBuffer.toString();
+              notifyListeners();
+            }
+          }
+        }
+      } on RequestCancelledException {
+        if (_disposed) {
+          responseCompleted = true;
+          return _DispatchResult.stopped;
+        }
+        if (_directStoppedByUser) {
+          _directStreamPreview = null;
+          _directStreamSession = null;
+          _directCancel = null;
+          _directStoppedByUser = false;
+          responseCompleted = true;
+          await _completeStoppedDirectReply(
+            session,
+            input: text,
+            partialText: buffer.toString(),
+            source: permission.source,
+            metadata: streamMetadata,
+          );
+          return _DispatchResult.stopped;
+        }
+        rethrow;
+      }
+      _directStreamPreview = null;
+      _directStreamSession = null;
+      _directCancel = null;
+      _directStoppedByUser = false;
       responseCompleted = true;
       await _completeReply(
         session,
         input: text,
-        text: result.text,
+        text: buffer.toString(),
         replyId: permission.source.replyId,
-        metadata: result.metadata,
+        metadata: streamMetadata,
       );
       return _DispatchResult.completed;
     } on ProviderException catch (e) {
@@ -3172,6 +3478,12 @@ class ChatController extends ChangeNotifier {
     } finally {
       if (identical(_preparing, permission)) _preparing = null;
       if (identical(_dispatchingSession, session)) _dispatchingSession = null;
+      if (identical(_directStreamSession, session)) {
+        _directStreamSession = null;
+        _directStreamPreview = null;
+        _directCancel = null;
+      }
+      _directStoppedByUser = false;
       _dispatchRun = null;
       core?.close();
       busy = false;
@@ -3180,6 +3492,11 @@ class ChatController extends ChangeNotifier {
         _uncertain[session] = permission.source;
         _paused[session] =
             'Outcome unknown. The last request may have executed. It will not be sent again. Start a new conversation safely, or explicitly abandon this held outbox.';
+      }
+      if (!_draining &&
+          !_uncertain.containsKey(session) &&
+          !_outbox.any((item) => identical(item.session, session))) {
+        _paused.remove(session);
       }
       if (!_draining && unsavedChanges && runs[session.id] == null) {
         pauseQueue(

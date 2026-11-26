@@ -80,7 +80,7 @@ Future<void> open(
               viewInsets: EdgeInsets.only(bottom: keyboard)),
           child: child!),
       home: Scaffold(body: PromptOptimizer(controller: c, composer: draft))));
-  await tester.tap(find.byTooltip('Improve prompt'));
+  await tester.tap(find.byTooltip('Enhance prompt'));
   await flush(tester);
 }
 
@@ -92,7 +92,7 @@ Future<void> improve(WidgetTester tester) async {
       .store
       .secrets;
   if (secrets is DelayedSecrets) secrets.armed = true;
-  await tester.tap(find.text('Improve'));
+  await tester.tap(find.text('Enhance'));
   await tester.pump();
 }
 
@@ -148,7 +148,7 @@ void main() {
                 : const SizedBox(),
           ),
         )));
-        await tester.tap(find.byTooltip('Improve prompt'));
+        await tester.tap(find.byTooltip('Enhance prompt'));
         await tester.pumpAndSettle();
         await improve(tester);
         if (phase == 'HTTP') {
@@ -253,7 +253,7 @@ void main() {
       }
       await flush(tester);
       expect(requests, failure == 'secure read' ? 0 : 1);
-      expect(find.textContaining('Could not improve'), findsOneWidget);
+      expect(find.textContaining('Could not enhance'), findsOneWidget);
       expect(find.text('Apply'), findsNothing);
       expect(draft.text, 'Original');
       await cleanup(tester, c, draft);
@@ -280,7 +280,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
         tester
-            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Improve'))
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Enhance'))
             .onPressed,
         isNull);
     expect(requests, 0);
@@ -393,11 +393,11 @@ void main() {
           MemorySecrets(), (_) async => http.Response(response(better), 200));
       final draft = TextEditingController(text: text);
       await open(tester, c, draft, scale: width == 360 ? 2 : 1, keyboard: 280);
-      await tester.ensureVisible(find.text('Improve'));
+      await tester.ensureVisible(find.text('Enhance'));
       await improve(tester);
       await flush(tester);
       expect(find.text('Original'), findsOneWidget);
-      expect(find.text('Improved'), findsOneWidget);
+      expect(find.text('Enhanced'), findsOneWidget);
       await tester.drag(
           find.byType(SingleChildScrollView).first, const Offset(0, -1800));
       await tester.pumpAndSettle();

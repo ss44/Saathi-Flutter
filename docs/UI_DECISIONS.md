@@ -57,7 +57,7 @@ not physical-device or TalkBack verification.
 Compact navigation has one accessible **Settings** action, not a separate
 chat-optimizer settings icon. Wide navigation keeps the existing **Settings** rail
 destination and embedded pane, without adding a toolbar shortcut. Its scrollable pane groups **Connections**,
-**Application** (global optimizer, notifications and app updates), and **Current
+**Application** (appearance, global optimizer, notifications and app updates), and **Current
 conversation** (optimizer override/inheritance). Detail screens and dialogs return
 to that pane; Back returns to the untouched composer draft, including from the
 embedded desktop pane. The conversation section captures the chat on deliberate
@@ -68,9 +68,9 @@ connection or instructions. Connection edit/save/delete retains its existing sec
 storage and validation paths. Update checks and installation consent are unchanged;
 there is no new automatic-update preference.
 
-Settings rows use the current theme. Appearance/System/Light/Dark implementation
-is tracked separately in #63; this consolidation adds no toolbar theme toggle or
-placeholder preference.
+Settings rows use the current theme. Persistent System, Light, and Dark
+Appearance settings live in the **Application** section (`lib/ui/appearance.dart`,
+shipped in #78) without adding a toolbar theme toggle.
 
 All finite settings rows remain mounted for keyboard traversal and focus-driven
 scrolling. Regression tests cover Tab/Enter/Escape, 360px/2x text with keyboard
@@ -91,36 +91,56 @@ A newly settled empty answer remains an explicit conversation-owned outcome, not
 
 `test/ui/transcript_presentation_test.dart` covers mixed history, raw pagination, safe image-only placeholders, exact Markdown copy, real swipe gestures and 360px/390px 2× text in both brightness modes. The independent outcome, native-image and Runs-outcome tests cover snapshot/journal storage failure and retry, no duplicate submission, typed activity and completion accounting. Existing adaptive-workspace, streaming scroll-ownership and native combined-home regressions remain separate gates.
 
-## Desktop conversation settings
+## Conversation settings
 
-On Linux, macOS and Windows in the wide workspace, **Chat settings** opens a
-right-hand panel beside the current transcript. The conversation list stays
-mounted but is temporarily hidden to leave room for the conversation. Application
-Settings remains in the left rail; Enhance retains its separate destination.
-Compact windows and mobile platforms keep their existing navigation; #73's mobile
-interaction remains unspecified.
+Global **Settings** consistently uses `Icons.settings_outlined` (in the compact
+AppBar and in the wide navigation rail), while per-conversation **Chat settings**
+uses `Icons.tune_rounded` whenever a conversation is open. In the wide workspace,
+**Chat settings** opens a right-hand panel beside the current transcript (with an
+explicit header close action while the conversation list stays mounted offstage
+to leave room for the transcript). In compact and mobile layouts, **Chat settings**
+opens the same surface as a modal sheet above the conversation, preserving unsaved
+edits across window resizes.
 
-For direct OpenAI-compatible, Anthropic and Gemini chats, Save commits a manual
-reply-model ID, a reusable persona selection and chat-specific instructions in one
-metadata write. Selecting a shared persona uses its instructions without editing
-that shared role; selecting **This chat’s instructions** enables chat-only text.
-Changes apply only to future inputs on the original connection. Accepted, queued,
-uncertain and unsaved work blocks edits, and each accepted direct input captures
-its effective model and instructions for persistence/recovery. Cancel never saves.
+For direct OpenAI-compatible, Anthropic and Gemini chats, Save commits local
+display rename, reply-model ID (manual entry or optional explicit model discovery
+on the original connection), reusable persona selection (with create/edit shared
+persona dialogs) and chat-specific instructions in one metadata write, alongside
+per-chat prompt optimizer inheritance/override. Selecting a shared persona uses
+its instructions without editing that shared role; selecting **This chat’s
+instructions** enables chat-only text. Changes apply only to future inputs on the
+original connection. Accepted, queued, uncertain and unsaved work blocks edits,
+and each accepted direct input captures its effective model and instructions for
+persistence/recovery. Cancel and Back never save.
 
-Native conversations are read-only in this panel: saved model/instruction values
+Native conversations keep model, persona and instructions read-only in this
+surface while still allowing local display rename: saved model/instruction values
 are not asserted to be the current server configuration. The shipped adapters
 have no verified existing-session model/persona/system-instruction mutation
 contract. No global server configuration is changed, history replayed, session
 replaced or inference started by opening or saving settings. Native mutation and
 deployed-server/device acceptance remain separate work.
 
+## Sidebar grouping and mobile waiting state
+
+Writable local conversations are grouped above read-only ones in the local
+sidebar, and interactive Hermes API conversations are grouped above genuinely
+read-only history in Hermes server sections, ordered by latest actual message
+recency (#90). Read-only conversations stay selectable with a neutral surface
+tint and explicit `Read-only` label.
+
+Pending outgoing messages appear immediately as right-aligned bubbles (#88).
+Decorative waiting copy rotates on a ten-second cadence across platforms when
+foregrounded and animations are enabled (#86). On Android, HTTP Runs uses
+bounded foreground status sync without opening activity SSE streams and hides
+the status-only `Agent activity` strip (#85, #87).
+
 ## Layout verification
 Wide windows at least 1,000 logical pixels use the persistent workspace when there is also room for the current text scale (at least 720 times the scaled unit size). The chat list stays 300px wide beside the navigation rail; conversation content is capped at 960px. Settings opens inside the workspace without replacing the conversation or its draft. Resizing back to compact navigation preserves the composer. Selecting an API-owned remote conversation now checks its native Runs support and opens the original-session composer automatically, retaining visible history while connecting. Desktop/CLI sessions still require their own authenticated gateway authority, not a replay through REST; unavailable permission, protocol and reconnect states explain the prerequisite. See [existing-conversation participation](EXISTING_CONVERSATIONS.md).
 
 `test/ui/desktop_shell_test.dart` exercises desktop and landscape layouts, conversation selection/draft ownership, embedded settings, resizing and large-text fallback. Native compilation and interactive Linux, Windows and macOS acceptance are separate from these widget tests.
 
-The composer stays outside the scrolling transcript and queue/recovery feedback, at the bottom safe area (above the keyboard when open). The transcript fills the space left by the composer and native-run controls; short feedback uses only its content height, while long feedback scrolls within a bounded share of that remaining space. Agent activity stays directly above the input.
+The composer stays outside the scrolling transcript and queue/recovery feedback, at the bottom safe area (above the keyboard when open). The transcript fills the space left by the composer and native-run controls; short feedback uses only its content height, while long feedback scrolls within a bounded share of that remaining space. Agent activity stays directly above the input when shown.
 
 `test/ui/pinned_composer_test.dart` covers empty, short and long history at 360px/390px, 2× text, multiline drafts, bottom safe-area padding and keyboard open/closed. Queue recovery and the joint pending-approval/live-child-activity tests also exercise reachable controls without sending another inference request.
 

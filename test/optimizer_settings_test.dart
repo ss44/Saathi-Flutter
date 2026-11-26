@@ -23,7 +23,7 @@ void main() {
     await fixture.open(tester, c, draft);
     expect(
         tester
-            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Improve'))
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Enhance'))
             .onPressed,
         isNull);
     expect(find.byType(TextField), findsNothing);

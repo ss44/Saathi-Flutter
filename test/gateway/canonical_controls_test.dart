@@ -48,12 +48,14 @@ void main() {
       await tester.pumpAndSettle();
       expect(
           tester
-              .widget<TextButton>(find.widgetWithText(TextButton, 'once'))
+              .widget<FilledButton>(
+                  find.widgetWithText(FilledButton, 'Allow once'))
               .onPressed,
           value == 'echo actual-action' ? isNotNull : isNull);
       expect(
           tester
-              .widget<TextButton>(find.widgetWithText(TextButton, 'deny'))
+              .widget<OutlinedButton>(
+                  find.widgetWithText(OutlinedButton, 'Deny'))
               .onPressed,
           isNotNull);
       expect(find.text('Harmless description'),
@@ -177,8 +179,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Review action'));
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('once'));
-    await tester.tap(find.text('once'));
+    await tester.ensureVisible(find.text('Allow once'));
+    await tester.tap(find.text('Allow once'));
     await tester.runAsync(() async {
       await Future<void>.delayed(const Duration(milliseconds: 50));
     });

@@ -4,6 +4,23 @@ import '../core/saathi_core.dart';
 import '../storage/saathi_store.dart' show StorageRecoveryException;
 import 'chat_controller.dart';
 
+/// A destination whose catalog membership was verified in [OptimizerSettingsDialog].
+///
+/// Callers must still re-validate [selection], [connection] identity,
+/// [catalogGeneration], and controller revocation before skipping catalog
+/// re-verification.
+@immutable
+class VerifiedOptimizerChoice {
+  const VerifiedOptimizerChoice({
+    required this.selection,
+    required this.connection,
+    required this.catalogGeneration,
+  });
+  final OptimizerSelection selection;
+  final Map<String, dynamic> connection;
+  final int catalogGeneration;
+}
+
 /// Persisted destination only. No credentials, URLs, or response-model state.
 @immutable
 class OptimizerSelection {
@@ -169,7 +186,7 @@ class OptimizerSettingsButton extends StatelessWidget {
           leading: const Icon(Icons.tune),
           title: Text(title),
           subtitle: Text(chat == null
-              ? 'Default rewrite model, separate from chat replies'
+              ? 'Default Enhance prompt model, separate from chat replies'
               : controller.optimizerOverride(chat!) == null
                   ? 'Inheriting global setting'
                   : 'Override for this chat'),
@@ -233,7 +250,11 @@ class _OptimizerSettingsDialogState extends State<OptimizerSettingsDialog>
     super.dispose();
   }
 
-  Future<void> save(OptimizerSelection? value) async {
+  Future<void> save(
+    OptimizerSelection? value, {
+    Map<String, dynamic>? verifiedConnection,
+    int? verifiedGeneration,
+  }) async {
     if (!valid || saving) return;
     final route = ModalRoute.of(context);
     setState(() {
@@ -246,7 +267,19 @@ class _OptimizerSettingsDialogState extends State<OptimizerSettingsDialog>
         setState(() => saving = false);
         // Dismissal leaves this widget mounted during its reverse transition.
         // An accepted save may finish, but may only pop its own current route.
-        if (route != null && route.isCurrent) route.navigator?.pop();
+        final verified = valid &&
+                value != null &&
+                verifiedConnection != null &&
+                verifiedGeneration != null &&
+                verifiedGeneration == widget.controller.catalogGeneration &&
+                widget.controller.isCurrentConnection(verifiedConnection)
+            ? VerifiedOptimizerChoice(
+                selection: value,
+                connection: verifiedConnection,
+                catalogGeneration: verifiedGeneration,
+              )
+            : null;
+        if (route != null && route.isCurrent) route.navigator?.pop(verified);
       }
     } catch (failure) {
       if (mounted) {
@@ -300,7 +333,10 @@ class _OptimizerSettingsDialogState extends State<OptimizerSettingsDialog>
                         connection: connection,
                         enabled: !saving && valid,
                         isOwnerCurrent: () => valid,
-                        onSelect: save),
+                        onSelect: (selection, connection, generation) => save(
+                            selection,
+                            verifiedConnection: connection,
+                            verifiedGeneration: generation)),
                   if (error != null) Text(error!),
                 ]))),
         actions: [
@@ -323,7 +359,11 @@ class _ConnectionModels extends StatefulWidget {
   final Map<String, dynamic> connection;
   final bool enabled;
   final bool Function() isOwnerCurrent;
-  final ValueChanged<OptimizerSelection> onSelect;
+  final void Function(
+    OptimizerSelection selection,
+    Map<String, dynamic> connection,
+    int catalogGeneration,
+  ) onSelect;
   @override
   State<_ConnectionModels> createState() => _ConnectionModelsState();
 }
@@ -431,10 +471,13 @@ class _ConnectionModelsState extends State<_ConnectionModels> {
                           identical(settingsRevision,
                               widget.controller.optimizerRevision) &&
                           widget.controller.isCurrentConnection(source)
-                      ? () => widget.onSelect(OptimizerSelection(
-                          connectionId: source['id'],
-                          model: model.name,
-                          provider: model.upstreamProvider))
+                      ? () => widget.onSelect(
+                          OptimizerSelection(
+                              connectionId: source['id'],
+                              model: model.name,
+                              provider: model.upstreamProvider),
+                          source,
+                          generation!)
                       : null),
           ]
         ]);
