@@ -115,7 +115,7 @@ class _RemoteSessionsPageState extends State<RemoteSessionsPage> {
             style: TextStyle(fontSize: 24, fontWeight: FontWeight.w600)),
         const SizedBox(height: 12),
         const Text(
-            'API-owned conversations can continue through native Runs after checking this connection. Desktop / CLI conversations require a canonical gateway grant, not the API-server key. History is never replayed into another conversation.'),
+            'API conversations can continue here after checking this connection. Desktop and CLI conversations need a direct host invite from Hermes instead of an API key. History is never copied to another chat.'),
         const SizedBox(height: 16),
         for (final session in sessions)
           ListTile(
