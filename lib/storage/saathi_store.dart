@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import '../chat_organization/reported_usage.dart';
@@ -259,69 +260,85 @@ class SaathiStore {
     if (!recovered) throw const StorageRecoveryException();
   }
 
+  Future<void>? _chatsTail;
+
   Future<void> saveChats(List<Map<String, dynamic>> chats) async {
-    // Persist only displayable conversation data, never arbitrary provider metadata.
-    final safe = [
-      for (final chat in chats)
-        {
-          for (final key in [
-            'id',
-            'connectionId',
-            'model',
-            'upstreamProvider',
-            'remoteSessionId',
-            'remoteTitle',
-            'canonicalProfileId',
-            'systemPrompt'
-          ])
-            if (chat.containsKey(key)) key: chat[key],
-          'messages': [
-            for (final message in (chat['messages'] as List? ?? []))
-              {
-                for (final key in ['id', 'role', 'content'])
-                  if ((message as Map).containsKey(key)) key: message[key],
-                'metadata': {
-                  ...ReportedUsage.fromMetadata(Map<String, dynamic>.from(
-                          message['metadata'] as Map? ?? {}))
-                      .toMetadata(),
-                  if ((message['metadata']
-                          as Map?)?['authoritativeCompletion'] ==
-                      true)
-                    'authoritativeCompletion': true,
-                  if ((message['metadata'] as Map?)?['timestamp']
-                      case final String ts
-                      when ts.length <= 64 && DateTime.tryParse(ts) != null)
-                    'timestamp': ts,
-                  if (const [
-                    'message',
-                    'toolActivity',
-                    'compaction',
-                    'publicNotice'
-                  ].contains(
-                      (message['metadata'] as Map?)?['canonicalRowKind']))
-                    'canonicalRowKind':
-                        (message['metadata'] as Map)['canonicalRowKind'],
-                },
-              }
-          ],
-        }
-    ];
-    const key = 'saathi.chats.v1';
-    final before = preferences.getString(key);
+    // Serialize chat snapshots so overlapping saves cannot roll back a newer commit.
+    final previous = _chatsTail;
+    final done = Completer<void>();
+    _chatsTail = done.future;
     try {
-      if (!await preferences.setString(key, jsonEncode(safe))) {
-        throw StateError('Could not save chats');
-      }
-    } catch (_) {
-      // Restore the plugin cache even when the compensating disk write fails.
+      if (previous != null) await previous;
+      // Persist only displayable conversation data, never arbitrary provider metadata.
+      final safe = [
+        for (final chat in chats)
+          {
+            for (final key in [
+              'id',
+              'connectionId',
+              'model',
+              'upstreamProvider',
+              'remoteSessionId',
+              'remoteTitle',
+              'canonicalProfileId',
+              'systemPrompt'
+            ])
+              if (chat.containsKey(key)) key: chat[key],
+            'messages': [
+              for (final message in (chat['messages'] as List? ?? []))
+                {
+                  for (final key in ['id', 'role', 'content'])
+                    if ((message as Map).containsKey(key)) key: message[key],
+                  'metadata': {
+                    ...ReportedUsage.fromMetadata(Map<String, dynamic>.from(
+                            message['metadata'] as Map? ?? {}))
+                        .toMetadata(),
+                    if ((message['metadata']
+                            as Map?)?['authoritativeCompletion'] ==
+                        true)
+                      'authoritativeCompletion': true,
+                    if ((message['metadata'] as Map?)?['stoppedByUser'] == true)
+                      'stoppedByUser': true,
+                    if ((message['metadata'] as Map?)?['incomplete'] == true)
+                      'incomplete': true,
+                    if ((message['metadata'] as Map?)?['timestamp']
+                        case final String ts
+                        when ts.length <= 64 && DateTime.tryParse(ts) != null)
+                      'timestamp': ts,
+                    if (const [
+                      'message',
+                      'toolActivity',
+                      'compaction',
+                      'publicNotice'
+                    ].contains(
+                        (message['metadata'] as Map?)?['canonicalRowKind']))
+                      'canonicalRowKind':
+                          (message['metadata'] as Map)['canonicalRowKind'],
+                  },
+                }
+            ],
+          }
+      ];
+      const key = 'saathi.chats.v1';
+      final before = preferences.getString(key);
       try {
-        if (before == null) {
-          await preferences.remove(key);
-        } else {
-          await preferences.setString(key, before);
+        if (!await preferences.setString(key, jsonEncode(safe))) {
+          throw StateError('Could not save chats');
         }
-      } catch (_) {}
-      rethrow;
+      } catch (_) {
+        // Restore the plugin cache even when the compensating disk write fails.
+        try {
+          if (before == null) {
+            await preferences.remove(key);
+          } else {
+            await preferences.setString(key, before);
+          }
+        } catch (_) {}
+        rethrow;
+      }
+    } finally {
+      if (identical(_chatsTail, done.future)) _chatsTail = null;
+      done.complete();
     }
   }
 }

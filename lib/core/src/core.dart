@@ -29,6 +29,7 @@ class SaathiCore {
   bool _busy = false;
   int _revision = 0;
   int _messageSeq = 0;
+  Completer<void>? _activeAbort;
   final List<ChatMessage> _history = [];
   List<ChatMessage> get history => List.unmodifiable(_history);
   String get systemPrompt => _systemPrompt;
@@ -463,84 +464,69 @@ class SaathiCore {
         .join('\n\n');
     final effectiveSystem =
         messages.any((m) => m.role == 'system') ? system : _systemPrompt;
+    final (path, body) = _buildDirectRequest(
+      config,
+      model,
+      messages,
+      effectiveSystem: effectiveSystem,
+      stream: false,
+    );
+    final json = await _json(config, path, body: body) as Map<String, dynamic>;
+    return switch (config.type) {
+      ProviderType.gemini => _parseGeminiJson(json),
+      ProviderType.anthropic => _parseAnthropicJson(json),
+      _ => _parseOpenAiJson(json),
+    };
+  }
+
+  (String, Map<String, dynamic>) _buildDirectRequest(
+    ProviderConfig config,
+    ModelInfo model,
+    List<ChatMessage> messages, {
+    required String effectiveSystem,
+    required bool stream,
+  }) {
     if (config.type == ProviderType.gemini) {
       final rest = _conversation(messages);
-      final json = await _json(config,
-          '/v1beta/models/${Uri.encodeComponent(model.name)}:generateContent',
-          body: {
-            'contents': [
-              for (final message in rest)
-                {
-                  'role': message['role'] == 'assistant' ? 'model' : 'user',
-                  'parts': [
-                    {'text': message['content']}
-                  ]
-                }
-            ],
-            if (effectiveSystem.isNotEmpty)
-              'system_instruction': {
+      final action =
+          stream ? 'streamGenerateContent?alt=sse' : 'generateContent';
+      return (
+        '/v1beta/models/${Uri.encodeComponent(model.name)}:$action',
+        {
+          'contents': [
+            for (final message in rest)
+              {
+                'role': message['role'] == 'assistant' ? 'model' : 'user',
                 'parts': [
-                  {'text': effectiveSystem}
+                  {'text': message['content']}
                 ]
-              },
-            if (config.useGrounding)
-              'tools': [
-                {'googleSearch': <String, dynamic>{}}
-              ],
-          });
-      final candidates = json['candidates'] as List? ?? [];
-      if (candidates.isEmpty) {
-        throw const ProviderException('Provider returned no text response');
-      }
-      final candidate = candidates.first;
-      final parts = candidate['content']?['parts'] as List? ?? [];
-      final text = parts
-          .where((p) => p['thought'] != true)
-          .map((p) => p['text'] as String? ?? '')
-          .join();
-      if (text.isEmpty) {
-        throw const ProviderException('Provider returned no text response');
-      }
-      final usage = json['usageMetadata'] as Map? ?? {};
-      return ChatResult(text, metadata: {
-        if (usage['promptTokenCount'] != null)
-          'promptTokens': usage['promptTokenCount'],
-        if (usage['candidatesTokenCount'] != null)
-          'completionTokens': usage['candidatesTokenCount'],
-        if (usage['totalTokenCount'] != null)
-          'totalTokens': usage['totalTokenCount'],
-        if (candidate['groundingMetadata'] != null)
-          'groundingMetadata': candidate['groundingMetadata'],
-        if (candidate['finishReason'] != null)
-          'finishReason': candidate['finishReason'],
-      });
+              }
+          ],
+          if (effectiveSystem.isNotEmpty)
+            'system_instruction': {
+              'parts': [
+                {'text': effectiveSystem}
+              ]
+            },
+          if (config.useGrounding)
+            'tools': [
+              {'googleSearch': <String, dynamic>{}}
+            ],
+        },
+      );
     }
     if (config.type == ProviderType.anthropic) {
       final rest = _conversation(messages);
-      final json = await _json(config, '/v1/messages', body: {
-        'model': model.name,
-        'max_tokens': 4096,
-        if (effectiveSystem.isNotEmpty) 'system': effectiveSystem,
-        'messages': rest,
-      });
-      final content = json['content'] as List? ?? [];
-      final text = content
-          .where((part) => part['type'] == 'text')
-          .map((part) => part['text'] as String? ?? '')
-          .join();
-      if (text.isEmpty) {
-        throw const ProviderException('Provider returned no text response');
-      }
-      final usage = json['usage'] as Map? ?? {};
-      final input = usage['input_tokens'];
-      final output = usage['output_tokens'];
-      return ChatResult(text, metadata: {
-        if (input is int && input >= 0 && input <= 1000000000)
-          'promptTokens': input,
-        if (output is int && output >= 0 && output <= 1000000000)
-          'completionTokens': output,
-        if (json['stop_reason'] != null) 'finishReason': json['stop_reason']
-      });
+      return (
+        '/v1/messages',
+        {
+          'model': model.name,
+          'max_tokens': 4096,
+          if (stream) 'stream': true,
+          if (effectiveSystem.isNotEmpty) 'system': effectiveSystem,
+          'messages': rest,
+        },
+      );
     }
     final wire = <Map<String, dynamic>>[
       if (effectiveSystem.isNotEmpty)
@@ -551,12 +537,122 @@ class SaathiCore {
           'content': message.content
         },
     ];
-    final json = await _json(config, '/v1/chat/completions', body: {
-      'model': model.name,
-      if (config.type == ProviderType.hermes && model.upstreamProvider != null)
-        'provider': model.upstreamProvider,
-      'messages': wire
+    return (
+      '/v1/chat/completions',
+      {
+        'model': model.name,
+        if (config.type == ProviderType.hermes &&
+            model.upstreamProvider != null)
+          'provider': model.upstreamProvider,
+        if (stream) 'stream': true,
+        if (stream) 'stream_options': {'include_usage': true},
+        'messages': wire,
+      },
+    );
+  }
+
+  bool _validTokenCount(Object? value) =>
+      value is int && value >= 0 && value <= 1000000000;
+
+  ChatResult _parseGeminiJson(Map<String, dynamic> json) {
+    final candidates = json['candidates'] as List? ?? [];
+    if (candidates.isEmpty) {
+      throw const ProviderException('Provider returned no text response');
+    }
+    final candidate = candidates.first;
+    final parts = candidate['content']?['parts'] as List? ?? [];
+    final text = parts
+        .where((p) => p is Map && p['thought'] != true)
+        .map((p) => p['text'] as String? ?? '')
+        .join();
+    if (text.isEmpty) {
+      throw const ProviderException('Provider returned no text response');
+    }
+    final usage = json['usageMetadata'] as Map? ?? {};
+    return ChatResult(text, metadata: {
+      if (usage['promptTokenCount'] != null)
+        'promptTokens': usage['promptTokenCount'],
+      if (usage['candidatesTokenCount'] != null)
+        'completionTokens': usage['candidatesTokenCount'],
+      if (usage['totalTokenCount'] != null)
+        'totalTokens': usage['totalTokenCount'],
+      if (candidate['groundingMetadata'] != null)
+        'groundingMetadata': candidate['groundingMetadata'],
+      if (candidate['finishReason'] != null)
+        'finishReason': candidate['finishReason'],
     });
+  }
+
+  ChatResult _parseGeminiJsonList(List<dynamic> frames) {
+    final output = StringBuffer();
+    final metadata = <String, dynamic>{};
+    for (final frame in frames) {
+      if (frame is! Map<String, dynamic>) {
+        throw const ProviderException(
+            'Provider returned an invalid response object');
+      }
+      if (frame['error'] != null) {
+        throw const ProviderException('Provider stream reported an error');
+      }
+      final candidates = frame['candidates'] as List? ?? [];
+      if (candidates.isNotEmpty) {
+        final candidate = candidates.first;
+        final parts = candidate['content']?['parts'] as List? ?? [];
+        for (final p in parts) {
+          if (p is Map && p['thought'] != true && p['text'] is String) {
+            output.write(p['text'] as String);
+          }
+        }
+        if (candidate['groundingMetadata'] != null) {
+          metadata['groundingMetadata'] = candidate['groundingMetadata'];
+        }
+        final finish = candidate['finishReason'];
+        if (finish is String) {
+          if (const {'ERROR', 'CANCELLED', 'CANCELED'}
+              .contains(finish.toUpperCase())) {
+            throw const ProviderException(
+                'Provider turn failed or was cancelled');
+          }
+          metadata['finishReason'] = finish;
+        }
+      }
+      final usage = frame['usageMetadata'] as Map? ?? {};
+      if (usage['promptTokenCount'] != null) {
+        metadata['promptTokens'] = usage['promptTokenCount'];
+      }
+      if (usage['candidatesTokenCount'] != null) {
+        metadata['completionTokens'] = usage['candidatesTokenCount'];
+      }
+      if (usage['totalTokenCount'] != null) {
+        metadata['totalTokens'] = usage['totalTokenCount'];
+      }
+    }
+    if (output.isEmpty) {
+      throw const ProviderException('Provider returned no text response');
+    }
+    return ChatResult(output.toString(), metadata: metadata);
+  }
+
+  ChatResult _parseAnthropicJson(Map<String, dynamic> json) {
+    final content = json['content'] as List? ?? [];
+    final text = content
+        .where((part) => part is Map && part['type'] == 'text')
+        .map((part) => part['text'] as String? ?? '')
+        .join();
+    if (text.isEmpty) {
+      throw const ProviderException('Provider returned no text response');
+    }
+    final usage = json['usage'] as Map? ?? {};
+    final input = usage['input_tokens'];
+    final output = usage['output_tokens'];
+    return ChatResult(text, metadata: {
+      if (_validTokenCount(input)) 'promptTokens': input,
+      if (_validTokenCount(output)) 'completionTokens': output,
+      if (json['stop_reason'] != null) 'finishReason': json['stop_reason'],
+    });
+  }
+
+  ChatResult _parseOpenAiJson(Map<String, dynamic> json) {
     final choices = json['choices'] as List? ?? [];
     if (choices.isEmpty || choices.first['message']?['content'] is! String) {
       throw const ProviderException('Provider returned no text response');
@@ -597,58 +693,82 @@ class SaathiCore {
     return result;
   }
 
-  Stream<ChatChunk> streamMessage(String text) async* {
-    if (_busy) throw StateError('A conversation request is already active');
-    if (text.trim().isEmpty) throw ArgumentError('Message must not be empty');
-    final model = currentModel ?? (throw StateError('No model selected'));
-    final config = _provider(model.providerId);
-    if (![ProviderType.openai, ProviderType.hermes].contains(config.type)) {
-      throw const ProviderException(
-          'Streaming is supported only for OpenAI-compatible and Hermes API servers');
-    }
-    _busy = true;
-    final revision = _revision;
-    final output = StringBuffer();
-    final metadata = <String, dynamic>{};
-    final abort = Completer<void>();
-    try {
-      final request = http.AbortableRequest(
-          'POST', _uri(config, '/v1/chat/completions'),
-          abortTrigger: abort.future);
-      request.headers
-          .addAll({..._headers(config), 'accept': 'text/event-stream'});
-      request.followRedirects = false;
-      request.body = jsonEncode({
-        'model': model.name,
-        if (config.type == ProviderType.hermes &&
-            model.upstreamProvider != null)
-          'provider': model.upstreamProvider,
-        'stream': true,
-        'stream_options': {'include_usage': true},
-        'messages': [
-          if (_systemPrompt.isNotEmpty)
-            {'role': 'system', 'content': _systemPrompt},
-          ..._conversation(
-              [...history, ChatMessage(role: 'user', content: text)])
-        ],
-      });
-      final response = await _client.send(request).timeout(_requestTimeout);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        if (!abort.isCompleted) abort.complete();
-        throw ProviderException('Provider streaming request failed',
-            statusCode: response.statusCode);
+  Future<T> _raceCancel<T>(Future<T> future, Future<void>? cancelTrigger) {
+    if (cancelTrigger == null) return future;
+    final completer = Completer<T>();
+    future.then(
+      (value) {
+        if (!completer.isCompleted) completer.complete(value);
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!completer.isCompleted) completer.completeError(error, stackTrace);
+      },
+    );
+    cancelTrigger.then((_) {
+      if (!completer.isCompleted) {
+        completer.completeError(const RequestCancelledException());
       }
-      var done = false;
-      await for (final event in decodeEvents(_bounded(response.stream))) {
-        if (event.data.trim() == '[DONE]') {
-          done = true;
-          break;
-        }
-        if (event.event.isNotEmpty &&
-            event.event != 'message' &&
-            event.event != 'error') {
-          continue;
-        }
+    });
+    return completer.future;
+  }
+
+  Stream<List<int>> _cancellableBytes(
+    Stream<List<int>> source,
+    Future<void>? cancelTrigger,
+  ) {
+    if (cancelTrigger == null) return source;
+    final controller = StreamController<List<int>>();
+    StreamSubscription<List<int>>? subscription;
+    var finished = false;
+    void finishCancelled() {
+      if (finished) return;
+      finished = true;
+      unawaited(subscription?.cancel().catchError((Object _) {}));
+      if (!controller.isClosed) {
+        controller.addError(const RequestCancelledException());
+        unawaited(controller.close());
+      }
+    }
+
+    controller.onListen = () {
+      subscription = source.listen(
+        (chunk) {
+          if (!finished && !controller.isClosed) controller.add(chunk);
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (!finished && !controller.isClosed) {
+            finished = true;
+            controller.addError(error, stackTrace);
+            unawaited(controller.close());
+          }
+        },
+        onDone: () {
+          if (!finished && !controller.isClosed) {
+            finished = true;
+            unawaited(controller.close());
+          }
+        },
+        cancelOnError: true,
+      );
+      cancelTrigger.then((_) => finishCancelled());
+    };
+    controller.onCancel = () {
+      finished = true;
+      return subscription?.cancel();
+    };
+    return controller.stream;
+  }
+
+  Stream<ChatChunk> _parseSseStream(
+    ProviderType type,
+    Stream<List<int>> bytes,
+    StringBuffer output,
+    Map<String, dynamic> metadata,
+  ) async* {
+    var done = false;
+    await for (final event in decodeEvents(bytes)) {
+      if (type == ProviderType.anthropic) {
+        if (event.data.trim().isEmpty) continue;
         final dynamic json;
         try {
           json = jsonDecode(event.data);
@@ -656,51 +776,325 @@ class SaathiCore {
           throw const ProviderException(
               'Provider returned malformed streaming JSON');
         }
+        if (json is! Map) {
+          throw const ProviderException(
+              'Provider returned malformed streaming JSON');
+        }
+        final kind =
+            json['type'] is String ? json['type'] as String : event.event;
+        if (event.event == 'error' ||
+            kind == 'error' ||
+            json['error'] != null) {
+          throw const ProviderException('Provider stream reported an error');
+        }
+        if (kind == 'message_stop') {
+          done = true;
+          break;
+        }
+        var delta = '';
+        var usageUpdated = false;
+        if (kind == 'message_start') {
+          final usage = json['message']?['usage'] as Map? ?? {};
+          if (_validTokenCount(usage['input_tokens'])) {
+            metadata['promptTokens'] = usage['input_tokens'];
+            usageUpdated = true;
+          }
+          if (_validTokenCount(usage['output_tokens'])) {
+            metadata['completionTokens'] = usage['output_tokens'];
+            usageUpdated = true;
+          }
+        } else if (kind == 'content_block_start') {
+          final block = json['content_block'];
+          if (block is Map &&
+              block['type'] == 'text' &&
+              block['text'] is String) {
+            delta = block['text'] as String;
+          }
+        } else if (kind == 'content_block_delta') {
+          final deltaObj = json['delta'];
+          if (deltaObj is Map &&
+              deltaObj['type'] == 'text_delta' &&
+              deltaObj['text'] is String) {
+            delta = deltaObj['text'] as String;
+          }
+        } else if (kind == 'message_delta') {
+          final deltaObj = json['delta'];
+          if (deltaObj is Map) {
+            final stopReason = deltaObj['stop_reason'];
+            if (['error', 'cancelled'].contains(stopReason)) {
+              throw const ProviderException(
+                  'Provider turn failed or was cancelled');
+            }
+            if (stopReason != null) metadata['finishReason'] = stopReason;
+          }
+          final usage = json['usage'] as Map? ?? {};
+          if (_validTokenCount(usage['input_tokens'])) {
+            metadata['promptTokens'] = usage['input_tokens'];
+            usageUpdated = true;
+          }
+          if (_validTokenCount(usage['output_tokens'])) {
+            metadata['completionTokens'] = usage['output_tokens'];
+            usageUpdated = true;
+          }
+        }
+        output.write(delta);
+        if (delta.isNotEmpty || usageUpdated) {
+          yield ChatChunk(delta, metadata: metadata);
+        }
+        continue;
+      }
+
+      if (type == ProviderType.gemini) {
+        if (event.data.trim() == '[DONE]') {
+          done = true;
+          break;
+        }
+        if (event.data.trim().isEmpty) continue;
+        final dynamic json;
+        try {
+          json = jsonDecode(event.data);
+        } on FormatException {
+          throw const ProviderException(
+              'Provider returned malformed streaming JSON');
+        }
+        if (json is! Map) {
+          throw const ProviderException(
+              'Provider returned malformed streaming JSON');
+        }
         if (event.event == 'error' || json['error'] != null) {
           throw const ProviderException('Provider stream reported an error');
         }
-        final choices = json['choices'] as List? ?? [];
-        final delta = choices.isEmpty
-            ? ''
-            : choices.first['delta']?['content'] as String? ?? '';
-        final finish = choices.isEmpty ? null : choices.first['finish_reason'];
-        if (['error', 'cancelled'].contains(finish)) {
-          throw const ProviderException(
-              'Provider turn failed or was cancelled');
+        final candidates = json['candidates'] as List? ?? [];
+        var delta = '';
+        if (candidates.isNotEmpty) {
+          final candidate = candidates.first;
+          final parts = candidate['content']?['parts'] as List? ?? [];
+          delta = parts
+              .where((p) => p is Map && p['thought'] != true)
+              .map((p) => p['text'] as String? ?? '')
+              .join();
+          if (candidate['groundingMetadata'] != null) {
+            metadata['groundingMetadata'] = candidate['groundingMetadata'];
+          }
+          final finish = candidate['finishReason'];
+          if (finish is String &&
+              finish.isNotEmpty &&
+              finish.toUpperCase() != 'FINISH_REASON_UNSPECIFIED') {
+            if (const {'ERROR', 'CANCELLED', 'CANCELED'}
+                .contains(finish.toUpperCase())) {
+              throw const ProviderException(
+                  'Provider turn failed or was cancelled');
+            }
+            metadata['finishReason'] = finish;
+            done = true;
+          }
         }
-        if (finish != null) metadata['finishReason'] = finish;
-        final usage = json['usage'] as Map? ?? {};
-        if (usage['prompt_tokens'] != null) {
-          metadata['promptTokens'] = usage['prompt_tokens'];
+        final usage = json['usageMetadata'] as Map? ?? {};
+        if (usage['promptTokenCount'] != null) {
+          metadata['promptTokens'] = usage['promptTokenCount'];
         }
-        if (usage['completion_tokens'] != null) {
-          metadata['completionTokens'] = usage['completion_tokens'];
+        if (usage['candidatesTokenCount'] != null) {
+          metadata['completionTokens'] = usage['candidatesTokenCount'];
         }
-        if (usage['total_tokens'] != null) {
-          metadata['totalTokens'] = usage['total_tokens'];
+        if (usage['totalTokenCount'] != null) {
+          metadata['totalTokens'] = usage['totalTokenCount'];
         }
         output.write(delta);
         if (delta.isNotEmpty || usage.isNotEmpty) {
           yield ChatChunk(delta, metadata: metadata);
         }
+        continue;
       }
-      if (!done) {
+
+      if (event.data.trim() == '[DONE]') {
+        done = true;
+        break;
+      }
+      if (event.data.trim().isEmpty) continue;
+      if (event.event.isNotEmpty &&
+          event.event != 'message' &&
+          event.event != 'error') {
+        continue;
+      }
+      final dynamic json;
+      try {
+        json = jsonDecode(event.data);
+      } on FormatException {
         throw const ProviderException(
-            'Provider stream ended before completion');
+            'Provider returned malformed streaming JSON');
       }
-      if (output.isEmpty) {
-        throw const ProviderException('Provider returned no text response');
+      if (json is! Map) {
+        throw const ProviderException(
+            'Provider returned malformed streaming JSON');
       }
-      if (revision == _revision) {
-        _commit(text, ChatResult(output.toString(), metadata: metadata));
+      if (event.event == 'error' || json['error'] != null) {
+        throw const ProviderException('Provider stream reported an error');
       }
+      final choices = json['choices'] as List? ?? [];
+      final delta = choices.isEmpty
+          ? ''
+          : choices.first['delta']?['content'] as String? ?? '';
+      final finish = choices.isEmpty ? null : choices.first['finish_reason'];
+      if (['error', 'cancelled'].contains(finish)) {
+        throw const ProviderException('Provider turn failed or was cancelled');
+      }
+      if (finish != null) metadata['finishReason'] = finish;
+      final usage = json['usage'] as Map? ?? {};
+      if (usage.isNotEmpty) {
+        metadata['usage'] = Map<String, dynamic>.from(usage);
+      }
+      if (json['runtime'] != null) metadata['runtime'] = json['runtime'];
+      if (json['hermes'] != null) metadata['hermes'] = json['hermes'];
+      if (usage['prompt_tokens'] != null) {
+        metadata['promptTokens'] = usage['prompt_tokens'];
+      }
+      if (usage['completion_tokens'] != null) {
+        metadata['completionTokens'] = usage['completion_tokens'];
+      }
+      if (usage['total_tokens'] != null) {
+        metadata['totalTokens'] = usage['total_tokens'];
+      }
+      output.write(delta);
+      if (delta.isNotEmpty || usage.isNotEmpty) {
+        yield ChatChunk(delta, metadata: metadata);
+      }
+    }
+    if (!done) {
+      throw const ProviderException('Provider stream ended before completion');
+    }
+    if (output.isEmpty) {
+      throw const ProviderException('Provider returned no text response');
+    }
+  }
+
+  /// Streams a direct-model or Hermes reply progressively over SSE, falling back
+  /// cleanly when a provider returns a non-streaming JSON body.
+  ///
+  /// Completing [cancelTrigger] aborts the underlying HTTP request immediately
+  /// and terminates the stream with [RequestCancelledException] without
+  /// committing partial output to [history].
+  Stream<ChatChunk> streamMessage(
+    String text, {
+    Future<void>? cancelTrigger,
+  }) async* {
+    if (_busy) throw StateError('A conversation request is already active');
+    if (text.trim().isEmpty) throw ArgumentError('Message must not be empty');
+    final model = currentModel ?? (throw StateError('No model selected'));
+    final config = _provider(model.providerId);
+    if (config.type == ProviderType.openclaw) {
+      throw const ProviderException(
+          'OpenClaw requires its native gateway WebSocket protocol');
+    }
+    _busy = true;
+    final revision = _revision;
+    final output = StringBuffer();
+    final metadata = <String, dynamic>{};
+    final abort = Completer<void>();
+    _activeAbort = abort;
+    var cancelled = false;
+    if (cancelTrigger != null) {
+      unawaited(cancelTrigger.then((_) {
+        cancelled = true;
+        if (!abort.isCompleted) abort.complete();
+      }));
+    }
+    try {
+      final messages = [...history, ChatMessage(role: 'user', content: text)];
+      final (path, body) = _buildDirectRequest(
+        config,
+        model,
+        messages,
+        effectiveSystem: _systemPrompt,
+        stream: true,
+      );
+      final request = http.AbortableRequest('POST', _uri(config, path),
+          abortTrigger: abort.future);
+      request.headers
+          .addAll({..._headers(config), 'accept': 'text/event-stream'});
+      request.followRedirects = false;
+      request.body = jsonEncode(body);
+      final response = await _raceCancel(
+        _client.send(request).timeout(_requestTimeout),
+        cancelTrigger,
+      );
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        if (!abort.isCompleted) abort.complete();
+        throw ProviderException('Provider streaming request failed',
+            statusCode: response.statusCode);
+      }
+      final contentType =
+          (response.headers['content-type'] ?? '').toLowerCase();
+      final bytesStream = _bounded(
+        _cancellableBytes(response.stream, cancelTrigger),
+      );
+      if (contentType.contains('text/event-stream')) {
+        await for (final chunk
+            in _parseSseStream(config.type, bytesStream, output, metadata)) {
+          yield chunk;
+        }
+        if (cancelled) throw const RequestCancelledException();
+        if (revision == _revision) {
+          _commit(text, ChatResult(output.toString(), metadata: metadata));
+        }
+      } else {
+        final bytes = await bytesStream.expand((chunk) => chunk).toList();
+        final raw = utf8.decode(bytes);
+        final trimmed = raw.trimLeft();
+        if (trimmed.startsWith('data:') ||
+            trimmed.startsWith('event:') ||
+            trimmed.startsWith(':')) {
+          await for (final chunk in _parseSseStream(
+            config.type,
+            Stream<List<int>>.value(bytes),
+            output,
+            metadata,
+          )) {
+            yield chunk;
+          }
+          if (cancelled) throw const RequestCancelledException();
+          if (revision == _revision) {
+            _commit(text, ChatResult(output.toString(), metadata: metadata));
+          }
+        } else {
+          final dynamic decoded;
+          try {
+            decoded = jsonDecode(raw);
+          } on FormatException {
+            throw const ProviderException('Provider returned invalid JSON');
+          }
+          final ChatResult result;
+          if (decoded is List && config.type == ProviderType.gemini) {
+            result = _parseGeminiJsonList(decoded);
+          } else if (decoded is Map<String, dynamic>) {
+            result = switch (config.type) {
+              ProviderType.gemini => _parseGeminiJson(decoded),
+              ProviderType.anthropic => _parseAnthropicJson(decoded),
+              _ => _parseOpenAiJson(decoded),
+            };
+          } else {
+            throw const ProviderException(
+                'Provider returned an invalid response object');
+          }
+          if (cancelled) throw const RequestCancelledException();
+          yield ChatChunk(result.text, metadata: result.metadata);
+          if (revision == _revision) {
+            _commit(text, result);
+          }
+        }
+      }
+    } on RequestCancelledException {
+      rethrow;
     } on ProviderException {
+      if (cancelled) throw const RequestCancelledException();
       rethrow;
     } on TimeoutException {
+      if (cancelled) throw const RequestCancelledException();
       throw const ProviderException('Provider stream timed out');
     } on Exception {
+      if (cancelled) throw const RequestCancelledException();
       throw const ProviderException('Provider streaming transport failed');
     } finally {
+      if (identical(_activeAbort, abort)) _activeAbort = null;
       if (!abort.isCompleted) abort.complete();
       _busy = false;
     }
@@ -783,6 +1177,9 @@ class SaathiCore {
   }
 
   void close() {
+    if (_activeAbort != null && !_activeAbort!.isCompleted) {
+      _activeAbort!.complete();
+    }
     if (_ownsClient) _client.close();
   }
 }
