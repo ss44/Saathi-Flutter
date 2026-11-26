@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:saathi/ui/chat_home.dart';
-import 'package:saathi/ui/conversation_servers.dart';
 import 'package:saathi/ui/remote_sessions.dart';
 import 'review38_history_refresh_test.dart' show RefreshFixture;
 import 'ui/remote_participation_test.dart' show network;
@@ -32,10 +31,12 @@ void main() {
       },
       {'id': 3, 'role': 'assistant', 'content': 'Authoritative later answer'},
     ];
-    await t.tap(find.byTooltip('Open navigation menu'));
+    await t.tap(find.byTooltip('Settings'));
+    await t.pumpAndSettle();
+    await t.tap(find.byTooltip('Browse remote sessions'));
     await network(t);
     final row = find.descendant(
-        of: find.byType(ConversationServer),
+        of: find.byType(RemoteSessionsPage),
         matching: find.text('External chat'));
     await t.ensureVisible(row);
     await t.tap(row);

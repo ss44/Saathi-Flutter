@@ -10,7 +10,7 @@ import 'package:saathi/core/saathi_core.dart' hide RemoteHistoryPage;
 import 'package:saathi/storage/saathi_store.dart';
 import 'package:saathi/ui/chat_controller.dart';
 import 'package:saathi/ui/chat_home.dart';
-import 'package:saathi/ui/conversation_servers.dart';
+import 'package:saathi/ui/remote_sessions.dart';
 import 'package:saathi/ui/transcript_latest.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -307,10 +307,12 @@ void main() {
       }
       final offset = position.pixels;
       f.extend();
-      await t.tap(find.byTooltip('Open navigation menu'));
+      await t.tap(find.byTooltip('Settings'));
+      await t.pumpAndSettle();
+      await t.tap(find.byTooltip('Browse remote sessions'));
       await network(t);
       final row = find.descendant(
-          of: find.byType(ConversationServer),
+          of: find.byType(RemoteSessionsPage),
           matching: find.text('External chat'));
       await t.ensureVisible(row);
       await t.tap(row);
@@ -333,8 +335,8 @@ void main() {
           'Keep this private draft');
       expect(t.state<ScrollableState>(reader).position, same(position));
       expect(position.pixels, closeTo(offset, 1));
-      expect(f.reads, 3,
-          reason: 'Initial attach plus visible route GET and continuation GET');
+      expect(f.reads, 2,
+          reason: 'Initial attach plus single continuation GET without flash');
       expect(f.requests.every((r) => r.method == 'GET'), isTrue);
       expect(f.replies, isEmpty);
       await t.drag(list, const Offset(0, -3000));
