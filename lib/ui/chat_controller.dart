@@ -251,8 +251,9 @@ class ChatController extends ChangeNotifier {
     return pendingPersonaReason(identityOf(session));
   }
 
-  /// Save only future direct replies. Existing work and connection ownership are
-  /// immutable; native session mutation requires a separate verified adapter API.
+  /// Save only future direct replies and optional local display name. Existing
+  /// work and connection ownership are immutable; native session mutation
+  /// requires a separate verified adapter API.
   Future<void> saveChatSettings(
     ChatSession session, {
     required Map<String, dynamic>? originalConnection,
@@ -260,6 +261,7 @@ class ChatController extends ChangeNotifier {
     required String model,
     required String instructions,
     required String? personaId,
+    String? displayName,
   }) async {
     if (selection != selectionGeneration || !identical(current, session)) {
       throw StateError('The conversation changed. Reopen chat settings.');
@@ -269,6 +271,7 @@ class ChatController extends ChangeNotifier {
       replyModel: model,
       instructions: instructions,
       personaId: personaId,
+      displayName: displayName,
       restriction: () {
         // Once Save is accepted, recovery belongs to this original conversation,
         // not whichever chat is selected when the user retries its storage write.
@@ -277,6 +280,39 @@ class ChatController extends ChangeNotifier {
           return 'The original connection changed. Recover its settings before sending.';
         }
         return chatSettingsRestriction(session);
+      },
+    );
+  }
+
+  /// Save a local display name for [session] without modifying model, persona,
+  /// instructions, or server configuration.
+  Future<void> renameConversation(
+    ChatSession session, {
+    required Map<String, dynamic>? originalConnection,
+    required int selection,
+    required String displayName,
+  }) async {
+    if (selection != selectionGeneration || !identical(current, session)) {
+      throw StateError('The conversation changed. Reopen chat settings.');
+    }
+    await organization.renameConversation(
+      identityOf(session),
+      displayName,
+      restriction: () {
+        if (_disposed ||
+            _loadFailed ||
+            loading ||
+            !sessions.contains(session)) {
+          return 'The original conversation is unavailable.';
+        }
+        if (originalConnection != null &&
+            !isCurrentConnection(originalConnection)) {
+          return 'The original connection changed. Recover its settings before sending.';
+        }
+        if (changingConnection || unsavedChanges) {
+          return 'Finish connection changes or recover unsaved replies first.';
+        }
+        return null;
       },
     );
   }

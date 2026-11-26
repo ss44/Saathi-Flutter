@@ -719,9 +719,13 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                           key: chatSettingsKey,
                           controller: c,
                           session: session!,
+                          isModal: !wide,
                           onClose: () => setChatSettings(null),
                         )
                       : null,
+              onChatSettingsDismiss: () {
+                if (!c.organization.saving) setChatSettings(null);
+              },
               onDrawerChanged: (open) {
                 setState(() {
                   drawerOpen = open;
@@ -771,16 +775,12 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                   ],
                 ),
                 actions: [
-                  if (wide &&
-                      session != null &&
-                      {
-                        TargetPlatform.linux,
-                        TargetPlatform.macOS,
-                        TargetPlatform.windows
-                      }.contains(Theme.of(context).platform))
+                  if (session != null)
                     TextFieldTapRegion(
                       child: IconButton(
                         tooltip: 'Chat settings',
+                        constraints:
+                            const BoxConstraints(minWidth: 48, minHeight: 48),
                         onPressed: () => setChatSettings(session),
                         icon: const Icon(Icons.tune_rounded),
                       ),
@@ -802,7 +802,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                           builder: (_) => ConnectionsPage(controller: c),
                         ),
                       ),
-                      icon: const Icon(Icons.tune_rounded),
+                      icon: const Icon(Icons.settings_outlined),
                     ),
                   if (session != null)
                     IconButton(

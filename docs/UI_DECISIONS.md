@@ -91,24 +91,30 @@ A newly settled empty answer remains an explicit conversation-owned outcome, not
 
 `test/ui/transcript_presentation_test.dart` covers mixed history, raw pagination, safe image-only placeholders, exact Markdown copy, real swipe gestures and 360px/390px 2× text in both brightness modes. The independent outcome, native-image and Runs-outcome tests cover snapshot/journal storage failure and retry, no duplicate submission, typed activity and completion accounting. Existing adaptive-workspace, streaming scroll-ownership and native combined-home regressions remain separate gates.
 
-## Desktop conversation settings
+## Conversation settings
 
-On Linux, macOS and Windows in the wide workspace, **Chat settings** opens a
-right-hand panel beside the current transcript. The conversation list stays
-mounted but is temporarily hidden to leave room for the conversation. Application
-Settings remains in the left rail; Enhance retains its separate destination.
-Compact windows and mobile platforms keep their existing navigation; #73's mobile
-interaction remains unspecified.
+Global **Settings** consistently uses `Icons.settings_outlined` (in the compact
+AppBar and in the wide navigation rail), while per-conversation **Chat settings**
+uses `Icons.tune_rounded` whenever a conversation is open. In the wide workspace,
+**Chat settings** opens a right-hand panel beside the current transcript (with an
+explicit header close action while the conversation list stays mounted offstage
+to leave room for the transcript). In compact and mobile layouts, **Chat settings**
+opens the same surface as a modal sheet above the conversation, preserving unsaved
+edits across window resizes.
 
-For direct OpenAI-compatible, Anthropic and Gemini chats, Save commits a manual
-reply-model ID, a reusable persona selection and chat-specific instructions in one
-metadata write. Selecting a shared persona uses its instructions without editing
-that shared role; selecting **This chat’s instructions** enables chat-only text.
-Changes apply only to future inputs on the original connection. Accepted, queued,
-uncertain and unsaved work blocks edits, and each accepted direct input captures
-its effective model and instructions for persistence/recovery. Cancel never saves.
+For direct OpenAI-compatible, Anthropic and Gemini chats, Save commits local
+display rename, reply-model ID (manual entry or optional explicit model discovery
+on the original connection), reusable persona selection (with create/edit shared
+persona dialogs) and chat-specific instructions in one metadata write, alongside
+per-chat prompt optimizer inheritance/override. Selecting a shared persona uses
+its instructions without editing that shared role; selecting **This chat’s
+instructions** enables chat-only text. Changes apply only to future inputs on the
+original connection. Accepted, queued, uncertain and unsaved work blocks edits,
+and each accepted direct input captures its effective model and instructions for
+persistence/recovery. Cancel and Back never save.
 
-Native conversations are read-only in this panel: saved model/instruction values
+Native conversations keep model, persona and instructions read-only in this
+surface while still allowing local display rename: saved model/instruction values
 are not asserted to be the current server configuration. The shipped adapters
 have no verified existing-session model/persona/system-instruction mutation
 contract. No global server configuration is changed, history replayed, session
