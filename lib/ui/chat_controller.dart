@@ -1044,6 +1044,7 @@ class ChatController extends ChangeNotifier {
   bool loading = true, busy = false, unsavedChanges = false;
   bool _disposed = false;
   bool _loadFailed = false;
+  bool get loadFailed => _loadFailed;
   @override
   void notifyListeners() {
     if (!_disposed) {
@@ -2444,9 +2445,9 @@ class ChatController extends ChangeNotifier {
         final op = await _ledger.load(session.id);
         if (op != null) runs[session.id] = op;
       }
-      if (sessions.isNotEmpty) current = sessions.last;
+      if (sessions.isNotEmpty) current = _defaultSession();
       await _restorePrepared();
-      if (current == null && sessions.isNotEmpty) current = sessions.last;
+      if (sessions.isNotEmpty) current = _defaultSession();
       for (final session in sessions) {
         for (final message in session.messages) {
           if (message.metadata['authoritativeCompletion'] == true &&
@@ -2849,35 +2850,72 @@ class ChatController extends ChangeNotifier {
     }
   }
 
+  ChatSession? _defaultSession() {
+    if (sessions.isEmpty) return null;
+    final ordered = orderedSessions();
+    for (final session in ordered) {
+      if (!organization.entry(identityOf(session)).archived &&
+          !isSessionReadOnly(session)) {
+        return session;
+      }
+    }
+    for (final session in ordered) {
+      if (!organization.entry(identityOf(session)).archived) {
+        return session;
+      }
+    }
+    return ordered.first;
+  }
+
   bool get canDeleteConversation =>
+      current != null && canDeleteSession(current!);
+
+  /// Whether [session] can currently be deleted without disrupting active work
+  /// or unresolved recovery state.
+  bool canDeleteSession(ChatSession session) =>
       !busy &&
-      current != null &&
+      !loading &&
+      !_loadFailed &&
+      !changingConnection &&
+      sessions.contains(session) &&
       !organization.saving &&
-      !organization.hasUnsavedChanges;
+      !organization.hasUnsavedChanges &&
+      !_preparedInputs.containsKey(session.id);
+
+  /// Deletes [session] from local storage, falling back to the next active
+  /// conversation when [session] was selected. Rolls back on persistence failure.
+  Future<void> deleteSession(ChatSession session) async {
+    if (organization.saving || organization.hasUnsavedChanges) {
+      throw StateError('Save or recover conversation details before deleting');
+    }
+    if (busy || !sessions.contains(session)) return;
+    if (_preparedInputs.containsKey(session.id)) {
+      throw StateError(
+          'Resolve or explicitly discard held input before deleting this conversation');
+    }
+    // A fresh ID also clears any backend-owned state; never re-use a cleared thread.
+    if (identical(session, _canonicalSession)) _canonical?.revokeInput();
+    final wasCurrent = identical(current, session);
+    final index = sessions.indexOf(session);
+    sessions.removeAt(index);
+    try {
+      await persist();
+    } catch (_) {
+      sessions.insert(index, session);
+      rethrow;
+    }
+    if (wasCurrent) {
+      current = _defaultSession();
+    }
+    notifyListeners();
+  }
 
   Future<void> clear() async {
     if (organization.saving || organization.hasUnsavedChanges) {
       throw StateError('Save or recover conversation details before deleting');
     }
     if (busy || current == null) return;
-    // A fresh ID also clears any backend-owned state; never re-use a cleared thread.
-    final old = current!;
-    if (_preparedInputs.containsKey(old.id)) {
-      throw StateError(
-          'Resolve or explicitly discard held input before deleting this conversation');
-    }
-    if (identical(old, _canonicalSession)) _canonical?.revokeInput();
-    final index = sessions.indexOf(old);
-    sessions.remove(old);
-    current = null;
-    try {
-      await persist();
-    } catch (_) {
-      sessions.insert(index, old);
-      current = old;
-      rethrow;
-    }
-    notifyListeners();
+    await deleteSession(current!);
   }
 
   Future<bool> send(String text) async {

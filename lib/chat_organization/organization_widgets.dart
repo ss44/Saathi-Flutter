@@ -157,12 +157,13 @@ class _ConversationOrganizationListState
                           labelText: 'Search conversations',
                           prefixIcon: Icon(Icons.search)),
                       onChanged: (value) => setState(() => _query = value))),
-              TextButton(
-                  key: const ValueKey('archived-view'),
-                  onPressed: () => setState(() => _archived = !_archived),
-                  child: Text(_archived
-                      ? 'Back to recent conversations'
-                      : 'Archived (${archived.length}${attention > 0 ? ', $attention need attention' : ''})')),
+              if (_archived || archived.isNotEmpty)
+                TextButton(
+                    key: const ValueKey('archived-view'),
+                    onPressed: () => setState(() => _archived = !_archived),
+                    child: Text(_archived
+                        ? 'Back to recent conversations'
+                        : 'Archived (${archived.length}${attention > 0 ? ', $attention need attention' : ''})')),
               if (_archived)
                 const Padding(
                     padding: EdgeInsets.all(12),
@@ -203,6 +204,8 @@ class _ConversationOrganizationListState
       });
 }
 
+enum _ConversationRowAction { archive, edit, delete }
+
 /// Actions occupy a trailing rail underneath the translating row, never below it.
 /// Horizontal gesture arena ownership leaves vertical list and edge drawer drags
 /// to their normal owners. Menu offers the same actions without a swipe.
@@ -214,28 +217,35 @@ class ConversationActionRow extends StatefulWidget {
       required this.onSelect,
       required this.onArchive,
       required this.onEdit,
+      this.onDelete,
+      this.deleteEnabled = true,
       this.selected = false,
       bool? readOnly})
       : _readOnly = readOnly;
   final bool selected;
+  final bool deleteEnabled;
   final bool? _readOnly;
   bool get readOnly => _readOnly ?? row.readOnly;
   final ConversationRowData row;
   final ConversationPresentation presentation;
   final VoidCallback onSelect;
   final Future<void> Function() onArchive, onEdit;
+  final Future<void> Function()? onDelete;
   @override
   State<ConversationActionRow> createState() => _ConversationActionRowState();
 }
 
 class _ConversationActionRowState extends State<ConversationActionRow> {
   double _offset = 0;
-  Future<void> _act(bool edit) async {
+  Future<void> _act(_ConversationRowAction action) async {
     setState(() => _offset = 0);
-    if (edit) {
-      await widget.onEdit();
-    } else {
-      await widget.onArchive();
+    switch (action) {
+      case _ConversationRowAction.archive:
+        await widget.onArchive();
+      case _ConversationRowAction.edit:
+        await widget.onEdit();
+      case _ConversationRowAction.delete:
+        await widget.onDelete?.call();
     }
   }
 
@@ -259,7 +269,8 @@ class _ConversationActionRowState extends State<ConversationActionRow> {
                               child: TextButton(
                                   style: TextButton.styleFrom(
                                       padding: EdgeInsets.zero),
-                                  onPressed: () => _act(false),
+                                  onPressed: () =>
+                                      _act(_ConversationRowAction.archive),
                                   child: Column(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
@@ -279,7 +290,8 @@ class _ConversationActionRowState extends State<ConversationActionRow> {
                               child: TextButton(
                                   style: TextButton.styleFrom(
                                       padding: EdgeInsets.zero),
-                                  onPressed: () => _act(true),
+                                  onPressed: () =>
+                                      _act(_ConversationRowAction.edit),
                                   child: Column(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
@@ -324,16 +336,22 @@ class _ConversationActionRowState extends State<ConversationActionRow> {
                               unread: widget.presentation.unread,
                               readOnly: widget.readOnly)
                         ]),
-                    trailing: PopupMenuButton<bool>(
+                    trailing: PopupMenuButton<_ConversationRowAction>(
                         tooltip: 'Conversation actions',
                         onSelected: _act,
                         itemBuilder: (_) => [
                               PopupMenuItem(
-                                  value: false,
+                                  value: _ConversationRowAction.archive,
                                   child:
                                       Text(archived ? 'Restore' : 'Archive')),
                               const PopupMenuItem(
-                                  value: true, child: Text('Edit'))
+                                  value: _ConversationRowAction.edit,
+                                  child: Text('Edit')),
+                              if (widget.onDelete != null)
+                                PopupMenuItem(
+                                    value: _ConversationRowAction.delete,
+                                    enabled: widget.deleteEnabled,
+                                    child: const Text('Delete')),
                             ]),
                   )))),
     ]));

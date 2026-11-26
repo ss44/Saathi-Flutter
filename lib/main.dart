@@ -12,9 +12,16 @@ void main() {
 }
 
 class SaathiApp extends StatefulWidget {
-  const SaathiApp({super.key, this.store, this.coreFactory, this.builder});
+  const SaathiApp({
+    super.key,
+    this.store,
+    this.storeOpener,
+    this.coreFactory,
+    this.builder,
+  });
   final TransitionBuilder? builder;
   final SaathiStore? store;
+  final Future<SaathiStore> Function()? storeOpener;
   final CoreFactory? coreFactory;
   @override
   State<SaathiApp> createState() => _SaathiAppState();
@@ -24,6 +31,7 @@ class _SaathiAppState extends State<SaathiApp> {
   ChatController? controller;
   Appearance? appearance;
   String? error;
+  bool _opening = false;
   ReplyNotifications? notifications;
   final navigator = GlobalKey<NavigatorState>();
 
@@ -44,27 +52,49 @@ class _SaathiAppState extends State<SaathiApp> {
   }
 
   Future<void> _open() async {
+    if (_opening || controller != null) return;
+    _opening = true;
+    if (error != null) {
+      setState(() => error = null);
+    }
+    Appearance? nextAppearance;
+    ChatController? nextController;
+    ReplyNotifications? nextNotifications;
     try {
-      final store = widget.store ?? await SaathiStore.open();
+      final store =
+          widget.store ?? await (widget.storeOpener ?? SaathiStore.open)();
       if (!mounted) return;
-      appearance = Appearance(store.preferences)
+      nextAppearance = Appearance(store.preferences)
         ..addListener(_appearanceChanged);
-      final c = ChatController(store, coreFactory: widget.coreFactory);
-      final n = ReplyNotifications(store.preferences);
-      notifications = n;
-      c.notifications = n;
-      c.onReplyReceived = (id) {
-        n.replyReceived(id);
+      nextController = ChatController(store, coreFactory: widget.coreFactory);
+      nextNotifications = ReplyNotifications(store.preferences);
+      nextController.notifications = nextNotifications;
+      nextController.onReplyReceived = (id) {
+        nextNotifications!.replyReceived(id);
       };
-      n.onResume = consumeTap;
-      setState(() => controller = c);
-      await c.load();
+      nextNotifications.onResume = consumeTap;
+      appearance = nextAppearance;
+      notifications = nextNotifications;
+      setState(() {
+        controller = nextController;
+        error = null;
+      });
+      await nextController.load();
       if (mounted) consumeTap();
     } catch (_) {
+      if (identical(appearance, nextAppearance)) appearance = null;
+      if (identical(notifications, nextNotifications)) notifications = null;
+      if (identical(controller, nextController)) controller = null;
+      nextAppearance?.removeListener(_appearanceChanged);
+      nextAppearance?.dispose();
+      nextNotifications?.dispose();
+      nextController?.dispose();
       if (mounted) {
         setState(() => error =
-            'Secure storage could not be opened. Restart Saathi to try again.');
+            'Secure storage could not be opened. Check storage access and try again.');
       }
+    } finally {
+      _opening = false;
     }
   }
 
@@ -112,9 +142,17 @@ class _SaathiAppState extends State<SaathiApp> {
                 body: Center(
                     child: error == null
                         ? const CircularProgressIndicator()
-                        : Padding(
+                        : SingleChildScrollView(
                             padding: const EdgeInsets.all(24),
-                            child: Text(error!))))
+                            child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(error!, textAlign: TextAlign.center),
+                                  const SizedBox(height: 16),
+                                  FilledButton(
+                                      onPressed: _open,
+                                      child: const Text('Try again'))
+                                ]))))
             : ChatHome(controller: controller!),
       )));
 }
