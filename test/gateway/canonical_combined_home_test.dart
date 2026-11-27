@@ -130,8 +130,14 @@ void main() {
                       matching: find.byType(Scrollable))
                   .first;
               final scroll = tester.state<ScrollableState>(transcript).position;
-              scroll.jumpTo(scroll.maxScrollExtent);
-              await tester.pump();
+              // The lazy list can revise its estimated edge as the final
+              // rows are laid out, so start the wheel gesture at the real edge.
+              for (var attempt = 0; attempt < 5; attempt++) {
+                scroll.jumpTo(scroll.maxScrollExtent);
+                await tester.pump();
+                if ((scroll.pixels - scroll.maxScrollExtent).abs() <= 1) break;
+              }
+              expect(scroll.pixels, closeTo(scroll.maxScrollExtent, 1));
               final position = tester.getCenter(transcript);
               await tester.sendEventToBinding(PointerScrollEvent(
                   position: position, scrollDelta: const Offset(0, -700)));

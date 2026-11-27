@@ -105,28 +105,27 @@ FIFO remains honestly local.
   source ownership remain authoritative. Receipt recovery alone does not release
   followers before the recovered snapshot has been saved.
 
-## Android HTTP Hermes: pending bubble and foreground status sync
+## Android HTTP Hermes: thinking indicator and foreground status sync
 
 For HTTP Hermes connections on Android, a message uses the durable Runs admission
 and original run ID rather than a generation-long completion request or activity
 SSE. Servers without that verified capability get an actionable limitation before
 inference; they are not silently downgraded to a fragile compatibility request.
 
-- The assistant waiting bubble follows the pinned `ss44/sathi.ai` plugin's visual
-  pattern: immediate playful text, italic
-  half-opacity primary text, a primary spinner and local elapsed seconds. It has
-  no extra heading or label. Saathi shuffles plugin jokes and 200 new lines,
-  leaving out originals that read like actual status or errors. The copy rotates
-  every ten seconds while actively waiting in the foreground on all platforms.
-  Reduced-motion and accessible navigation keep the phrase static. The elapsed
-  clock measures this mounted waiting view, not server execution time.
+- The thinking indicator shows an italic phrase with a shimmer directly on the
+  chat canvas. Saathi shuffles jokes from the pinned `ss44/sathi.ai` plugin and
+  200 new lines, leaving out originals that read like actual status or errors.
+  The copy rotates every ten seconds while actively waiting in the foreground
+  on all platforms. Reduced-motion and accessible navigation keep the phrase
+  static and hide the elapsed clock. The clock measures local time since the
+  waiting view started.
 - Ordinary sending/queued/running labels do not add another block beneath the
-  Android bubble. Real recovery, decisions, failures and controls remain visible.
+  Android indicator. Real recovery, decisions, failures and controls remain visible.
   The Android status-only path does not show the Agent activity button; it has
   no activity stream to fill the panel. Streamed desktop activity, canonical
   Gateway reply streaming, and the separate Stop and decision controls are
   unchanged.
-  The final authoritative answer removes the waiting bubble; HTTP event-fed
+  The final authoritative answer removes the thinking indicator; HTTP event-fed
   partial answers are ignored. Desktop streaming behavior is unchanged.
 - Backgrounding suspends observation. Foreground return or controller recreation
   restores the original durable operation and uses bounded status GETs to sync

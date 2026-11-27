@@ -5,7 +5,9 @@ import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.provider.Settings
+import android.widget.Toast
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -15,9 +17,31 @@ import java.security.MessageDigest
 
 class MainActivity : FlutterActivity() {
     private var replyNotifications: ReplyNotifications? = null
+    private var sharedText: SharedTextInbox? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        val share = intent?.takeIf { it.action == Intent.ACTION_SEND }
+        // Keep share extras and URIs out of Flutter deep-link routing and task restoration.
+        if (share != null) setIntent(Intent(Intent.ACTION_MAIN))
+        super.onCreate(savedInstanceState)
+        if (share != null && savedInstanceState == null) acceptShare(share)
+    }
+
+    private fun acceptShare(intent: Intent) {
+        val inbox = sharedText ?: return
+        if (!inbox.accept(intent)) {
+            Toast.makeText(this, R.string.share_text_unavailable, Toast.LENGTH_LONG).show()
+        }
+    }
+
     override fun onStart() { super.onStart(); replyNotifications?.background = false }
     override fun onStop() { replyNotifications?.background = true; super.onStop() }
     override fun onNewIntent(intent: Intent) {
+        if (intent.action == Intent.ACTION_SEND) {
+            super.onNewIntent(Intent(Intent.ACTION_MAIN))
+            acceptShare(intent)
+            return
+        }
         super.onNewIntent(intent)
         setIntent(intent)
         replyNotifications?.accept(intent)
@@ -30,6 +54,8 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        sharedText = SharedTextInbox(
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "saathi/shared_text"))
         replyNotifications = ReplyNotifications(this,
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "saathi/notifications"))
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "saathi/updates")
@@ -60,6 +86,12 @@ class MainActivity : FlutterActivity() {
                     result.error("update_install_failed", "The update could not be verified or opened.", null)
                 }
             }
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        sharedText?.dispose()
+        sharedText = null
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     @Suppress("DEPRECATION")

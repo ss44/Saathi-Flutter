@@ -20,8 +20,7 @@ void expectNoActivityStrip() {
 }
 
 void main() {
-  testWidgets(
-      'Android original pending bubble is replaced only by the final reply',
+  testWidgets('Android thinking indicator is replaced only by the final reply',
       (tester) async {
     final fixture = FlowFixture()
       ..width = 360
@@ -34,7 +33,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 10));
     });
     await tester.pump();
-    expect(find.byKey(const Key('pending-response-bubble')), findsOneWidget);
+    expect(find.byKey(const Key('thinking-quip')), findsOneWidget);
     expect(find.byKey(const Key('pending-status')), findsNothing);
     expectNoOrdinaryPhaseText();
     expect(find.text('Refresh').hitTestable(), findsOneWidget);
@@ -63,7 +62,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
     }
     expect(find.byType(BusyThinking), findsNothing);
-    expect(find.byKey(const Key('pending-response-bubble')), findsNothing);
+    expect(find.byKey(const Key('thinking-quip')), findsNothing);
     expect(find.text('Final answer').hitTestable(), findsOneWidget);
     expect(fixture.c.current!.messages.map((m) => m.content),
         ['hello', 'Final answer']);

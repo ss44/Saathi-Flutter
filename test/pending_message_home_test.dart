@@ -102,7 +102,7 @@ void main() {
     });
     await t.pump();
     expect(find.byType(BusyThinking), findsOneWidget);
-    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.byType(ShaderMask), findsNothing);
     final quip = t.widget<Text>(find.byKey(const Key('thinking-quip'))).data;
     await t.pump(const Duration(seconds: 8));
     expect(t.widget<Text>(find.byKey(const Key('thinking-quip'))).data, quip);

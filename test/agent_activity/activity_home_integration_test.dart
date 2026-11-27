@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:saathi/storage/saathi_store.dart';
 import 'package:saathi/ui/chat_controller.dart';
 import 'package:saathi/ui/chat_home.dart';
+import 'package:saathi/ui/transcript_latest.dart';
 import 'package:saathi/agent_activity/activity_strip.dart';
 import '../agent_runs_test.dart' show capabilities;
 import '../ui/remote_history_test_driver.dart';
@@ -195,7 +196,14 @@ void main() {
         expect(c.submit('Queued while approval is pending'), isTrue);
         await t.pump();
         final cancel = find.byTooltip('Cancel pending message');
-        await Scrollable.ensureVisible(t.element(cancel), alignment: .5);
+        await t.scrollUntilVisible(
+          cancel,
+          40,
+          scrollable: find.descendant(
+            of: find.byType(TranscriptLatest),
+            matching: find.byType(Scrollable),
+          ),
+        );
         await t.pumpAndSettle();
         expect(cancel.hitTestable(), findsOneWidget);
         await t.tap(cancel);
