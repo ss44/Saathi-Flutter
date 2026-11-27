@@ -44,7 +44,7 @@ ChatMessage? projectRemoteHistory(Map<String, dynamic> row) {
 bool showsHistoryBubble(ChatMessage message) =>
     ['user', 'assistant', 'model'].contains(message.role) &&
     message.metadata['canonicalRowKind'] != 'toolActivity' &&
-    message.content.trim().isNotEmpty;
+    (message.content.trim().isNotEmpty || message.photos.isNotEmpty);
 
 /// Only the gateway's sanitized public tool labels belong in response activity.
 /// Never expose raw tool bodies from imported local history.

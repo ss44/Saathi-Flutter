@@ -12,7 +12,7 @@ import '../chat_organization/reported_usage.dart';
 import '../agent_activity/activity_owner.dart';
 import '../agent_activity/activity_strip.dart';
 import '../agent_activity/activity_model.dart';
-import '../core/saathi_core.dart' show RemoteSession;
+import '../core/saathi_core.dart' show ChatPhoto, RemoteSession;
 import 'remote_sessions.dart';
 
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
@@ -38,13 +38,19 @@ import 'markdown_theme.dart';
 import 'conversation_servers.dart';
 import 'prompt_optimizer.dart';
 import 'growing_message_input.dart';
+import 'chat_photos.dart';
+import 'send_action_group.dart';
 
 class ChatHome extends StatefulWidget {
   const ChatHome({
     super.key,
     required this.controller,
+    this.pickPhoto = pickChatPhoto,
   });
   final ChatController controller;
+
+  /// The device picker boundary. Cancellation returns null.
+  final Future<ChatPhoto?> Function() pickPhoto;
   @override
   State<ChatHome> createState() => _ChatHomeState();
 }
@@ -207,6 +213,165 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   int? shownSelection;
   final Map<ConversationIdentity, String> _drafts = {};
   ConversationIdentity? _draftOwner;
+  final _photoDrafts = <ConversationIdentity, List<ChatPhoto>>{};
+  List<ChatPhoto> get _draftPhotos => _photoDrafts[_draftOwner] ?? const [];
+  bool _pickingPhoto = false;
+  int _photoPickRevision = 0;
+  final _photoActionAnchor = LayerLink();
+  Route<bool>? _photoActionRoute;
+
+  Future<void> _openPhotoActions() async {
+    if (_photoActionRoute != null || _pickingPhoto || !c.canPickPhotos) return;
+    final revision = _photoPickRevision;
+    final selection = c.selectionGeneration;
+    final route = photoActionGroupRoute(context, _photoActionAnchor);
+    _photoActionRoute = route;
+    final selected = await Navigator.of(context).push(route);
+    if (!identical(_photoActionRoute, route)) return;
+    _photoActionRoute = null;
+    if (mounted &&
+        selected == true &&
+        revision == _photoPickRevision &&
+        selection == c.selectionGeneration) {
+      await _addPhoto();
+    }
+  }
+
+  void _closePhotoActions() {
+    final route = _photoActionRoute;
+    _photoActionRoute = null;
+    if (route != null) {
+      scheduleMicrotask(() {
+        if (route.isActive) route.navigator?.removeRoute(route);
+      });
+    }
+  }
+
+  Future<void> _addPhoto() async {
+    final owner = _draftOwner;
+    final session = c.current;
+    if (owner == null ||
+        session == null ||
+        _pickingPhoto ||
+        !c.canPickPhotos ||
+        _draftPhotos.length >= ChatPhoto.maxCount) {
+      return;
+    }
+    final revision = _photoPickRevision;
+    final selection = c.selectionGeneration;
+    final route = ModalRoute.of(context);
+    bool ownsResult() =>
+        mounted &&
+        revision == _photoPickRevision &&
+        selection == c.selectionGeneration &&
+        identical(c.current, session) &&
+        _draftOwner == owner &&
+        c.canPickPhotos &&
+        (route?.isCurrent ?? true) &&
+        !desktopSettings;
+
+    setState(() => _pickingPhoto = true);
+    try {
+      final verified = await c.verifyPhotoInput();
+      if (!ownsResult()) return;
+      if (!verified) {
+        _photoError('Could not verify photo support on this Hermes API.');
+        return;
+      }
+      final photo = await widget.pickPhoto();
+      if (photo == null || !ownsResult()) return;
+      final next = [..._draftPhotos, photo];
+      if (!ChatPhoto.fitsDraft(next)) {
+        throw const FormatException('Photos must total 1 MB or less.');
+      }
+      _photoDrafts[owner] = next;
+    } on FormatException catch (error) {
+      if (ownsResult()) _photoError(error.message);
+    } catch (_) {
+      if (ownsResult()) _photoError('Could not open that photo.');
+    } finally {
+      if (mounted) setState(() => _pickingPhoto = false);
+    }
+  }
+
+  void _photoError(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _removePhoto(int index) {
+    final next = [..._draftPhotos]..removeAt(index);
+    setState(() {
+      if (next.isEmpty) {
+        _photoDrafts.remove(_draftOwner);
+      } else {
+        _photoDrafts[_draftOwner!] = next;
+      }
+    });
+  }
+
+  Widget _composerFrame({
+    required Widget child,
+    required bool showAttachments,
+  }) {
+    final colors = Theme.of(context).colorScheme;
+    return TextFieldTapRegion(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          if (showAttachments)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: _attachmentMenu(),
+            ),
+          Expanded(
+            child: Container(
+              key: const Key('composer-outline'),
+              padding: const EdgeInsets.fromLTRB(15, 4, 5, 4),
+              decoration: BoxDecoration(
+                color: colors.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(26),
+                border: Border.all(color: colors.outline),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  child,
+                  if (_draftPhotos.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsetsDirectional.only(
+                        top: 4,
+                        bottom: 4,
+                        end: 8,
+                      ),
+                      child: ChatPhotoStrip(
+                        key: const Key('draft-photos'),
+                        photos: _draftPhotos,
+                        onRemove: _removePhoto,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _attachmentMenu() {
+    final full = _draftPhotos.length >= ChatPhoto.maxCount;
+    return CompositedTransformTarget(
+      link: _photoActionAnchor,
+      child: IconButton(
+        tooltip: full ? 'Up to ${ChatPhoto.maxCount} photos' : 'Add attachment',
+        onPressed: full || _pickingPhoto ? null : _openPhotoActions,
+        icon: const Icon(Icons.add),
+      ),
+    );
+  }
+
   final GlobalKey<TooltipState> _sendTooltipKey = GlobalKey<TooltipState>();
 
   Future<void> _checkSharedText() async {
@@ -442,11 +607,17 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   void syncServers() {
     // Revoke pending scrolling at mutation start, even if the source returns
     // to the same identity (including missing -> present -> missing).
-    if (c.changingConnection) scrollRevision++;
+    if (c.changingConnection) {
+      scrollRevision++;
+      _photoPickRevision++;
+      _closePhotoActions();
+    }
     final selectionChanged =
         !identical(shownOwner, c) || shownSelection != c.selectionGeneration;
     preserveTranscriptAnchor(selectionChanged);
     if (selectionChanged) {
+      _photoPickRevision++;
+      _closePhotoActions();
       desktopSettings = false;
       settingsSession = null;
       final nextSession = c.current;
@@ -457,6 +628,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
           _saveCurrentDraft();
         } else {
           _drafts.clear();
+          _photoDrafts.clear();
           _draftOwner = null;
         }
         final restored =
@@ -465,6 +637,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
           text: restored,
           selection: TextSelection.collapsed(offset: restored.length),
         );
+      }
+      if (_photoDrafts.isNotEmpty) {
+        final existing = c.sessions.map(c.identityOf).toSet();
+        _photoDrafts.removeWhere((owner, _) => !existing.contains(owner));
       }
       _draftOwner = nextIdentity;
       shownOwner = c;
@@ -658,6 +834,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   ChatController get c => widget.controller;
   @override
   void dispose() {
+    _closePhotoActions();
     if (_receivesSharedText) _sharedTextChannel.setMethodCallHandler(null);
     activity.dispose();
     controlsUpdates?.cancel();
@@ -703,9 +880,10 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
 
   Future<void> send() async {
     final text = composer.text.trim();
-    if (c.submit(text)) {
+    if (!_pickingPhoto && c.submit(text, photos: _draftPhotos)) {
       followStream = true;
-      if (_draftOwner != null) _drafts.remove(_draftOwner);
+      _drafts.remove(_draftOwner);
+      _photoDrafts.remove(_draftOwner);
       composer.clear();
       followOutput(newInput: true);
     }
@@ -822,6 +1000,11 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
           final subtitle = session == null
               ? 'Your models. Your space.'
               : '${names.isEmpty ? 'Unavailable connection' : names.first['name']} · ${c.replyModel(session)}';
+          final inputEnabled = _canEditDraft(session);
+          final canSubmit = inputEnabled &&
+              !_pickingPhoto &&
+              c.queueStatus == null &&
+              (_draftPhotos.isEmpty || c.canAttachPhotos);
           return Listener(
             onPointerDown: (event) {
               if (!wide && event.position.dx <= 48) startDrawerGesture();
@@ -1247,6 +1430,8 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                                   : null),
                                                       text: session
                                                           .messages[i].content,
+                                                      photos: session
+                                                          .messages[i].photos,
                                                       user: session.messages[i]
                                                               .role ==
                                                           'user',
@@ -1317,6 +1502,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                               if (c.pendingText != null)
                                                 MessageView(
                                                   text: c.pendingText!,
+                                                  photos: c.pendingPhotos,
                                                   user: true,
                                                   pending: true,
                                                 ),
@@ -1327,6 +1513,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                 MessageView(
                                                   key: ValueKey(item.replyId),
                                                   text: item.text,
+                                                  photos: item.photos,
                                                   user: true,
                                                   pending: true,
                                                   onCancelPending: () =>
@@ -1866,9 +2053,11 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                                     horizontal: 10,
                                                   ),
                                                 ),
-                                                onPressed: composer.text
-                                                        .trim()
-                                                        .isEmpty
+                                                onPressed: _draftPhotos
+                                                            .isNotEmpty ||
+                                                        composer.text
+                                                            .trim()
+                                                            .isEmpty
                                                     ? null
                                                     : () async {
                                                         final text =
@@ -1925,38 +2114,21 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                       ),
                                     ),
                                   ),
-                                Container(
-                                  padding:
-                                      const EdgeInsets.fromLTRB(15, 4, 5, 4),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .surfaceContainerLow,
-                                    borderRadius: BorderRadius.circular(26),
-                                    border: Border.all(
-                                      color:
-                                          Theme.of(context).colorScheme.outline,
-                                    ),
-                                  ),
+                                _composerFrame(
+                                  showAttachments: c.canPickPhotos,
                                   child: Row(
                                     crossAxisAlignment: CrossAxisAlignment.end,
                                     children: [
                                       Expanded(
                                         child: GrowingMessageInput(
                                           controller: composer,
-                                          enabled: _canEditDraft(session),
+                                          enabled: inputEnabled,
+                                          hasPhotos: _draftPhotos.isNotEmpty,
                                           onChanged: (_) {
                                             _saveCurrentDraft();
                                             setState(() {});
                                           },
-                                          onSubmit: c.readOnly ||
-                                                  c.changingConnection ||
-                                                  session == null ||
-                                                  c.unsavedChanges ||
-                                                  c.organizationBlocked ||
-                                                  c.queueStatus != null
-                                              ? null
-                                              : send,
+                                          onSubmit: canSubmit ? send : null,
                                         ),
                                       ),
                                       if (c.canStopDirectReply)
@@ -1988,17 +2160,14 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                             triggerMode:
                                                 TooltipTriggerMode.manual,
                                             child: IconButton.filled(
-                                              onPressed: c.readOnly ||
-                                                      c.changingConnection ||
-                                                      session == null ||
-                                                      c.unsavedChanges ||
-                                                      c.organizationBlocked ||
-                                                      c.queueStatus != null ||
-                                                      composer.text
-                                                          .trim()
-                                                          .isEmpty
-                                                  ? null
-                                                  : send,
+                                              onPressed: canSubmit &&
+                                                      (composer.text
+                                                              .trim()
+                                                              .isNotEmpty ||
+                                                          _draftPhotos
+                                                              .isNotEmpty)
+                                                  ? send
+                                                  : null,
                                               icon: const Icon(
                                                 Icons.arrow_upward_rounded,
                                               ),
@@ -2217,6 +2386,7 @@ class MessageView extends StatefulWidget {
     this.answerBuilder,
     this.usage,
     this.contextMetadata,
+    this.photos = const [],
     this.pending = false,
     this.onCancelPending,
     this.onOpenLink,
@@ -2224,6 +2394,7 @@ class MessageView extends StatefulWidget {
   final String text;
   final bool user;
   final bool pending;
+  final List<ChatPhoto> photos;
   final VoidCallback? onCancelPending;
 
   /// Optional test/host hook for opening validated external Markdown links.
@@ -2407,19 +2578,27 @@ class _MessageViewState extends State<MessageView> {
                           : CrossAxisAlignment.end,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (widget.user)
-                          Text(
-                            widget.text,
-                            style: TextStyle(
-                                fontSize: 17,
-                                height: 1.45,
-                                fontStyle:
-                                    widget.pending ? FontStyle.italic : null,
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSecondaryContainer),
-                          )
-                        else ...[
+                        if (widget.user) ...[
+                          if (widget.photos.isNotEmpty)
+                            Padding(
+                              padding: EdgeInsets.only(
+                                bottom: widget.text.isEmpty ? 0 : 8,
+                              ),
+                              child: ChatPhotoStrip(photos: widget.photos),
+                            ),
+                          if (widget.text.isNotEmpty)
+                            Text(
+                              widget.text,
+                              style: TextStyle(
+                                  fontSize: 17,
+                                  height: 1.45,
+                                  fontStyle:
+                                      widget.pending ? FontStyle.italic : null,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSecondaryContainer),
+                            )
+                        ] else ...[
                           if (widget.answerBuilder case final wrap?)
                             wrap(markdown!)
                           else

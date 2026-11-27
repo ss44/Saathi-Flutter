@@ -39,7 +39,11 @@ class ChatSession {
   }) : messages = messages ?? [];
   String get title =>
       remoteTitle ??
-      (messages.isEmpty ? 'New conversation' : messages.first.content);
+      (messages.isEmpty
+          ? 'New conversation'
+          : messages.first.content.isEmpty && messages.first.photos.isNotEmpty
+              ? 'Photo message'
+              : messages.first.content);
   DateTime? get latestMessageAt {
     DateTime? latestVisible;
     for (final message in messages) {
@@ -105,6 +109,7 @@ class _DispatchPermission {
 
 class QueuedFollowup {
   final String text;
+  final List<ChatPhoto> photos;
   final ChatSession session;
   final Map<String, dynamic> connection;
   final CapturedInstructions captured;
@@ -115,9 +120,11 @@ class QueuedFollowup {
     this.session,
     this.connection, {
     CapturedInstructions? captured,
+    List<ChatPhoto> photos = const [],
     String? replyId,
     String? model,
-  })  : model = model ?? session.model,
+  })  : photos = List.unmodifiable(photos),
+        model = model ?? session.model,
         captured =
             captured ?? CapturedInstructions(null, 0, session.systemPrompt),
         replyId = replyId ?? 'reply-${runIdentity()}';
@@ -718,7 +725,59 @@ class ChatController extends ChangeNotifier {
       connections.any((c) => identical(c, item.connection)) &&
       item.connection['id'] == item.session.connectionId;
 
-  bool submit(String text) {
+  final _verifiedRunPhotos = Expando<Object>();
+
+  bool _supportsPhotos(Map<String, dynamic> connection) =>
+      connection['type'] == 'hermes' &&
+      _verifiedRunPhotos[connection] != null &&
+      identical(_verifiedRunPhotos[connection], _controlRevisions[connection]);
+
+  /// Whether the composer can offer to check Hermes API photo support.
+  bool get canPickPhotos =>
+      !readOnly &&
+      !changingConnection &&
+      _selectedConnection?['type'] == 'hermes';
+
+  /// Photo submission requires a verified Hermes Runs connection.
+  bool get canAttachPhotos =>
+      canPickPhotos && _supportsPhotos(_selectedConnection!);
+
+  /// Verify the current Hermes HTTP connection before opening a device picker.
+  /// This sends only capability discovery and binds the result to selection and
+  /// credential revision.
+  Future<bool> verifyPhotoInput() async {
+    if (!canPickPhotos) return false;
+    final connection = _selectedConnection!;
+    final selection = selectionGeneration;
+    final generation = _runsGeneration;
+    final revision = _controlRevisions[connection] ??= Object();
+    bool current() =>
+        !_disposed &&
+        !_background &&
+        !_runsPaused &&
+        !changingConnection &&
+        selection == selectionGeneration &&
+        generation == _runsGeneration &&
+        identical(revision, _controlRevisions[connection]) &&
+        isCurrentConnection(connection);
+    RunClient? client;
+    try {
+      client = await _runClient(connection, isCurrent: current);
+      await client.discover();
+      if (!current()) return false;
+      _verifiedRunPhotos[connection] = client.photosSupported ? revision : null;
+      return client.photosSupported;
+    } catch (_) {
+      if (current()) _verifiedRunPhotos[connection] = null;
+      return false;
+    } finally {
+      client?.close();
+    }
+  }
+
+  /// Accepts a text or photo draft into the original conversation's send queue.
+  /// A false return leaves the entire draft with the caller.
+  bool submit(String text, {List<ChatPhoto> photos = const []}) {
     final session = current;
     if (!_validInput(text, session)) return false;
     if (_disposed ||
@@ -731,18 +790,26 @@ class ChatController extends ChangeNotifier {
         uncertainInput != null ||
         _background ||
         session == null ||
-        text.trim().isEmpty) {
+        (text.trim().isEmpty && photos.isEmpty)) {
       return false;
     }
     final connection = connections.singleWhere(
       (c) => c['id'] == session.connectionId,
     );
+    if (photos.isNotEmpty &&
+        (!_supportsPhotos(connection) || !ChatPhoto.fitsDraft(photos))) {
+      error =
+          'These photos cannot be sent with the current model or exceed the attachment limit.';
+      notifyListeners();
+      return false;
+    }
     _outbox.add(
       QueuedFollowup(
         text,
         session,
         connection,
         model: replyModel(session),
+        photos: photos,
         captured: organization.captureInstructions(
           identityOf(session),
           fallback: session.systemPrompt,
@@ -1111,6 +1178,19 @@ class ChatController extends ChangeNotifier {
   }
 
   set pendingText(String? value) => _pendingText = value;
+
+  /// Photos for the currently selected conversation's in-flight input only.
+  List<ChatPhoto> get pendingPhotos {
+    final op = currentRun;
+    if (op != null &&
+        !current!.messages.any((m) => m.id == 'input-${op.key}')) {
+      return op.photos;
+    }
+    return identical(current, _dispatchingSession)
+        ? _preparing?.source.photos ?? const []
+        : const [];
+  }
+
   final RunClientFactory? runClientFactory;
   final bool _runDiscovery;
 
@@ -2284,6 +2364,7 @@ class ChatController extends ChangeNotifier {
           ChatMessage(
             role: 'user',
             content: op.input,
+            photos: op.photos,
             id: 'input-${op.key}',
             metadata: {
               'timestamp': now,
@@ -2370,6 +2451,14 @@ class ChatController extends ChangeNotifier {
     required bool Function() isCurrent,
     required bool manual,
   }) async {
+    final pendingPhotos = op.photos;
+    final knownPhotoUrls = {
+      for (final photo in pendingPhotos) photo.dataUrl,
+      for (final message in session.messages)
+        for (final photo in message.photos) photo.dataUrl,
+    }.lookup;
+    final matchInlinePhotos = pendingPhotos.isNotEmpty ||
+        session.messages.any((m) => m.photos.isNotEmpty);
     final rows = <Map<String, dynamic>>[];
     final seen = <Object>{};
     var offset = 0;
@@ -2380,6 +2469,8 @@ class ChatController extends ChangeNotifier {
       final page = await client.sessionMessages(
         op,
         offset: offset,
+        limit: matchInlinePhotos ? 20 : 100,
+        matchInlinePhotos: matchInlinePhotos,
         isCurrent: isCurrent,
       );
       if (!isCurrent() || page.sessionId != op.sessionId) {
@@ -2390,7 +2481,11 @@ class ChatController extends ChangeNotifier {
       final limit = pagination['limit'] as int? ?? 100;
       for (final row in page.messages) {
         final id = row['id'];
-        if (id is! String && id is! int || seen.add(id!)) rows.add(row);
+        if (id is! String && id is! int || seen.add(id!)) {
+          rows.add(matchInlinePhotos
+              ? retainKnownRunPhotoUrls(row, knownPhotoUrls)
+              : row);
+        }
       }
       offset += returned;
       final more = pagination['has_more'];
@@ -2400,6 +2495,7 @@ class ChatController extends ChangeNotifier {
     final match = matchAttemptedRunInHistory(
       existingMessages: session.messages,
       pendingInput: op.input,
+      pendingPhotos: pendingPhotos,
       rawRows: rows,
     );
     switch (match.status) {
@@ -2596,7 +2692,8 @@ class ChatController extends ChangeNotifier {
   ) async {
     if (connection['type'] != 'hermes') return null;
     // An injected direct-core test hook must not bypass Android's native policy.
-    if (!_runDiscovery && !usesRunStatusSync) return null;
+    final photos = permission.source.photos;
+    if (!_runDiscovery && !usesRunStatusSync && photos.isEmpty) return null;
     final previous = runs[session.id];
     final generation = _runsGeneration;
     bool isCurrent() =>
@@ -2612,6 +2709,11 @@ class ChatController extends ChangeNotifier {
       final supported = await client.discover();
       _rememberRunFeatures(connection, client);
       if (!isCurrent()) throw StateError('Stale run');
+      if (photos.isNotEmpty && !client.photosSupported) {
+        throw const ProviderException(
+          'The original Hermes API did not verify photo input. The photo message is held.',
+        );
+      }
       if (!supported) {
         if (usesRunStatusSync) {
           throw const ProviderException(
@@ -2635,6 +2737,7 @@ class ChatController extends ChangeNotifier {
         local: session.id,
         existingSessionId: session.remoteSessionId,
         input: text,
+        photos: photos,
         model: session.model,
         provider: session.upstreamProvider,
         instructions: permission.source.captured.instructions,
@@ -3288,6 +3391,7 @@ class ChatController extends ChangeNotifier {
     QueuedFollowup? source,
   }) async {
     final session = source?.session ?? current;
+    final photos = source?.photos ?? const <ChatPhoto>[];
     if (_disposed ||
         _loadFailed ||
         _quarantinedInputs.contains(session) ||
@@ -3300,7 +3404,7 @@ class ChatController extends ChangeNotifier {
         organizationBlocked ||
         unsavedChanges ||
         session == null ||
-        text.trim().isEmpty) {
+        (text.trim().isEmpty && photos.isEmpty)) {
       return _DispatchResult.notDispatched;
     }
     final found = connections.where((c) => c['id'] == session.connectionId);
@@ -3311,6 +3415,9 @@ class ChatController extends ChangeNotifier {
       return _DispatchResult.notDispatched;
     }
     final connection = source?.connection ?? found.single;
+    if (photos.isNotEmpty && !_supportsPhotos(connection)) {
+      return _DispatchResult.notDispatched;
+    }
     final permission = _DispatchPermission(
       source ??
           QueuedFollowup(

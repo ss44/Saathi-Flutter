@@ -9,6 +9,39 @@ import 'package:flutter/material.dart';
 /// The caller owns pushing this route and removing it if its anchor is disposed.
 RawDialogRoute<bool> sendActionGroupRoute(
         BuildContext context, LayerLink anchor) =>
+    _composerActionGroupRoute(
+      context,
+      anchor,
+      alignment: Alignment.bottomRight,
+      label: 'Send actions',
+      actionLabel: 'Enhance prompt',
+      actionIcon: Icons.auto_fix_high_outlined,
+      closeLabel: 'Close send actions',
+    );
+
+/// Opens the photo action above the composer’s attachment button.
+RawDialogRoute<bool> photoActionGroupRoute(
+        BuildContext context, LayerLink anchor) =>
+    _composerActionGroupRoute(
+      context,
+      anchor,
+      alignment:
+          AlignmentDirectional.bottomStart.resolve(Directionality.of(context)),
+      label: 'Attachment actions',
+      actionLabel: 'Photo',
+      actionIcon: Icons.photo_outlined,
+      closeLabel: 'Close attachment actions',
+    );
+
+RawDialogRoute<bool> _composerActionGroupRoute(
+  BuildContext context,
+  LayerLink anchor, {
+  required Alignment alignment,
+  required String label,
+  required String actionLabel,
+  required IconData actionIcon,
+  required String closeLabel,
+}) =>
     RawDialogRoute<bool>(
       barrierDismissible: true,
       barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
@@ -22,12 +55,12 @@ RawDialogRoute<bool> sendActionGroupRoute(
             child: CompositedTransformFollower(
               link: anchor,
               showWhenUnlinked: false,
-              targetAnchor: Alignment.bottomRight,
-              followerAnchor: Alignment.bottomRight,
+              targetAnchor: alignment,
+              followerAnchor: alignment,
               child: Semantics(
                 container: true,
                 explicitChildNodes: true,
-                label: 'Send actions',
+                label: label,
                 child: Material(
                   color: Theme.of(context).colorScheme.primary,
                   borderRadius: BorderRadius.circular(24),
@@ -40,7 +73,7 @@ RawDialogRoute<bool> sendActionGroupRoute(
                       children: [
                         IconButton(
                           autofocus: true,
-                          tooltip: 'Enhance prompt',
+                          tooltip: actionLabel,
                           constraints: const BoxConstraints.tightFor(
                               width: 48, height: 48),
                           style: IconButton.styleFrom(
@@ -49,10 +82,10 @@ RawDialogRoute<bool> sendActionGroupRoute(
                             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           ),
                           onPressed: () => Navigator.of(context).pop(true),
-                          icon: const Icon(Icons.auto_fix_high_outlined),
+                          icon: Icon(actionIcon),
                         ),
                         IconButton(
-                          tooltip: 'Close send actions',
+                          tooltip: closeLabel,
                           constraints: const BoxConstraints.tightFor(
                               width: 48, height: 48),
                           style: IconButton.styleFrom(

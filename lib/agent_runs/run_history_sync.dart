@@ -79,6 +79,55 @@ String? _extractServerMessageId(Map<String, dynamic> raw) {
   return null;
 }
 
+String? _photoUrl(Map part) {
+  final image = part['image_url'];
+  return image is Map && image['url'] is String ? image['url'] as String : null;
+}
+
+bool _isPhotoPart(Map part) => ['image', 'image_url'].contains(part['type']);
+
+/// Retains only already-owned inline URLs as exact recovery evidence. Other
+/// images stay redacted, and no remote attachment is added to the transcript.
+Map<String, dynamic> retainKnownRunPhotoUrls(
+    Map<String, dynamic> row, String? Function(String) lookup) {
+  final content = row['content'];
+  if (content is! List) return row;
+  return {
+    ...row,
+    'content': [
+      for (final part in content.whereType<Map>())
+        if (_isPhotoPart(part))
+          {
+            'type': 'image_url',
+            if (_photoUrl(part) case final url?)
+              if (lookup(url) case final owned?) 'image_url': {'url': owned},
+          }
+        else if (part['type'] == 'text' && part['text'] is String)
+          {'type': 'text', 'text': part['text']},
+    ],
+  };
+}
+
+bool _matchesInput(
+    _ProjectedHistoryRow row, String caption, List<ChatPhoto> photos) {
+  if (photos.isEmpty) {
+    return normalizeSyncMatchText(row.message.content) ==
+        normalizeSyncMatchText(caption);
+  }
+  final content = row.raw['content'];
+  if (content is! List) return false;
+  final parts = content.whereType<Map>();
+  final urls = parts.where(_isPhotoPart).map(_photoUrl).toList();
+  final remoteCaption = parts
+      .where((part) => part['type'] == 'text' && part['text'] is String)
+      .map((part) => part['text'] as String)
+      .join('\n\n');
+  return normalizeSyncMatchText(remoteCaption) ==
+          normalizeSyncMatchText(caption) &&
+      urls.length == photos.length &&
+      photos.indexed.every((entry) => urls[entry.$1] == entry.$2.dataUrl);
+}
+
 int? _findAlignedPrefixEnd(
   List<ChatMessage> existingMessages,
   List<_ProjectedHistoryRow> projected,
@@ -88,8 +137,8 @@ int? _findAlignedPrefixEnd(
     var exact = true;
     for (var i = 0; i < existingMessages.length; i++) {
       if (projected[i].message.role != existingMessages[i].role ||
-          normalizeSyncMatchText(projected[i].message.content) !=
-              normalizeSyncMatchText(existingMessages[i].content)) {
+          !_matchesInput(projected[i], existingMessages[i].content,
+              existingMessages[i].photos)) {
         exact = false;
         break;
       }
@@ -106,8 +155,7 @@ int? _findAlignedPrefixEnd(
     if (!showsHistoryBubble(candidate)) continue;
     final expected = existingVisible[matched];
     if (candidate.role != expected.role ||
-        normalizeSyncMatchText(candidate.content) !=
-            normalizeSyncMatchText(expected.content)) {
+        !_matchesInput(projected[i], expected.content, expected.photos)) {
       return null;
     }
     matched++;
@@ -124,10 +172,11 @@ int? _findAlignedPrefixEnd(
 RunHistorySyncResult matchAttemptedRunInHistory({
   required List<ChatMessage> existingMessages,
   required String pendingInput,
+  List<ChatPhoto> pendingPhotos = const [],
   required List<Map<String, dynamic>> rawRows,
 }) {
   final target = normalizeSyncMatchText(pendingInput);
-  if (target.isEmpty) {
+  if (target.isEmpty && pendingPhotos.isEmpty) {
     return const RunHistorySyncResult(status: RunHistorySyncStatus.notFound);
   }
   final projected = <_ProjectedHistoryRow>[];
@@ -145,9 +194,13 @@ RunHistorySyncResult matchAttemptedRunInHistory({
   var userOffset = -1;
   for (var i = 0; i < tail.length; i++) {
     if (tail[i].message.role == 'user' &&
-        normalizeSyncMatchText(tail[i].message.content) == target) {
+        _matchesInput(tail[i], target, pendingPhotos)) {
+      if (userOffset != -1) {
+        return const RunHistorySyncResult(
+            status: RunHistorySyncStatus.diverged);
+      }
       userOffset = i;
-      break;
+      if (pendingPhotos.isEmpty) break;
     }
   }
   if (userOffset == -1) {
