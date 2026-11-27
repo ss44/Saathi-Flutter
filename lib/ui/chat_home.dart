@@ -15,7 +15,7 @@ import '../agent_activity/activity_model.dart';
 import '../core/saathi_core.dart' show RemoteSession;
 import 'remote_sessions.dart';
 
-import 'package:flutter/foundation.dart' show defaultTargetPlatform;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/semantics.dart';
@@ -50,6 +50,12 @@ class ChatHome extends StatefulWidget {
 }
 
 class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
+  static const _sharedTextChannel = MethodChannel('saathi/shared_text');
+  late final bool _receivesSharedText;
+  String? _sharedText;
+  bool _checkingSharedText = false;
+  bool _shareCheckRequested = false;
+
   late ActivityOwner activity;
   bool drawerOpen = false, drawerDragging = false, archivedView = false;
   bool desktopSettings = false;
@@ -145,6 +151,14 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _receivesSharedText =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+    if (_receivesSharedText) {
+      _sharedTextChannel.setMethodCallHandler((call) async {
+        if (call.method == 'sharedTextAvailable') await _checkSharedText();
+      });
+      unawaited(_checkSharedText());
+    }
     activity = ActivityOwner(c);
     WidgetsBinding.instance.addObserver(this);
     c.addListener(syncServers);
@@ -194,6 +208,95 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   final Map<ConversationIdentity, String> _drafts = {};
   ConversationIdentity? _draftOwner;
   final GlobalKey<TooltipState> _sendTooltipKey = GlobalKey<TooltipState>();
+
+  Future<void> _checkSharedText() async {
+    if (_sharedText != null) return;
+    _shareCheckRequested = true;
+    if (_checkingSharedText) return;
+    _checkingSharedText = true;
+    try {
+      // A warm intent can arrive while the initial platform reply is in flight.
+      while (mounted && _shareCheckRequested && _sharedText == null) {
+        _shareCheckRequested = false;
+        final text = await _sharedTextChannel.invokeMethod<String>(
+          'takePendingText',
+        );
+        if (mounted && text != null) setState(() => _sharedText = text);
+      }
+    } on MissingPluginException {
+      // The Android host can be absent in Flutter-only environments.
+    } on PlatformException {
+      // A subsequent native notification can request another read.
+    } finally {
+      _checkingSharedText = false;
+    }
+  }
+
+  bool _canEditDraft(ChatSession? session) =>
+      session != null &&
+      !c.unsavedChanges &&
+      !c.organizationBlocked &&
+      !c.readOnly &&
+      !c.changingConnection;
+
+  void _dismissSharedText(String text) {
+    if (_sharedText != text) return;
+    setState(() => _sharedText = null);
+    unawaited(_checkSharedText());
+  }
+
+  bool _sharedTextFitsDraft(String text) {
+    final existing = composer.text;
+    return text.length + (existing.isEmpty ? 0 : existing.length + 2) <=
+        ChatController.maxInputLength;
+  }
+
+  void _addSharedText(ChatSession session, String text) {
+    if (_sharedText != text ||
+        !identical(session, c.current) ||
+        _draftOwner != c.identityOf(session) ||
+        !_canEditDraft(session) ||
+        !_sharedTextFitsDraft(text)) {
+      return;
+    }
+    final existing = composer.text;
+    final draft = existing.isEmpty ? text : '$existing\n\n$text';
+    composer.value = TextEditingValue(
+      text: draft,
+      selection: TextSelection.collapsed(offset: draft.length),
+    );
+    _saveCurrentDraft();
+    _dismissSharedText(text);
+  }
+
+  Widget _sharedTextBar(ChatSession? session, String text) {
+    final fits = _sharedTextFitsDraft(text);
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(
+          children: [
+            Expanded(
+              child: session == null
+                  ? const Text('Open a chat for shared text')
+                  : TextButton(
+                      onPressed: _canEditDraft(session) && fits
+                          ? () => _addSharedText(session, text)
+                          : null,
+                      child: Text(fits ? 'Add shared text' : 'Draft too long'),
+                    ),
+            ),
+            IconButton(
+              tooltip: 'Discard shared text',
+              onPressed: () => _dismissSharedText(text),
+              icon: const Icon(Icons.close),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   void _saveCurrentDraft() {
     final owner = _draftOwner;
@@ -555,6 +658,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
   ChatController get c => widget.controller;
   @override
   void dispose() {
+    if (_receivesSharedText) _sharedTextChannel.setMethodCallHandler(null);
     activity.dispose();
     controlsUpdates?.cancel();
     revokeControls();
@@ -661,6 +765,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
         listenable: c,
         builder: (context, _) {
           final session = c.current;
+          final sharedText = _sharedText;
           final wide = AdaptiveChatShell.fits(context, constraints.maxWidth);
           if (wideNavigation != wide) {
             wideNavigation = wide;
@@ -1024,6 +1129,8 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                   : Column(
                       children: [
                         const UpdateAvailabilityBanner(),
+                        if (sharedText != null)
+                          _sharedTextBar(session, sharedText),
                         Expanded(
                           child: LayoutBuilder(
                             // Use the space left after the composer and run controls,
@@ -1837,11 +1944,7 @@ class _ChatHomeState extends State<ChatHome> with WidgetsBindingObserver {
                                       Expanded(
                                         child: GrowingMessageInput(
                                           controller: composer,
-                                          enabled: session != null &&
-                                              !c.unsavedChanges &&
-                                              !c.organizationBlocked &&
-                                              !c.readOnly &&
-                                              !c.changingConnection,
+                                          enabled: _canEditDraft(session),
                                           onChanged: (_) {
                                             _saveCurrentDraft();
                                             setState(() {});

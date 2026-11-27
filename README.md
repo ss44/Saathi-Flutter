@@ -7,6 +7,7 @@ A lightweight, conversation-first Flutter client for AI models and agents. Herme
 - Multiple named connections, including separate instances of the same provider, with editing and explicit deletion.
 - OpenAI-compatible, Anthropic and Gemini model discovery/chat adapters; manual model IDs when discovery is unavailable.
 - Conversation-specific model/system prompt, local history, new/switch/delete conversations, Markdown responses.
+- Android Sharesheet support for plain text and links. Choose Saathi, open a conversation, and tap **Add shared text** to review or edit it before sending.
 - API keys in platform secure storage, separate from ordinary conversation/settings data.
 - Running status, swipe-to-reveal completed activity, immediate long-press copy, safe recoverable errors.
 - Native Hermes capability discovery and paginated **read-only** remote session/history browsing.
@@ -53,6 +54,6 @@ Desktop currently offers a manual release-page action, not Hermes-style automati
 
 [Design decisions](docs/UI_DECISIONS.md) explains what carries over and what does not. [Port audit](docs/PORT_AUDIT.md) records source provenance and coverage. [Product specification](docs/SPEC.md) defines the independent-app direction.
 
-Not complete: Android share/image intake, smart-context bucket negotiation, direct-model UI streaming/cancel UX, native OpenClaw, mobile gateway sign-in/tunnel provisioning, desktop tray/installer packaging, iOS runner. App IDs use `io.github.ss44.saathi`; preserve application and signing identity for compatible upgrades.
+Not complete: Android image intake, smart-context bucket negotiation, direct-model UI streaming/cancel UX, native OpenClaw, mobile gateway sign-in/tunnel provisioning, desktop tray/installer packaging, iOS runner. App IDs use `io.github.ss44.saathi`; preserve application and signing identity for compatible upgrades.
 
 `docs/previews/saathi-*.png` are Flutter test renders, including explicitly synthetic conversation previews—not device screenshots or real model answers. Older Iris demo renders remain as historical design artifacts.

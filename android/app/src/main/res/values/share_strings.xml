@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="share_text_unavailable">Could not add shared text. Try sharing a shorter selection or clear pending shares in Saathi.</string>
+</resources>
