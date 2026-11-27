@@ -73,7 +73,7 @@ void main() {
     });
 
     testWidgets(
-        'BusyThinking uses unified bubble with accessible quip contrast in ${brightness.name}',
+        'BusyThinking shimmers directly on the canvas with accessible contrast in ${brightness.name}',
         (tester) async {
       final theme = ThemeData(
         useMaterial3: true,
@@ -86,16 +86,26 @@ void main() {
         theme: theme,
         home: Scaffold(body: BusyThinking(busy: true, random: Random(7))),
       ));
-      expect(find.byKey(const Key('pending-response-bubble')), findsOneWidget);
-      expect(find.byKey(const Key('thinking-elapsed')), findsOneWidget);
-      final bubble = tester.widget<Container>(
-        find.byKey(const Key('pending-response-bubble')),
+      final thinking = find.byType(BusyThinking);
+      final quipFinder = find.byKey(const Key('thinking-quip'));
+      final shimmer = find.ancestor(
+        of: quipFinder,
+        matching: find.byType(ShaderMask),
       );
-      final bg = (bubble.decoration! as BoxDecoration).color!;
-      final quip = tester.widget<Text>(find.byKey(const Key('thinking-quip')));
-      final fg = quip.style!.color!;
-      expect(_contrastRatio(fg, bg), greaterThanOrEqualTo(4.5),
-          reason: 'Waiting quip must meet WCAG AA contrast on its bubble');
+      expect(
+        find.descendant(of: thinking, matching: find.byType(DecoratedBox)),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('thinking-elapsed')), findsOneWidget);
+      expect(tester.widget<ShaderMask>(shimmer).blendMode, BlendMode.srcIn);
+      expect(
+          tester.widget<ShaderMask>(shimmer).child, tester.widget(quipFinder));
+      final quip = tester.widget<Text>(quipFinder);
+      final bg = theme.scaffoldBackgroundColor;
+      for (final fg in [quip.style!.color!, theme.colorScheme.onSurface]) {
+        expect(_contrastRatio(fg, bg), greaterThanOrEqualTo(4.5),
+            reason: 'Thinking text must meet WCAG AA contrast on the canvas');
+      }
       await tester.pumpWidget(const SizedBox.shrink());
     },
         variant: const TargetPlatformVariant({

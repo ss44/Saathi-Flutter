@@ -72,7 +72,7 @@ void main() {
       await t.pump(const Duration(milliseconds: 30));
     }
     expect(find.byType(BusyThinking), findsOneWidget);
-    expect(find.byKey(const Key('thinking-loader')), findsOneWidget);
+    expect(find.byType(ShaderMask), findsOneWidget);
     await t.enterText(composer, 'Newer unsent draft');
     await t.pump();
     scroll.jumpTo(800);

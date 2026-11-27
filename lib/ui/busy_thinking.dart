@@ -15,17 +15,20 @@ class BusyThinking extends StatefulWidget {
 }
 
 class _BusyThinkingState extends State<BusyThinking>
-    with WidgetsBindingObserver {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+  late final _shimmer = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  );
   late final _bag =
       ThinkingShuffleBag(visibleThinkingPhrases, random: widget.random);
   late String _quip = _bag.next();
   Timer? _timer;
-  Timer? _loader;
+  Timer? _shimmerTimer;
   Timer? _elapsedTimer;
   late DateTime _startedAt;
   DateTime _now() => (widget.clock ?? DateTime.now)();
   String _elapsed = '0.0s';
-  double _turns = 0;
   bool _reduced = false;
   bool _foreground = true;
 
@@ -43,7 +46,7 @@ class _BusyThinkingState extends State<BusyThinking>
     super.didChangeDependencies();
     _reduced = MediaQuery.disableAnimationsOf(context) ||
         MediaQuery.accessibleNavigationOf(context);
-    _syncTimer();
+    _syncActivity();
   }
 
   @override
@@ -53,29 +56,36 @@ class _BusyThinkingState extends State<BusyThinking>
       _startedAt = _now();
       _elapsed = '0.0s';
     }
-    _syncTimer();
+    _syncActivity();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    _foreground = state == AppLifecycleState.resumed;
-    _syncTimer();
+    final foreground = state == AppLifecycleState.resumed;
+    if (_foreground == foreground) return;
+    setState(() => _foreground = foreground);
+    _syncActivity();
   }
 
-  void _syncTimer() {
+  void _syncActivity() {
     if (!widget.busy || !_foreground || _reduced) {
       _timer?.cancel();
       _timer = null;
-      _loader?.cancel();
-      _loader = null;
+      _shimmerTimer?.cancel();
+      _shimmerTimer = null;
       _elapsedTimer?.cancel();
       _elapsedTimer = null;
+      _shimmer.reset();
       return;
     }
+    if (_shimmerTimer == null) {
+      // Leave a rest between sweeps so an idle wait doesn't repaint constantly.
+      _shimmer.forward();
+      _shimmerTimer = Timer.periodic(const Duration(milliseconds: 2200), (_) {
+        _shimmer.forward(from: 0);
+      });
+    }
     // Native status/stream rebuilds must not restart the phrase cadence.
-    _loader ??= Timer.periodic(const Duration(milliseconds: 800), (_) {
-      setState(() => _turns += .5);
-    });
     // Local waiting time, not a claim about server execution or progress.
     _elapsedTimer ??= Timer.periodic(const Duration(milliseconds: 100), (_) {
       final seconds =
@@ -91,8 +101,9 @@ class _BusyThinkingState extends State<BusyThinking>
   @override
   void dispose() {
     _timer?.cancel();
-    _loader?.cancel();
+    _shimmerTimer?.cancel();
     _elapsedTimer?.cancel();
+    _shimmer.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -100,64 +111,61 @@ class _BusyThinkingState extends State<BusyThinking>
   @override
   Widget build(BuildContext context) {
     if (!widget.busy) return const SizedBox.shrink();
-    final quip = '$_quip...';
-    final colors = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final quip = Text(
+      '$_quip...',
+      key: const Key('thinking-quip'),
+      style: theme.textTheme.bodyLarge?.copyWith(
+        fontStyle: FontStyle.italic,
+        color: colors.onSurfaceVariant,
+      ),
+    );
     return Semantics(
       label: 'Waiting for reply',
       liveRegion: false,
       child: ExcludeSemantics(
         child: Align(
           alignment: Alignment.centerLeft,
-          child: Container(
-            key: const Key('pending-response-bubble'),
+          child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 720),
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-            decoration: BoxDecoration(
-              color: colors.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(20),
-            ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (_reduced || !_foreground)
-                      Icon(Icons.hourglass_empty_rounded,
-                          size: 18, color: colors.primary)
-                    else
-                      AnimatedRotation(
-                        key: const Key('thinking-loader'),
-                        turns: _turns,
-                        duration: const Duration(milliseconds: 500),
-                        child: SizedBox.square(
-                          dimension: 18,
-                          child: CircularProgressIndicator(
-                              value: .7, strokeWidth: 2, color: colors.primary),
-                        ),
-                      ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(quip,
-                          key: const Key('thinking-quip'),
-                          style:
-                              Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                    fontStyle: FontStyle.italic,
-                                    color: colors.onSurfaceVariant,
-                                  )),
-                    ),
-                  ],
-                ),
+                if (_reduced || !_foreground)
+                  quip
+                else
+                  ValueListenableBuilder<double>(
+                    valueListenable: _shimmer,
+                    child: quip,
+                    builder: (context, progress, child) {
+                      // The highlight clears the text at both ends of a sweep.
+                      final center = -1.5 + 3 * progress;
+                      return ShaderMask(
+                        blendMode: BlendMode.srcIn,
+                        shaderCallback: (bounds) => LinearGradient(
+                          begin: Alignment(center - .45, 0),
+                          end: Alignment(center + .45, 0),
+                          colors: [
+                            colors.onSurfaceVariant,
+                            colors.onSurface,
+                            colors.onSurfaceVariant,
+                          ],
+                        ).createShader(bounds),
+                        child: child,
+                      );
+                    },
+                  ),
                 if (!_reduced)
                   Align(
                     alignment: Alignment.centerRight,
                     child: Text(_elapsed,
                         key: const Key('thinking-elapsed'),
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              fontStyle: FontStyle.italic,
-                              color: colors.onSurfaceVariant,
-                            )),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontStyle: FontStyle.italic,
+                          color: colors.onSurfaceVariant,
+                        )),
                   ),
               ],
             ),

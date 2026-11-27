@@ -200,11 +200,10 @@ void main() {
               : 'Working on your reply';
           expect(f.c.pendingStatus, label);
           if (defaultTargetPlatform == TargetPlatform.android) {
-            expect(find.byKey(const Key('pending-response-bubble')),
-                findsOneWidget);
+            expect(find.byKey(const Key('thinking-quip')), findsOneWidget);
             expect(
                 find.ancestor(
-                    of: find.byKey(const Key('pending-response-bubble')),
+                    of: find.byKey(const Key('thinking-quip')),
                     matching: find.byType(BusyThinking)),
                 findsOneWidget);
             for (final phase in [
@@ -218,8 +217,7 @@ void main() {
             expect(find.text(label), findsWidgets);
           }
         } else {
-          expect(
-              find.byKey(const Key('pending-response-bubble')), findsNothing);
+          expect(find.byKey(const Key('thinking-quip')), findsNothing);
         }
         if (status == 'completed') {
           expect(f.c.pendingStatus, 'Reply received');

@@ -108,8 +108,7 @@ void main() {
                   expect(find.byType(BusyThinking), findsOneWidget,
                       reason:
                           'A prior terminal receipt cannot hide the new pending assistant; scrolls=${t.stateList<ScrollableState>(find.byType(Scrollable)).map((s) => '${s.position.pixels}/${s.position.maxScrollExtent} viewport=${s.position.viewportDimension}')}');
-                  expect(
-                      find.byKey(const Key('thinking-loader')), findsOneWidget);
+                  expect(find.byType(ShaderMask), findsOneWidget);
                   expect(find.byKey(const Key('chat-error')), findsNothing);
                   expect(
                       host.requests

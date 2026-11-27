@@ -142,21 +142,19 @@ void main() {
     expect(visibleThinkingPhrases.where(phrases.contains), isEmpty);
   });
   testWidgets(
-      'loader animates, preserves phrase cadence through native polls and disposes',
+      'text shimmers, preserves phrase cadence through native polls and disposes',
       (tester) async {
     await tester.pumpWidget(host());
     final first =
         tester.widget<Text>(find.byKey(const Key('thinking-quip'))).data;
-    final turns = tester
-        .widget<AnimatedRotation>(find.byKey(const Key('thinking-loader')))
-        .turns;
+    double shimmerProgress() => tester
+        .widget<ValueListenableBuilder<double>>(
+            find.byType(ValueListenableBuilder<double>))
+        .valueListenable
+        .value;
+    final initialProgress = shimmerProgress();
     await tester.pump(const Duration(milliseconds: 800));
-    expect(
-        tester
-            .widget<AnimatedRotation>(find.byKey(const Key('thinking-loader')))
-            .turns,
-        greaterThan(turns));
-    await tester.pumpAndSettle();
+    expect(shimmerProgress(), greaterThan(initialProgress));
     for (var i = 0; i < 10; i++) {
       await tester.pumpWidget(host());
       await tester.pump(const Duration(seconds: 1));
@@ -172,7 +170,7 @@ void main() {
       (tester) async {
     final semantics = tester.ensureSemantics();
     await tester.pumpWidget(host());
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(ShaderMask), findsOneWidget);
     String quip() =>
         tester.widget<Text>(find.byKey(const Key('thinking-quip'))).data!;
     final first = quip();
@@ -185,9 +183,11 @@ void main() {
     final paused = quip();
     await tester.pump(const Duration(seconds: 24));
     expect(quip(), paused);
+    expect(find.byType(ShaderMask), findsNothing);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump(const Duration(seconds: 10));
     expect(quip(), isNot(paused));
+    expect(find.byType(ShaderMask), findsOneWidget);
     await tester.pumpWidget(host(busy: false));
     expect(find.text('Waiting for reply'), findsNothing);
     await tester.pump(const Duration(seconds: 24));
@@ -199,7 +199,7 @@ void main() {
         (tester) async {
       await tester
           .pumpWidget(host(reduced: true, width: size.$1, scale: size.$2));
-      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.byType(ShaderMask), findsNothing);
       final first =
           tester.widget<Text>(find.byKey(const Key('thinking-quip'))).data;
       await tester.pump(const Duration(seconds: 40));
