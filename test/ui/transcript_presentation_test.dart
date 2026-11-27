@@ -245,6 +245,7 @@ void main() {
           (t) async {
         t.view.physicalSize = Size(width, 844);
         t.view.devicePixelRatio = 1;
+        t.view.viewInsets = const FakeViewPadding(bottom: 300);
         addTearDown(t.view.reset);
         final theme = ThemeData(
             colorScheme: ColorScheme.fromSeed(
@@ -269,10 +270,9 @@ void main() {
         await t.pumpAndSettle();
         expect(find.text('Saathi'), findsNothing);
         final views = find.byType(MessageView);
-        Container bubble(int index) => t
-            .widgetList<Container>(find.descendant(
-                of: views.at(index), matching: find.byType(Container)))
-            .singleWhere((c) => c.constraints?.maxWidth == 720);
+        AnimatedContainer bubble(int index) =>
+            t.widget<AnimatedContainer>(find.descendant(
+                of: views.at(index), matching: find.byType(AnimatedContainer)));
         final user = bubble(0);
         final assistant = bubble(1);
         expect((user.decoration as BoxDecoration).color,
@@ -282,7 +282,7 @@ void main() {
         final userRect = t.getRect(find.byWidget(user));
         final assistantRect = t.getRect(find.byWidget(assistant));
         expect(userRect.right, closeTo(width - 22, .01));
-        expect(userRect.left, greaterThan(22));
+        expect(userRect.width, lessThan((width - 44) * .85));
         expect(assistantRect.left, closeTo(22, .01));
         expect(assistantRect.right, lessThanOrEqualTo(width - 22));
         expect(find.textContaining('Saathi: '), findsOneWidget);
@@ -293,6 +293,45 @@ void main() {
         expect(t.takeException(), isNull);
       });
     }
+  }
+  for (final (width, platform) in [
+    (360.0, TargetPlatform.android),
+    (760.0, TargetPlatform.linux),
+    (1100.0, TargetPlatform.linux),
+  ]) {
+    testWidgets('long user bubbles respect the width cap at ${width}px',
+        (t) async {
+      t.view.physicalSize = Size(width, 844);
+      t.view.devicePixelRatio = 1;
+      if (platform == TargetPlatform.android) {
+        t.view.viewInsets = const FakeViewPadding(bottom: 300);
+      }
+      addTearDown(t.view.reset);
+      const horizontalPadding = 22.0;
+      await t.pumpWidget(MaterialApp(
+        theme: ThemeData(platform: platform),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: const TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: const Scaffold(
+          body: SingleChildScrollView(
+            padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
+            child: MessageView(
+              text: 'A long message that wraps across several lines.',
+              user: true,
+            ),
+          ),
+        ),
+      ));
+      final bubble = t.getRect(find.byType(AnimatedContainer));
+      final availableWidth = width - 2 * horizontalPadding;
+      final expectedWidth = (availableWidth * .85).clamp(0, 720);
+      expect(bubble.width, closeTo(expectedWidth, .01));
+      expect(bubble.right, closeTo(width - horizontalPadding, .01));
+      expect(t.takeException(), isNull);
+    });
   }
   testWidgets(
       'mixed history hides empty and tool rows without gaps or mutation',
