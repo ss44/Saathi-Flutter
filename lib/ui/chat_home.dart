@@ -2201,6 +2201,17 @@ class _MessageViewState extends State<MessageView> {
       _pulse = null;
       _glow = false;
     }
+    return LayoutBuilder(
+      builder: (context, constraints) =>
+          _buildMessage(context, constraints, animate: animate),
+    );
+  }
+
+  Widget _buildMessage(
+    BuildContext context,
+    BoxConstraints constraints, {
+    required bool animate,
+  }) {
     final desktop = const {
       TargetPlatform.linux,
       TargetPlatform.macOS,
@@ -2261,7 +2272,11 @@ class _MessageViewState extends State<MessageView> {
                         ? const Duration(milliseconds: 1400)
                         : Duration.zero,
                     curve: Curves.easeInOut,
-                    constraints: const BoxConstraints(maxWidth: 720),
+                    constraints: BoxConstraints(
+                      maxWidth: widget.user
+                          ? (constraints.maxWidth * .85).clamp(0, 720)
+                          : 720,
+                    ),
                     padding: const EdgeInsets.symmetric(
                         horizontal: 18, vertical: 14),
                     decoration: BoxDecoration(
