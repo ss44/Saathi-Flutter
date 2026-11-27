@@ -35,5 +35,19 @@ Primary Android references:
 - https://developer.android.com/reference/android/content/pm/PackageManager
 - https://developer.android.com/reference/androidx/core/content/FileProvider
 
-## Share intake (not implemented)
-Text/images shared from other apps must become editable drafts, not auto-send. Treat content URIs as untrusted and plan for permissions, size/type limits, cold/warm launch, duplicate intents, cancellation, and cleanup. Native work is gated on device/emulator tests.
+## Android share intake
+
+Saathi handles Sharesheet `ACTION_SEND` intents with `text/plain` and `EXTRA_TEXT`,
+including URLs sent as text. On the chat screen, **Add shared text**
+appends the content to the selected conversation's editable draft. Users can
+choose a different conversation first or discard the share. Sharing alone
+does not send a message or fetch a URL.
+
+Pending shares and unsent drafts are kept in memory for the running app. The
+Android activity reuses the running Flutter instance for incoming shares. Its
+bridge reads each queued share once and bounds queue size and text length.
+Image and file intake remain future work.
+
+Flutter tests exercise startup, warm delivery, conversation selection, and
+discarding a share. Device acceptance remains pending for Sharesheet discovery,
+cold and warm launches from another app, and return to the sender.
