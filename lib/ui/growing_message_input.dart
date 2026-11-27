@@ -14,16 +14,18 @@ class GrowingMessageInput extends StatelessWidget {
     required this.enabled,
     required this.onChanged,
     this.onSubmit,
+    this.hasPhotos = false,
   });
 
   final TextEditingController controller;
   final bool enabled;
+  final bool hasPhotos;
   final ValueChanged<String> onChanged;
 
   /// Optional desktop submit callback triggered by Enter without Shift or Alt.
   ///
   /// Ignored on mobile platforms, when disabled, during active IME composition,
-  /// on key repeat, or when the draft contains only whitespace.
+  /// on key repeat, or when the draft has neither text nor photos.
   final VoidCallback? onSubmit;
 
   static const _desktopPlatforms = {
@@ -53,7 +55,8 @@ class GrowingMessageInput extends StatelessWidget {
     if (composing.isValid && !composing.isCollapsed) {
       return KeyEventResult.ignored;
     }
-    if (event is KeyRepeatEvent || controller.text.trim().isEmpty) {
+    if (event is KeyRepeatEvent ||
+        (controller.text.trim().isEmpty && !hasPhotos)) {
       return KeyEventResult.handled;
     }
     onSubmit!();

@@ -117,6 +117,70 @@ void main() {
       );
     });
 
+    test('photo-only recovery requires unique matching bytes after the prefix',
+        () {
+      final photo = ChatPhoto.fromBytes(base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC',
+      ));
+      Map<String, dynamic> imageRow(int id, String url) => {
+            'id': id,
+            'role': 'user',
+            'content': [
+              {
+                'type': 'image_url',
+                'image_url': {'url': url}
+              },
+            ],
+          };
+      final owned = {photo.dataUrl};
+      final remoteImage = imageRow(3, 'https://other.example/photo.png');
+      expect(retainKnownRunPhotoUrls(remoteImage, owned.lookup)['content'], [
+        {'type': 'image_url'},
+      ]);
+      const originalReply = {
+        'id': 2,
+        'role': 'assistant',
+        'content': 'old reply'
+      };
+      const matchedReply = {
+        'id': 6,
+        'role': 'assistant',
+        'content': 'our reply'
+      };
+      final prefix = [
+        ChatMessage(role: 'user', content: '', photos: [photo]),
+        ChatMessage(role: 'model', content: 'old reply'),
+      ];
+      RunHistorySyncResult sync(List<Map<String, dynamic>> rows) =>
+          matchAttemptedRunInHistory(
+            existingMessages: prefix,
+            pendingInput: '',
+            pendingPhotos: [photo],
+            rawRows: [
+              for (final row in [
+                imageRow(1, photo.dataUrl),
+                originalReply,
+                ...rows
+              ])
+                retainKnownRunPhotoUrls(row, owned.lookup),
+            ],
+          );
+
+      expect(sync([remoteImage]).status, RunHistorySyncStatus.notFound);
+      final found =
+          sync([remoteImage, imageRow(5, photo.dataUrl), matchedReply]);
+      expect(found.matchedUserMessageId, '5');
+      expect(found.replyText, 'our reply');
+      expect(found.precedingMessages.single.photos, isEmpty);
+      expect(
+          sync([
+            imageRow(5, photo.dataUrl),
+            matchedReply,
+            imageRow(7, photo.dataUrl)
+          ]).status,
+          RunHistorySyncStatus.diverged);
+    });
+
     test('returns diverged when existing prefix does not match remote rows',
         () {
       final result = matchAttemptedRunInHistory(

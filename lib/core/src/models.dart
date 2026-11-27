@@ -1,3 +1,5 @@
+import 'chat_photo.dart';
+
 enum ProviderType { openai, anthropic, gemini, hermes, openclaw }
 
 class ProviderConfig {
@@ -89,10 +91,18 @@ class ChatMessage {
       {required this.role,
       required this.content,
       this.id,
+      List<ChatPhoto> photos = const [],
       Map<String, dynamic> metadata = const {}})
-      : metadata = Map.unmodifiable(metadata);
+      : photos = List.unmodifiable(photos),
+        metadata = Map.unmodifiable(metadata) {
+    if (!ChatPhoto.fitsDraft(this.photos) ||
+        (this.photos.isNotEmpty && role != 'user')) {
+      throw ArgumentError('Invalid message photos');
+    }
+  }
   final String role;
   final String content;
+  final List<ChatPhoto> photos;
   final String? id;
   final Map<String, dynamic> metadata;
   DateTime? get timestamp {
@@ -112,6 +122,8 @@ class ChatMessage {
   Map<String, dynamic> toJson() => {
         'role': role,
         'content': content,
+        if (photos.isNotEmpty)
+          'photos': photos.map((photo) => photo.base64Data).toList(),
         if (id != null) 'id': id,
         'metadata': metadata
       };
@@ -119,6 +131,7 @@ class ChatMessage {
       role: json['role'] as String,
       content: json['content'] as String,
       id: json['id'] as String?,
+      photos: ChatPhoto.decodeList(json['photos']),
       metadata: Map<String, dynamic>.from(json['metadata'] as Map? ?? {}));
 }
 

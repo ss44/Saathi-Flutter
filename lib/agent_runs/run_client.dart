@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import '../storage/saathi_store.dart';
+import '../core/saathi_core.dart' show ChatPhoto;
 import '../agent_controls/agent_controls.dart';
 
 String runIdentity() => List.generate(32,
@@ -61,6 +62,48 @@ class RunSnapshot {
       ].contains(state);
 }
 
+// A photo turn uses a single user message with an optional caption and inline
+// image_url parts. A plain turn keeps the original string payload.
+(String, List<ChatPhoto>) _readRunInput(Object? value) {
+  if (value is String) return (value, const []);
+  Never invalid() => throw const FormatException('Invalid run input');
+  if (value is! List || value.length != 1) invalid();
+  final message = value.single;
+  if (message is! Map || message.length != 2 || message['role'] != 'user') {
+    invalid();
+  }
+  final parts = message['content'];
+  if (parts is! List ||
+      parts.isEmpty ||
+      parts.length > ChatPhoto.maxCount + 1) {
+    invalid();
+  }
+  var caption = '';
+  final urls = <String>[];
+  final data = <String>[];
+  for (final (index, part) in parts.indexed) {
+    if (part is! Map || part.length != 2) invalid();
+    if (index == 0 && part['type'] == 'text' && part['text'] is String) {
+      caption = part['text'] as String;
+      if (caption.length > 256 * 1024) invalid();
+      continue;
+    }
+    final image = part['image_url'];
+    final url = image is Map && image.length == 1 ? image['url'] : null;
+    if (part['type'] != 'image_url' || url is! String) invalid();
+    final separator = url.indexOf(',');
+    if (separator < 0 || separator > 32) invalid();
+    urls.add(url);
+    data.add(url.substring(separator + 1));
+  }
+  if (urls.isEmpty) invalid();
+  final photos = ChatPhoto.decodeList(data);
+  for (final (index, photo) in photos.indexed) {
+    if (photo.dataUrl != urls[index]) invalid();
+  }
+  return (caption, List.unmodifiable(photos));
+}
+
 /// Entire bounded journal lives in OS secure storage, including the exact bytes
 /// needed to recover a lost admission ACK. No bearer key is copied into it.
 class RunOperation {
@@ -73,7 +116,25 @@ class RunOperation {
   String get payload => data['payload'] as String;
   String get sessionId => data['session'] as String;
   String get localId => data['local'] as String;
-  String get input => (jsonDecode(payload) as Map)['input'] as String;
+  String? _parsedPayload;
+  late (String, List<ChatPhoto>) _parsedInput;
+
+  (String, List<ChatPhoto>) get _input {
+    final body = payload;
+    if (_parsedPayload != body) {
+      _readInput(body, (jsonDecode(body) as Map)['input']);
+    }
+    return _parsedInput;
+  }
+
+  void _readInput(String body, Object? input) {
+    if (_parsedPayload == body) return;
+    _parsedInput = _readRunInput(input);
+    _parsedPayload = body;
+  }
+
+  String get input => _input.$1;
+  List<ChatPhoto> get photos => _input.$2;
   String? get runId => data['run'] as String?;
   bool get committed => data['committed'] == true;
   RunSnapshot get snapshot =>
@@ -105,10 +166,14 @@ class RunHistoryPage {
 class RunLedger {
   RunLedger(this.secrets);
   final SecretStore secrets;
+  static const _textLimit = 256 * 1024;
+  static const _photoLimit = 2 * 1024 * 1024;
+
   Future<RunOperation?> load(String local) async {
     final raw = await secrets.read('run.v1.$local');
     if (raw == null) return null;
-    if (utf8.encode(raw).length > 256 * 1024) {
+    final bytes = utf8.encode(raw).length;
+    if (bytes > _photoLimit) {
       throw const FormatException('Oversized run journal');
     }
     final decoded = jsonDecode(raw);
@@ -132,7 +197,6 @@ class RunLedger {
     if (decoded['local'] != local ||
         DateTime.tryParse(decoded['created'] as String) == null ||
         payload is! Map ||
-        payload['input'] is! String ||
         payload['session_id'] != decoded['session'] ||
         (decoded['run'] != null && decoded['run'] is! String) ||
         (decoded['authorityEpoch'] != null &&
@@ -141,11 +205,16 @@ class RunLedger {
             decoded['snapshot'] is! Map<String, dynamic>)) {
       throw const FormatException('Invalid run journal identity');
     }
-    _validate(decoded, local);
-    return RunOperation(decoded);
+    final op = RunOperation(decoded);
+    _validate(op, local);
+    if (op.photos.isEmpty && bytes > _textLimit) {
+      throw const FormatException('Oversized run journal');
+    }
+    return op;
   }
 
-  static void _validate(Map<String, dynamic> data, String local) {
+  static void _validate(RunOperation op, String local) {
+    final data = op.data;
     Never invalid() =>
         throw const FormatException('Invalid run journal schema');
     bool identity(dynamic value) =>
@@ -192,11 +261,10 @@ class RunLedger {
     final payload = data['payload'];
     if (payload is! String) invalid();
     final body = jsonDecode(payload);
-    if (body is! Map ||
-        body['input'] is! String ||
-        body['session_id'] != data['session']) {
-      invalid();
-    }
+    if (body is! Map || body['session_id'] != data['session']) invalid();
+    // Decode the exact sent bytes and cache the bounded, typed input on the
+    // operation for previews, recovery matching, and subsequent status saves.
+    op._readInput(payload, body['input']);
     if ((data.containsKey('capturedInstructions') &&
             (data['capturedInstructions'] is! String ||
                 (data['capturedInstructions'] as String).length > 16000)) ||
@@ -271,7 +339,7 @@ class RunLedger {
           op.data['key'] != op._originalKey) {
         throw StateError('Run identity is immutable');
       }
-      _validate(op.data, op.localId);
+      _validate(op, op.localId);
       final current = await load(op.localId);
       check();
       if (current != null) {
@@ -314,7 +382,8 @@ class RunLedger {
         throw StateError('Missing run predecessor');
       }
       final raw = jsonEncode(op.data);
-      if (utf8.encode(raw).length > 256 * 1024) {
+      final limit = op.photos.isEmpty ? _textLimit : _photoLimit;
+      if (utf8.encode(raw).length > limit) {
         throw StateError('Run journal size limit');
       }
       check();
@@ -362,7 +431,10 @@ class RunClient {
 
   Future<(int, Map<String, dynamic>, Map<String, String>)> _request(
       String method, String path,
-      {String? body, String? key, bool discovery = false}) async {
+      {String? body,
+      String? key,
+      bool discovery = false,
+      int maxResponseBytes = 1024 * 1024}) async {
     final abort = Completer<void>();
     final request = http.AbortableRequest(method, Uri.parse('$base$path'),
         abortTrigger: abort.future)
@@ -379,7 +451,7 @@ class RunClient {
         final bytes = <int>[];
         await for (final chunk in response.stream) {
           bytes.addAll(chunk);
-          if (bytes.length > 1024 * 1024) {
+          if (bytes.length > maxResponseBytes) {
             throw StateError('Run response too large');
           }
         }
@@ -412,11 +484,15 @@ class RunClient {
   Future<bool> discover() async {
     final (code, data, _) =
         await _request('GET', '/v1/capabilities', discovery: true);
+    capabilities = data;
     if (code == 404) return false;
     if (code != 200) throw StateError('Run discovery unavailable');
-    capabilities = data;
-    final f = data['features'];
-    if (f is! Map || data['endpoints'] is! Map) return false;
+    return _runsSupported;
+  }
+
+  bool get _runsSupported {
+    final f = capabilities['features'];
+    if (f is! Map) return false;
     return f['run_submission'] == true &&
         f['run_status'] == true &&
         f['runs_idempotency'] is Map &&
@@ -424,6 +500,13 @@ class RunClient {
         _endpoint('runs', 'POST', '/v1/runs') &&
         _endpoint('run_status', 'GET', '/v1/runs/{run_id}');
   }
+
+  /// Inline structured input follows the official Hermes Runs implementation.
+  /// Compatible-looking proxies must identify as Hermes and advertise Runs.
+  bool get photosSupported =>
+      capabilities['object'] == 'hermes.api_server.capabilities' &&
+      capabilities['platform'] == 'hermes-agent' &&
+      _runsSupported;
 
   void bind(RunOperation op) {
     if (op.data['scope'] != scope || op.data['origin'] != base.toString()) {
@@ -435,6 +518,7 @@ class RunClient {
       {required String local,
       String? existingSessionId,
       required String input,
+      List<ChatPhoto> photos = const [],
       required String model,
       String? provider,
       required String instructions,
@@ -446,6 +530,10 @@ class RunClient {
       RunOperation? previous}) async {
     if (isCurrent != null && !isCurrent()) throw StateError('Stale run');
     if (previous != null) bind(previous);
+    if (photos.isNotEmpty &&
+        (!photosSupported || !ChatPhoto.fitsDraft(photos))) {
+      throw StateError('Hermes Runs photo input is unavailable');
+    }
     final op = RunOperation({
       if (authorityEpoch != null) 'authorityEpoch': authorityEpoch,
       'local': local,
@@ -460,7 +548,21 @@ class RunClient {
       'created': DateTime.now().toUtc().toIso8601String()
     });
     op.data['payload'] = jsonEncode({
-      'input': input,
+      'input': photos.isEmpty
+          ? input
+          : [
+              {
+                'role': 'user',
+                'content': [
+                  if (input.isNotEmpty) {'type': 'text', 'text': input},
+                  for (final photo in photos)
+                    {
+                      'type': 'image_url',
+                      'image_url': {'url': photo.dataUrl}
+                    },
+                ],
+              },
+            ],
       'session_id': op.sessionId,
       if (existingSessionId == null) 'model': model,
       if (existingSessionId == null && provider != null) 'provider': provider,
@@ -494,6 +596,9 @@ class RunClient {
 
     check();
     bind(op);
+    if (op.photos.isNotEmpty && !photosSupported) {
+      throw StateError('Hermes Runs photo input is unavailable');
+    }
     if (op.replayExpired) {
       throw StateError('Replay window expired; do not resubmit');
     }
@@ -570,6 +675,7 @@ class RunClient {
     RunOperation op, {
     int limit = 100,
     int offset = 0,
+    bool matchInlinePhotos = false,
     bool Function()? isCurrent,
   }) async {
     if (limit < 1 || limit > 100 || offset < 0) {
@@ -582,11 +688,12 @@ class RunClient {
       'offset': '$offset',
       'order': 'oldest',
       'include_compacted': 'false',
-      'inline_images': 'false',
+      'inline_images': matchInlinePhotos.toString(),
     }).query;
     final (code, data, _) = await _request(
       'GET',
       '/api/sessions/${Uri.encodeComponent(_id(op.sessionId))}/messages?$query',
+      maxResponseBytes: matchInlinePhotos ? 2 * 1024 * 1024 : 1024 * 1024,
     );
     if (isCurrent != null && !isCurrent()) throw StateError('Stale run');
     if (code != 200) throw StateError('Session history unavailable');

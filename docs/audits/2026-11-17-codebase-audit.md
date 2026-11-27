@@ -450,3 +450,9 @@ correctness fixes. Riskier schema/authority changes require crash and legacy-dat
 regressions; native changes retain their unexecuted device checks. Existing #59,
 #28, #34 and #38 retain their real-use acceptance; #66 and #16 remain sequenced/
 deferred, not silently completed by this work.
+
+### Later change to photo submission
+
+The Hermes HTTP Runs photo flow extends the A05–A08 checks. The composer bounds selected photos before queueing and revokes a pending picker on conversation selection or connection mutation. The secure Runs journal validates structured inputs at save and restore. Tests exercise the actual composer at 360px with 2× text and a keyboard inset, exact request bytes and key before POST, and restart with a lost receipt followed by read-only history recovery. The matcher rejects missing or ambiguous photo evidence. Platform picker behavior, native secure-storage capacity, and the user's deployed Hermes API remain separate acceptance checks. See [photo composer tests](../../test/ui/chat_photo_composer_test.dart) and [history matching tests](../../test/agent_runs/run_history_sync_test.dart).
+
+The Flutter suite recorded 1,349 passes and 12 failures. All 12 failures reproduced on the starting revision for this change. Dart line coverage was 10,188 / 10,710 (95.13%), and strict analysis passed on the CI-pinned SDK. The Android debug APK built successfully.

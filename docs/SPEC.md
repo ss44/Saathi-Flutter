@@ -10,11 +10,14 @@ The [product direction](PRODUCT_DIRECTION.md) is the canonical statement of goal
 - Agent clients: separate native adapters with verified, per-connection feature lists. Distinguish supported, unsupported and unknown capabilities; do not imply universal parity or route native controls through a direct-model inference contract.
 - Discover/select models, set a system prompt, render markdown, retain usage metadata where supplied.
 - Local session creation/switching/history with credentials stored separately in platform secure storage.
+- In supported Hermes API chats, **+ → Photo** opens the device picker. The composer shows up to four removable thumbnails below the text. Send posts the photos with an optional caption. The draft limit is 1 MiB total for JPEG, PNG or WebP photos.
 - New conversations start empty; no fake response is presented as a live model answer.
 - Observable activity appears during work and is tucked away afterward; swipe a response to reveal activity, long-press to copy text. Errors and approval requests stay explicit.
 
 ## Session ownership and network use
 A direct-model chat normally uploads its relevant conversation context on each request. A server-owned agent session sends only new input and remote identity, letting the server retain authoritative state. Avoid sending both a full copied transcript and a session ID when the server already owns history.
+
+Photo turns in Hermes API chats send the caption and inline image parts together in the existing durable Runs request. The request keeps its original session ID and idempotency key. The client checks the configured server's Hermes Runs capabilities before opening the device picker and again before sending. Posted photos are saved in their original local conversation. A lost admission receipt can be reconciled from read-only history when it contains exact matching image data. See [Hermes Runs](AGENT_RUNS.md).
 
 Remote browsing, reading history, continuing a server-owned API conversation, and attaching to another client's live session are distinct capabilities. Hermes documents REST listing/history and API-session continuation; the ordinary REST API rejects writes to sessions owned by Desktop/CLI. Live shared attachment requires its gateway protocol. OpenClaw similarly needs a verified native gateway adapter for its session features. Do not substitute guessed HTTP endpoints or label imported history as live attachment.
 
@@ -42,7 +45,7 @@ Leave DMS widget registration, shell theme bindings, shell-global singleton stat
 ## Later milestones
 - Real deployed-provider and gateway interoperability tests.
 - Native shared-session gateway attachment/live stream reconciliation.
-- Android share-to-draft (text/images) and image payload support.
+- Android share-to-draft for text and images, and photo input over other connection types.
 - Optional smart context routing and opt-in price estimation based on maintained price data.
 - Desktop navigation/keyboard/tray and production update install flows.
 - iOS runner/store distribution is not part of the existing scaffold; macOS packaging requires macOS/Xcode.

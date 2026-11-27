@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import '../chat_organization/reported_usage.dart';
+import '../core/saathi_core.dart' show ChatPhoto;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -289,6 +290,10 @@ class SaathiStore {
                 {
                   for (final key in ['id', 'role', 'content'])
                     if ((message as Map).containsKey(key)) key: message[key],
+                  if (message['role'] == 'user' && message['photos'] != null)
+                    'photos': ChatPhoto.decodeList(message['photos'])
+                        .map((photo) => photo.base64Data)
+                        .toList(),
                   'metadata': {
                     ...ReportedUsage.fromMetadata(Map<String, dynamic>.from(
                             message['metadata'] as Map? ?? {}))
