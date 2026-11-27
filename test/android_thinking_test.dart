@@ -45,7 +45,7 @@ void main() {
   }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
   testWidgets(
-      'Android pending bubble matches plugin copy and ten-second cadence',
+      'Android thinking text matches plugin copy and ten-second cadence',
       (tester) async {
     await tester.pumpWidget(MaterialApp(
         home: Scaffold(body: BusyThinking(busy: true, random: Random(7)))));
@@ -55,7 +55,7 @@ void main() {
     expect(initial.data, endsWith('...'));
     expect(initial.data, isNot(contains('A little whimsy')));
     expect(find.text('Waiting for reply'), findsNothing);
-    expect(find.byKey(const Key('pending-response-bubble')), findsOneWidget);
+    expect(find.byType(ShaderMask), findsOneWidget);
     expect(find.text('0.0s'), findsOneWidget);
     await tester.pump(const Duration(milliseconds: 9999));
     expect(tester.widget<Text>(finder).data, initial.data);
@@ -77,7 +77,7 @@ void main() {
   }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
   testWidgets(
-      'Android waiting bubble remains readable at narrow width and large text',
+      'Android thinking text remains readable at narrow width and large text',
       (tester) async {
     tester.view.physicalSize = const Size(360, 780);
     tester.view.devicePixelRatio = 1;
@@ -88,7 +88,7 @@ void main() {
             data: const MediaQueryData(textScaler: TextScaler.linear(2)),
             child:
                 Scaffold(body: BusyThinking(busy: true, random: Random(7))))));
-    expect(find.byKey(const Key('pending-response-bubble')), findsOneWidget);
+    expect(find.byType(ShaderMask), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   }, variant: TargetPlatformVariant.only(TargetPlatform.android));
